@@ -70,6 +70,12 @@ def build(name: str, *, reach: str = "openrouter") -> Driver:
             raise ValueError(
                 f"{name} has no native endpoint defined; use reach='openrouter'"
             )
+        if nat.get("driver") == "anthropic":
+            from .drivers.anthropic import AnthropicDriver
+            return AnthropicDriver(
+                name=name, model=nat["model"],
+                base_url=nat["base_url"], api_key_env=nat["api_key_env"],
+            )
         return OpenAICompatDriver(
             name=name, model=nat["model"], base_url=nat["base_url"],
             api_key_env=nat["api_key_env"],

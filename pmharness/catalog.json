@@ -111,27 +111,60 @@
       "tier": "frontier_control",
       "license": "proprietary",
       "hf": null,
-      "price_in": 2.5,
+      "price_in": 1.25,
       "price_out": 10.0,
-      "openrouter": "openai/gpt-4o",
+      "openrouter": "openai/gpt-5.5",
       "native": {
         "base_url": "https://api.openai.com/v1",
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "api_key_env": "OPENAI_API_KEY"
-      }
+      },
+      "price_note": "estimate"
     },
     {
       "name": "claude-frontier",
       "tier": "frontier_control",
       "license": "proprietary",
       "hf": null,
-      "price_in": 3.0,
-      "price_out": 15.0,
+      "price_in": 5.0,
+      "price_out": 25.0,
       "openrouter": "anthropic/claude-sonnet-4",
       "native": {
         "base_url": "https://api.anthropic.com/v1",
-        "model": "claude-sonnet-4",
-        "api_key_env": "ANTHROPIC_API_KEY"
+        "model": "claude-opus-4-8",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "driver": "anthropic"
+      },
+      "price_note": "estimate"
+    },
+    {
+      "name": "gemini-frontier",
+      "tier": "frontier_control",
+      "license": "proprietary",
+      "hf": null,
+      "price_in": 1.25,
+      "price_out": 5.0,
+      "openrouter": "google/gemini-3.1-pro",
+      "native": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "model": "gemini-3.1-pro-preview",
+        "api_key_env": "GEMINI_API_KEY"
+      },
+      "price_note": "estimate"
+    },
+    {
+      "name": "gemini-flash-control",
+      "tier": "frontier_control",
+      "license": "proprietary",
+      "hf": null,
+      "price_in": 0.1,
+      "price_out": 0.4,
+      "price_note": "estimate",
+      "openrouter": "google/gemini-3.1-flash-lite",
+      "native": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "model": "gemini-3.1-flash-lite-preview",
+        "api_key_env": "GEMINI_API_KEY"
       }
     }
   ]

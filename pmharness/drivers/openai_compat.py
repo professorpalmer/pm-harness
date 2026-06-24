@@ -26,7 +26,7 @@ class OpenAICompatDriver:
         api_key_env: str,
         *,
         temperature: float = 0.0,
-        max_tokens: int = 512,
+        max_tokens: int = 1500,
         timeout: int = 90,
         extra_headers: dict | None = None,
     ) -> None:
