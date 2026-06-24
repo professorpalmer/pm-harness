@@ -61,6 +61,9 @@ def build(name: str, *, reach: str = "openrouter") -> Driver:
     """
     if name == "stub-oracle":
         return StubDriver()
+    if name == "stub-oracle-mt":
+        from .drivers.stub_multiturn import StubMultiTurnDriver
+        return StubMultiTurnDriver()
 
     m = _entry(name)
 
@@ -100,3 +103,16 @@ def build(name: str, *, reach: str = "openrouter") -> Driver:
 # Convenience: all driver names (incl. the offline oracle).
 def all_driver_names() -> list:
     return ["stub-oracle"] + model_names()
+
+
+def has_vision(name: str) -> bool:
+    """True if the model accepts native image input (HF task image-text-to-text)."""
+    return bool(_entry(name).get("vision", False))
+
+
+def vision_sidecars() -> list:
+    """Cheap open VLMs the harness can use to transcribe image -> text artifact so
+    a text-only DRIVER can consume it. Vision is a harness capability, not a
+    driver requirement."""
+    return [m["name"] for m in load_catalog()["models"]
+            if m.get("tier") == "vision_sidecar"]

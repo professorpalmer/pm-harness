@@ -63,3 +63,49 @@ weights (Kimi, GLM) and frontier (OpenAI) rows are wired and pending keys.
 Next data point: run the real drivers and record valid-call rate, decision
 accuracy, tokens, and latency per model -- the first rows of the "ideal harness
 model" research and the cost-thesis receipt.
+
+
+## Stage 2 -- Single-turn driver eval (LIVE, full field)
+
+10 models scored on the labeled battery vs real Puppetmaster. Result table in
+results/STAGE2_RESULTS.md. Headline: 7 open-weights models tied the Claude Opus
+control at 100%; qwen3-coder-30b drove at $0.00044/run (~100x cheaper than
+Claude) with identical single-turn score. kimi-k2.6 scored 70% -- a reasoning
+model emitting prose instead of bare JSON on trivial cases (harness needs
+JSON-mode for thinking models; fixable, not a capability ceiling).
+
+CAVEAT: single-turn battery SATURATED (8/10 at exactly 100%) -- proves the floor,
+does not rank. Total field spend ~8 cents.
+
+## Vision capability gap + the Kimi paradox
+
+Verified on HF task types: among open DRIVERS, only Kimi (image-text-to-text) has
+native vision; GLM-5.2, MiniMax-M2.7, DeepSeek-V4, Qwen3-Coder are text-only.
+The paradox: the ONLY vision-capable open driver is also the WEAKEST driver
+(Kimi 70%). Vision and driving quality are anti-correlated in the current field.
+
+Architectural resolution (catalog vision flag + vision_sidecar tier): DECOUPLE
+vision from the driver. A cheap open VLM sidecar (GLM-OCR / Kimi-VL / Qwen-VL)
+transcribes image -> text artifact in durable state; any text-only driver then
+consumes the text. This keeps the best DRIVER usable while still accepting
+images -- matching the kernel philosophy (harness orchestrates capabilities;
+driver decides). Image processed once, stored, never re-sent through every call.
+
+## Stage 3 -- Multi-turn driving eval (LIVE)
+
+The discriminating eval. Driver acts -> PM executes -> artifacts fed back ->
+decide next -> terminate or turn guard. Trajectory scoring: terminated /
+correct terminal action / efficient / all-valid / grounded. Table in
+results/STAGE3_RESULTS.md.
+
+KEY FINDING: multi-turn discriminates where single-turn saturated. The
+differentiator is TERMINATION + EFFICIENCY (knowing when to stop), not JSON
+validity (100% everywhere). Counter-intuitively, claude-opus-4-8 (perfect
+single-turn) scored WORST multi-turn (55%) -- it never terminated two
+'investigate' episodes, looping the swarm 6x instead of concluding. This is the
+loop-burn failure mode a PM-native harness must defend against, now measurable.
+
+CONFOUND (Stage 3.5): absolute scores are sensitive to harness feedback design
+(demo artifacts are thin, so careful models keep digging). The eval MECHANISM is
+proven; a definitive leaderboard needs a richer real-artifact substrate + an
+explicit turn/cost budget signal. Do not over-read the absolute ranking yet.

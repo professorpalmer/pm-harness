@@ -3,7 +3,8 @@
     "description": "Open-weights candidates for the PM-native harness DRIVER layer. Tiers reflect role in a Puppetmaster-routed harness: 'flagship' drives the top-level loop; 'value' is cheap delegation fodder the PM router sends bulk sub-tasks to; 'frontier_control' is the ceiling baseline. Prices are NATIVE provider $/Mtok (in/out), the cost-thesis figure. license:other = provider's own modified license (check before enterprise self-host); MIT/Apache = clean.",
     "verified": "2026-06-24 via Hugging Face Hub + provider pricing",
     "reach_default": "openrouter",
-    "note": "OpenRouter gives the whole field through one OpenAI-compatible key (OPENROUTER_API_KEY). Native endpoints are wired for finalists where cost-accurate measurement matters (native price != OpenRouter markup)."
+    "note": "OpenRouter gives the whole field through one OpenAI-compatible key (OPENROUTER_API_KEY). Native endpoints are wired for finalists where cost-accurate measurement matters (native price != OpenRouter markup).",
+    "vision_note": "vision flag = native image input (from HF task type: image-text-to-text). DRIVER models need NOT be vision-capable: the harness decouples vision via a vision_sidecar (cheap open VLM transcribes image->text artifact in durable state; any text-only driver then consumes the text). This keeps the best DRIVER (e.g. text-only GLM-5.2) usable while still accepting images, matching the kernel philosophy (harness orchestrates capabilities; driver decides). Key finding: the only vision-capable open driver (Kimi) is also the weakest driver \u2014 so vision and driving quality are anti-correlated in the current open-weights field, which is the architectural justification for the sidecar."
   },
   "models": [
     {
@@ -18,7 +19,8 @@
         "base_url": "https://api.z.ai/api/paas/v4",
         "model": "glm-5.2",
         "api_key_env": "ZAI_API_KEY"
-      }
+      },
+      "vision": false
     },
     {
       "name": "kimi-k2.6",
@@ -32,7 +34,8 @@
         "base_url": "https://api.moonshot.ai/v1",
         "model": "kimi-k2.6",
         "api_key_env": "MOONSHOT_API_KEY"
-      }
+      },
+      "vision": true
     },
     {
       "name": "minimax-m2.7",
@@ -46,7 +49,8 @@
         "base_url": "https://api.minimax.io/v1",
         "model": "MiniMax-M2.7",
         "api_key_env": "MINIMAX_API_KEY"
-      }
+      },
+      "vision": false
     },
     {
       "name": "deepseek-v4-pro",
@@ -60,7 +64,8 @@
         "base_url": "https://api.deepseek.com/v1",
         "model": "deepseek-chat",
         "api_key_env": "DEEPSEEK_API_KEY"
-      }
+      },
+      "vision": false
     },
     {
       "name": "deepseek-v4-flash",
@@ -74,7 +79,8 @@
         "base_url": "https://api.deepseek.com/v1",
         "model": "deepseek-flash",
         "api_key_env": "DEEPSEEK_API_KEY"
-      }
+      },
+      "vision": false
     },
     {
       "name": "glm-4.7-flash",
@@ -84,7 +90,8 @@
       "price_in": 0.1,
       "price_out": 0.3,
       "openrouter": "z-ai/glm-4.7-flash",
-      "native": null
+      "native": null,
+      "vision": false
     },
     {
       "name": "qwen3-coder-30b",
@@ -94,7 +101,8 @@
       "price_in": 0.1,
       "price_out": 0.3,
       "openrouter": "qwen/qwen3-coder-30b-a3b-instruct",
-      "native": null
+      "native": null,
+      "vision": false
     },
     {
       "name": "minimax-m2.5-highspeed",
@@ -104,7 +112,8 @@
       "price_in": 0.6,
       "price_out": 2.4,
       "openrouter": "minimax/minimax-m2.5",
-      "native": null
+      "native": null,
+      "vision": false
     },
     {
       "name": "gpt-frontier",
@@ -119,7 +128,8 @@
         "model": "gpt-5.5",
         "api_key_env": "OPENAI_API_KEY"
       },
-      "price_note": "estimate"
+      "price_note": "estimate",
+      "vision": true
     },
     {
       "name": "claude-frontier",
@@ -135,7 +145,8 @@
         "api_key_env": "ANTHROPIC_API_KEY",
         "driver": "anthropic"
       },
-      "price_note": "estimate"
+      "price_note": "estimate",
+      "vision": true
     },
     {
       "name": "gemini-frontier",
@@ -150,7 +161,8 @@
         "model": "gemini-3.1-pro-preview",
         "api_key_env": "GEMINI_API_KEY"
       },
-      "price_note": "estimate"
+      "price_note": "estimate",
+      "vision": true
     },
     {
       "name": "gemini-flash-control",
@@ -165,7 +177,51 @@
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "model": "gemini-3.1-flash-lite-preview",
         "api_key_env": "GEMINI_API_KEY"
+      },
+      "vision": true
+    },
+    {
+      "name": "glm-ocr",
+      "tier": "vision_sidecar",
+      "license": "MIT",
+      "vision": true,
+      "hf": "zai-org/GLM-OCR",
+      "price_in": 0.1,
+      "price_out": 0.3,
+      "price_note": "estimate",
+      "role": "document/screenshot OCR + transcription",
+      "openrouter": null,
+      "native": {
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "model": "glm-ocr",
+        "api_key_env": "ZAI_API_KEY"
       }
+    },
+    {
+      "name": "kimi-vl-a3b",
+      "tier": "vision_sidecar",
+      "license": "MIT",
+      "vision": true,
+      "hf": "moonshotai/Kimi-VL-A3B-Thinking-2506",
+      "price_in": 0.05,
+      "price_out": 0.2,
+      "price_note": "estimate",
+      "role": "tiny general VLM (3B) image description",
+      "openrouter": null,
+      "native": null
+    },
+    {
+      "name": "qwen-vl",
+      "tier": "vision_sidecar",
+      "license": "Apache-2.0",
+      "vision": true,
+      "hf": "Qwen/Qwen3-VL",
+      "price_in": 0.1,
+      "price_out": 0.3,
+      "price_note": "estimate",
+      "role": "general vision-language understanding",
+      "openrouter": "qwen/qwen3-vl",
+      "native": null
     }
   ]
 }
