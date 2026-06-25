@@ -1,5 +1,7 @@
 """Stage 3.5 E2E: budget-aware oracle drives real Puppetmaster, substantive
 substrate feedback, sharper scoring with budget/premature penalties. Offline."""
+import pytest
+pytestmark = pytest.mark.swarm
 import tempfile
 from pathlib import Path
 

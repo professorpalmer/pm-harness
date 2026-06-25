@@ -1,5 +1,7 @@
 """Real read-only analysis path: builds no-edit specs, defaults stay demo, and a
 target repo is never mutated. The live model call is exercised separately."""
+import pytest
+pytestmark = pytest.mark.swarm
 import os
 import tempfile
 import hashlib

@@ -68,40 +68,46 @@ export default function Conversation({ config, onArtifacts, onJobChange }: {
 
   return (
     <main className="flex flex-col h-full min-w-0 bg-bg">
-      <header className="flex items-center justify-between px-4 py-2.5 border-b border-edge">
-        <span className="font-semibold text-sm">PM-Native Harness</span>
+      <header className="flex items-center justify-between px-6 py-2.5 border-b border-edge">
+        <span className="font-medium text-[13px] text-txt/90">PM-Native Harness</span>
         <StatusPill status={status} />
       </header>
 
-      <div ref={feedRef} className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3">
-        {items.length === 0 && (
-          <div className="text-muted text-sm m-auto text-center">
-            Message the pilot. It plans, investigates via swarms, and explains.
-          </div>
-        )}
-        {items.map((it, i) => it.kind === "msg"
-          ? <Bubble key={i} msg={it.msg} />
-          : <ActionCard key={i} card={it.card} onToggle={() => setCard(it.card.id, { open: !it.card.open })} />)}
+      <div ref={feedRef} className="flex-1 overflow-y-auto">
+        <div className="max-w-3xl mx-auto px-6 py-6 flex flex-col gap-4">
+          {items.length === 0 && (
+            <div className="text-muted text-[13px] mt-32 text-center leading-relaxed">
+              Message the pilot. It plans, investigates via swarms, and explains.
+            </div>
+          )}
+          {items.map((it, i) => it.kind === "msg"
+            ? <Bubble key={i} msg={it.msg} />
+            : <ActionCard key={i} card={it.card} onToggle={() => setCard(it.card.id, { open: !it.card.open })} />)}
+        </div>
       </div>
 
-      <div className="px-3 pb-2 pt-1">
-        {/* composer card: textarea on top, compact floating controls below (Hermes-style) */}
-        <div className="bg-panel2 border border-edge rounded-xl focus-within:border-accent2 transition">
-          <textarea value={input} onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            rows={1} placeholder={auto ? "Give the pilot an objective to pursue autonomously..." : "Message the pilot..."}
-            className="w-full bg-transparent px-3 pt-2.5 pb-1 text-sm resize-none focus:outline-none max-h-40" />
-          <div className="flex items-center gap-1.5 px-2 pb-2">
-            <button onClick={() => setAuto((a) => !a)} title="Fully-Auto mode"
-              className={`px-2 h-6 rounded-md border text-[11px] flex items-center gap-1 transition
-                ${auto ? "bg-warn/20 border-warn/40 text-warn" : "bg-bg border-edge text-muted hover:text-txt"}`}>
-              <Zap size={11} /> Auto
-            </button>
-            <div className="flex-1" />
-            <PilotPicker config={config} />
-            {status === "thinking" || status === "executing"
-              ? <button onClick={stop} className="px-2.5 h-6 rounded-md bg-risk/20 border border-risk/40 text-risk text-[11px] font-medium flex items-center gap-1"><Square size={10} />Stop</button>
-              : <button onClick={send} className="px-2.5 h-6 rounded-md bg-accent2 border border-accent2 text-accent text-[11px] font-medium flex items-center gap-1 hover:brightness-125"><Send size={10} />{auto ? "Run" : "Send"}</button>}
+      <div className="px-6 pb-4 pt-1">
+        <div className="max-w-3xl mx-auto">
+          {/* compact composer: input + a single tidy control row */}
+          <div className="bg-panel2/80 border border-edge rounded-2xl focus-within:border-edge2 shadow-lg shadow-black/20 transition">
+            <textarea value={input} onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+              rows={1} placeholder={auto ? "Give the pilot an objective..." : "Message the pilot..."}
+              className="w-full bg-transparent px-3.5 pt-2.5 pb-1 text-[13px] resize-none focus:outline-none max-h-32 placeholder:text-faint" />
+            <div className="flex items-center gap-1.5 px-2 pb-1.5">
+              <button onClick={() => setAuto((a) => !a)} title="Fully-Auto mode"
+                className={`px-1.5 h-[22px] rounded-md text-[10.5px] flex items-center gap-1 transition
+                  ${auto ? "bg-warn/15 text-warn" : "text-faint hover:text-muted"}`}>
+                <Zap size={11} /> Auto
+              </button>
+              <div className="flex-1" />
+              <PilotPicker config={config} />
+              {status === "thinking" || status === "executing"
+                ? <button onClick={stop} className="px-2 h-[22px] rounded-md bg-risk/15 text-risk text-[10.5px] font-medium flex items-center gap-1"><Square size={9} />Stop</button>
+                : <button onClick={send} disabled={!input.trim()}
+                    className="px-2.5 h-[22px] rounded-md bg-accent text-black/90 text-[10.5px] font-semibold flex items-center gap-1 hover:brightness-110 disabled:opacity-40 disabled:cursor-default transition">
+                    <Send size={9} />{auto ? "Run" : "Send"}</button>}
+            </div>
           </div>
         </div>
       </div>
@@ -113,10 +119,10 @@ export default function Conversation({ config, onArtifacts, onJobChange }: {
 function Bubble({ msg }: { msg: Msg }) {
   const isUser = msg.role === "user";
   return (
-    <div className={`flex gap-2 max-w-[88%] ${isUser ? "self-end flex-row-reverse" : ""}`}>
-      <div className="text-[10px] uppercase tracking-wide text-muted pt-1.5 w-9 shrink-0">{isUser ? "you" : "pilot"}</div>
-      <div className={`rounded-xl px-3 py-2 text-sm whitespace-pre-wrap break-words border
-        ${isUser ? "bg-accent2/60 border-accent2" : "bg-panel border-edge"}`}>{msg.text}</div>
+    <div className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
+      <span className="text-[10px] uppercase tracking-wider text-faint px-1">{isUser ? "you" : "pilot"}</span>
+      <div className={`rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap break-words max-w-[85%]
+        ${isUser ? "bg-accent2 text-txt" : "bg-panel border border-edge text-txt/90"}`}>{msg.text}</div>
     </div>
   );
 }
@@ -158,9 +164,13 @@ const KV = ({ k, v }: { k: string; v: string }) => (
 
 function StatusPill({ status }: { status: string }) {
   const m: Record<string, string> = {
-    idle: "text-muted border-edge", thinking: "text-accent border-accent2",
-    executing: "text-warn border-warn/40", done: "text-good border-good/40",
-    error: "text-risk border-risk/40",
+    idle: "text-faint", thinking: "text-accent", executing: "text-warn",
+    done: "text-good", error: "text-risk",
   };
-  return <span className={`text-[11px] px-2.5 py-0.5 rounded-full border ${m[status] || m.idle}`}>{status}</span>;
+  const dot: Record<string, string> = {
+    idle: "bg-faint", thinking: "bg-accent animate-pulse", executing: "bg-warn animate-pulse",
+    done: "bg-good", error: "bg-risk",
+  };
+  return <span className={`text-[10.5px] flex items-center gap-1.5 ${m[status] || m.idle}`}>
+    <span className={`w-1.5 h-1.5 rounded-full ${dot[status] || dot.idle}`} />{status}</span>;
 }

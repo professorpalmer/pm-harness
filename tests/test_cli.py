@@ -1,5 +1,7 @@
 """Headless CLI: drives real PM offline via the stub, correct exit codes,
 JSON event stream, and image flag wiring."""
+import pytest
+pytestmark = pytest.mark.swarm
 import json
 import tempfile
 

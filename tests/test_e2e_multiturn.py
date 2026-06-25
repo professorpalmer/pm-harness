@@ -1,5 +1,7 @@
 """Stage 3 E2E: multi-turn stub oracle drives real Puppetmaster across episodes,
 trajectory scoring, ledger persist. Fully offline, no keys."""
+import pytest
+pytestmark = pytest.mark.swarm
 import tempfile
 from pathlib import Path
 

@@ -1,10 +1,32 @@
 """Fully-Auto (run_auto): governor bounds it, codegraph-gate refuses unindexed
-analysis, and it stops when the pilot is done. The autonomy safety proof."""
+analysis, and it stops when the pilot is done. The autonomy safety proof.
+
+Swarm EXECUTION is faked here (monkeypatched execute_intent) so these tests
+prove the GOVERNOR LOOP deterministically and fast -- they are not a Puppetmaster
+integration test. The real swarm path is covered by the offline E2E test.
+"""
 import tempfile
+import pytest
 from harness.config import HarnessConfig
 from harness.conversation import ConversationalSession
 from harness.autobudget import AutoBudget
 from pmharness.drivers.openai_compat import DriverResponse
+from pmharness.bridge import BridgeResult
+
+
+def _fake_result(n=1):
+    return BridgeResult(
+        job_id="job_fake", status="complete", mode="analysis",
+        num_artifacts=n, artifact_types=["finding"], summary="fake",
+        artifacts=[{"type": "finding", "headline": "fake finding"}] * n,
+        adapter="local")
+
+
+@pytest.fixture(autouse=True)
+def _fast_swarm(monkeypatch):
+    """Replace real Puppetmaster execution with an instant deterministic result."""
+    monkeypatch.setattr("harness.conversation.execute_intent",
+                        lambda intent, **kw: _fake_result(1))
 
 
 class _NeverDonePilot:
@@ -44,11 +66,12 @@ def test_auto_governor_stops_neverending_pilot():
     cfg = HarnessConfig(driver="stub-oracle-v2", state_dir=tempfile.mkdtemp())
     s = ConversationalSession(cfg)
     s.pilot = _NeverDonePilot()
-    # demo adapter (no repo) -> no codegraph gate; governor must stop it
     events = list(s.run_auto("dig forever", AutoBudget(max_swarms=3)))
     halts = [e for e in events if e.kind == "auto_halt"]
     assert halts, "governor must halt a never-ending pilot"
     assert "ceiling" in halts[-1].data["reason"] or "stall" in halts[-1].data["reason"]
+    # and it must not have run unbounded
+    assert sum(1 for e in events if e.kind == "action_result") <= 12
 
 
 def test_auto_stops_when_pilot_done():

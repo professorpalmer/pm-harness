@@ -1,5 +1,7 @@
 """Open VLM sidecar: env picker selects OpenRouter VLM vs Gemini; the open
 sidecar honors its model + key env. Offline (no live calls)."""
+import pytest
+pytestmark = pytest.mark.swarm
 import os
 from harness.vision import (default_sidecar, OpenRouterVisionSidecar,
                             GeminiVisionSidecar)

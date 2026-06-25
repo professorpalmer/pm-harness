@@ -1,5 +1,7 @@
 """Stage 4 discriminates: the findings-reader passes; the lazy stopper fails the
 inconclusive trap and sequenced episodes. Proves the battery RANKS, unlike V2."""
+import pytest
+pytestmark = pytest.mark.swarm
 from pmharness.episode_s4 import EPISODES_S4
 from pmharness.runner_s4 import run_episode_s4
 from pmharness.scoring_v2 import score_v2

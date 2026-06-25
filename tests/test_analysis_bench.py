@@ -2,6 +2,7 @@
 import os
 import tempfile
 import pytest
+pytestmark = pytest.mark.swarm
 from pmharness.analysis_bench import ANALYSIS_QUESTIONS, score_analysis, AnalysisQ
 from pmharness import bridge
 

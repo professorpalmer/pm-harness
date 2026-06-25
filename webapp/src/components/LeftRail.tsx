@@ -28,9 +28,9 @@ export default function LeftRail({ jobsRefresh }: {
 
   return (
     <aside className="bg-panel border-r border-edge flex flex-col h-full overflow-hidden">
-      <div className="flex items-center gap-2 px-3 py-3 border-b border-edge">
-        <span className="bg-accent2 text-accent font-bold px-2 py-0.5 rounded text-xs">PM</span>
-        <span className="font-semibold text-sm">Harness</span>
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-edge">
+        <span className="bg-accent/15 text-accent font-bold px-1.5 py-0.5 rounded-md text-[11px] tracking-tight">PM</span>
+        <span className="font-medium text-[13px] text-txt/90">Harness</span>
       </div>
 
       {/* WORKSPACES */}
@@ -78,8 +78,8 @@ export default function LeftRail({ jobsRefresh }: {
 function Section({ title, action, children, grow }: any) {
   return (
     <div className={`px-2 pt-3 ${grow ? "flex-1 overflow-y-auto" : ""}`}>
-      <div className="flex items-center justify-between px-1 mb-1.5">
-        <span className="text-[10px] uppercase tracking-wider text-muted">{title}</span>
+      <div className="flex items-center justify-between px-2 mb-1 mt-1">
+        <span className="text-[10px] uppercase tracking-wider text-faint font-medium">{title}</span>
         {action}
       </div>
       {children}

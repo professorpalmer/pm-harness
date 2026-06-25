@@ -1,5 +1,7 @@
 """Harness E2E: the product Session drives real Puppetmaster offline via the
 stub driver. Proves the loop end to end with zero keys before any GUI."""
+import pytest
+pytestmark = pytest.mark.swarm
 import tempfile
 
 from harness.config import HarnessConfig

@@ -1,5 +1,7 @@
 """Pilot envelope parsing + conversational loop (the product UX)."""
 import tempfile
+import pytest
+pytestmark = pytest.mark.swarm
 from harness.pilot import (parse_pilot_turn, PilotTurn, PilotError,
                            PilotAction, _coerce_actions)
 from harness.config import HarnessConfig

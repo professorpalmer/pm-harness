@@ -32,8 +32,8 @@ export default function RightPane({ artifacts }: {
 function TabBtn({ active, onClick, icon, label }: any) {
   return (
     <button onClick={onClick}
-      className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-[11px] uppercase tracking-wider transition
-        ${active ? "text-txt border-b-2 border-accent bg-panel2/50" : "text-muted hover:text-txt"}`}>
+      className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[10px] uppercase tracking-wider font-medium transition
+        ${active ? "text-txt border-b-[1.5px] border-accent" : "text-faint hover:text-muted"}`}>
       {icon}{label}
     </button>
   );

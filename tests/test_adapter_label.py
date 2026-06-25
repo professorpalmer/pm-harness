@@ -1,5 +1,7 @@
 """Bridge labels the execution adapter so demo substrate is never mistaken for
 real codebase analysis. Drives real Puppetmaster (local demo adapter)."""
+import pytest
+pytestmark = pytest.mark.swarm
 import tempfile
 from pmharness.intent import DriverIntent
 from pmharness.bridge import execute_intent

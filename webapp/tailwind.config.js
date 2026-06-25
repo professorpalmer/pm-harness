@@ -4,10 +4,12 @@ export default {
   theme: {
     extend: {
       colors: {
-        bg: "#0d0d0f", panel: "#141417", panel2: "#1a1a1f",
-        edge: "#26262d", txt: "#e6e6ea", muted: "#8a8a94",
-        accent: "#6aa6ff", accent2: "#2b3a55",
-        good: "#4caf7d", warn: "#d9a441", risk: "#d9645f",
+        // deeper, calmer base with subtle elevation steps (less flat grey)
+        bg: "#0a0a0c", panel: "#101013", panel2: "#16161a",
+        edge: "#1f1f25", edge2: "#2a2a31",
+        txt: "#ededf2", muted: "#7d7d88", faint: "#55555f",
+        accent: "#7c93ff", accent2: "#1e2436",
+        good: "#3ecf8e", warn: "#e0a44a", risk: "#e0625c",
       },
       fontFamily: {
         sans: ["-apple-system","BlinkMacSystemFont","Segoe UI","Roboto","sans-serif"],

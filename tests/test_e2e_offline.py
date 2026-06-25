@@ -4,6 +4,8 @@ adapter -> scoring -> ledger. Proves the whole rig with zero API keys.
 Marked as the canonical 'rig works' gate. If this passes, the harness can drive
 Puppetmaster in-process and score it; only the driver model is swappable.
 """
+import pytest
+pytestmark = pytest.mark.swarm
 import sqlite3
 import tempfile
 from pathlib import Path
