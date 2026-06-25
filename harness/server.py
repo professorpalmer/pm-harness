@@ -147,7 +147,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/api/mcp/stop", "/api/mcp/call",
                       "/api/skills/distill", "/api/skills/approve",
                       "/api/skills/reject", "/api/skills/archive",
-                      "/api/rules/approve", "/api/rules/reject"):
+                      "/api/rules/approve", "/api/rules/reject",
+                      "/api/settings"):
             return self._handle_post_json(u.path)
         return self._send(404, json.dumps({"error": "not found"}))
 
@@ -161,6 +162,7 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def _handle_post_json(self, path):
+        global _pilot
         body = self._read_json()
         repo = _cfg.repo
         if path == "/api/workspaces/switch":
@@ -217,6 +219,41 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_sessions.create(body.get("title"))))
         if path == "/api/sessions/switch":
             return self._send(200, json.dumps(_sessions.switch(body.get("id",""))))
+        if path == "/api/settings":
+            driver = body.get("driver")
+            if driver is not None:
+                av = _available_pilots()
+                if driver not in av:
+                    return self._send(400, json.dumps({"error": f"Unknown or unavailable driver: {driver}"}))
+                if driver != _cfg.driver:
+                    try:
+                        _cfg.driver = driver
+                        _pilot = ConversationalSession(_cfg)
+                        _pilot._mcp = _mcp  # type: ignore
+                    except Exception as e:
+                        return self._send(500, json.dumps({"error": f"Failed to swap driver: {str(e)}"}))
+            budget = body.get("budget")
+            if budget is not None:
+                try:
+                    b_val = int(budget)
+                    _cfg.budget = max(1, min(50, b_val))
+                except (ValueError, TypeError):
+                    return self._send(400, json.dumps({"error": "Invalid budget value"}))
+            if "auto_distill" in body:
+                ad_val = bool(body["auto_distill"])
+                _pilot._auto_distill = ad_val
+                os.environ["HARNESS_AUTO_DISTILL"] = "true" if ad_val else "false"
+
+            return self._send(200, json.dumps({
+                "driver": _cfg.driver,
+                "reach": _cfg.reach,
+                "budget": _cfg.budget,
+                "models": _available_pilots(),
+                "auto_distill": getattr(_pilot, "_auto_distill", False),
+                "wiki_auto": getattr(_cfg, "wiki_auto", False),
+                "state_dir": _session.state_dir,
+                "repo": _cfg.repo,
+            }))
         return self._send(404, json.dumps({"error": "not found"}))
 
     def _handle_upload(self):
@@ -275,6 +312,17 @@ class Handler(BaseHTTPRequestHandler):
                 "budget": _cfg.budget, "state_dir": _session.state_dir,
                 "models": _available_pilots(), "repo": _cfg.repo,
                 "preflight": _session.preflight()}))
+        if u.path == "/api/settings":
+            return self._send(200, json.dumps({
+                "driver": _cfg.driver,
+                "reach": _cfg.reach,
+                "budget": _cfg.budget,
+                "models": _available_pilots(),
+                "auto_distill": getattr(_pilot, "_auto_distill", False),
+                "wiki_auto": getattr(_cfg, "wiki_auto", False),
+                "state_dir": _session.state_dir,
+                "repo": _cfg.repo,
+            }))
         if u.path == "/api/jobs":
             return self._send(200, json.dumps(_session.state().list_jobs()))
         if u.path == "/api/artifacts":
