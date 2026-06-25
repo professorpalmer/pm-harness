@@ -87,12 +87,17 @@ async function startBackend() {
 }
 
 // ---- transport seam over IPC: proxy to the local backend ----
+function authToken() {
+  try { return fs.readFileSync(path.join(os.homedir(), ".pmharness", "token"), "utf8").trim(); }
+  catch { return ""; }
+}
+
 function backendRequest(method, apiPath, body) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
     const req = http.request({
       host: "127.0.0.1", port: backendPort, path: apiPath, method,
-      headers: { "Content-Type": "application/json", ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}) },
+      headers: { "Content-Type": "application/json", "X-Harness-Token": authToken(), ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}) },
     }, (res) => {
       let buf = "";
       res.on("data", (c) => (buf += c));
@@ -109,7 +114,9 @@ ipcMain.handle("harness:postJSON", (_e, p, body) => backendRequest("POST", p, bo
 
 // SSE stream: bridge backend EventSource-style stream to renderer via events.
 ipcMain.on("harness:stream", (event, channelId, apiPath) => {
-  const req = http.get({ host: "127.0.0.1", port: backendPort, path: apiPath }, (res) => {
+  const tok = authToken();
+  const streamPath = tok ? apiPath + (apiPath.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(tok) : apiPath;
+  const req = http.get({ host: "127.0.0.1", port: backendPort, path: streamPath }, (res) => {
     res.setEncoding("utf8");
     let buf = "";
     res.on("data", (chunk) => {
