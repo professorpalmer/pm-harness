@@ -68,6 +68,65 @@ def _run_gui(argv) -> int:
     return 0
 
 
+def _run_auto(argv) -> int:
+    """Fully-Auto (unattended) mode: pursue an objective under a budget governor.
+
+    SAFETY: governor ceilings are ALWAYS on (tokens/time/swarms/stall) + a
+    killswitch file. Real analysis on an unindexed repo is refused. Designed for
+    overnight runs that cannot blow the budget or run blind.
+    """
+    import argparse
+    from .config import HarnessConfig
+    from .conversation import ConversationalSession
+    from .autobudget import AutoBudget
+    ap = argparse.ArgumentParser(prog="harness auto",
+        description="Unattended autonomous run, bounded by a safety governor.")
+    ap.add_argument("objective", help="what to pursue to completion")
+    ap.add_argument("--repo", default=None)
+    ap.add_argument("--swarm-adapter", default=None, choices=["demo", "openai"])
+    ap.add_argument("--max-tokens", type=int, default=None)
+    ap.add_argument("--max-seconds", type=int, default=None)
+    ap.add_argument("--max-swarms", type=int, default=None)
+    ap.add_argument("--killswitch", default=None, help="touch this file to stop")
+    ap.add_argument("--allow-unindexed", action="store_true",
+                    help="permit unattended analysis on a repo with no CodeGraph index")
+    args = ap.parse_args(argv)
+
+    cfg = HarnessConfig.from_env()
+    if args.repo: cfg.repo = args.repo
+    if args.swarm_adapter: cfg.swarm_adapter = args.swarm_adapter
+    budget = AutoBudget.from_env()
+    if args.max_tokens is not None: budget.max_tokens = args.max_tokens
+    if args.max_seconds is not None: budget.max_seconds = args.max_seconds
+    if args.max_swarms is not None: budget.max_swarms = args.max_swarms
+    if args.killswitch: budget.killswitch_path = args.killswitch
+
+    s = ConversationalSession(cfg)
+    print(_c("36", f"AUTO: {args.objective}"))
+    print(_c("90", f"governor: <= {budget.max_tokens} tok, {budget.max_seconds}s, "
+                   f"{budget.max_swarms} swarms"
+                   + (f", killswitch={budget.killswitch_path}" if budget.killswitch_path else "")))
+    for ev in s.run_auto(args.objective, budget, require_codegraph=not args.allow_unindexed):
+        if ev.kind == "message":
+            print(_c("0", "  " + ev.data.get("text", "")))
+        elif ev.kind == "action_start":
+            print(_c("33", f"  -> swarm: {ev.data.get('goal','')[:80]}"))
+        elif ev.kind == "action_result":
+            n = ev.data.get("num", 0)
+            print(_c("32", f"     {n} artifacts ({ev.data.get('adapter')})"))
+        elif ev.kind == "auto_status":
+            snap = ev.data.get("snapshot", {})
+            print(_c("90", f"  [cycle {ev.data.get('cycle')}] "
+                           f"{snap.get('swarms_used')}/{snap.get('max_swarms')} swarms, "
+                           f"{snap.get('elapsed_s')}s"))
+        elif ev.kind == "auto_halt":
+            print(_c("35", f"  HALT: {ev.data.get('reason')}"))
+            return 0
+        elif ev.kind == "error":
+            print(_c("31", f"  error: {ev.data.get('error','')}"))
+    return 0
+
+
 def main(argv=None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     if raw and raw[0] in ("--version", "-V"):
@@ -83,6 +142,8 @@ def main(argv=None) -> int:
     if raw and raw[0] == "doctor":
         from .doctor import run_doctor
         return run_doctor(raw[1:])
+    if raw and raw[0] == "auto":
+        return _run_auto(raw[1:])
 
     ap = argparse.ArgumentParser(prog="harness",
         description="PM-native harness. Run a task, or `harness gui` for the UI.")

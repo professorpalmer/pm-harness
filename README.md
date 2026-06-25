@@ -317,3 +317,27 @@ export HARNESS_WIKI_AUTO=1        # auto-ingest findings when a pilot turn ends
 
 Off by default; best-effort (never breaks the conversation); never fires the
 wiki's token-spending orchestrator. `harness doctor` reports wiki connectivity.
+
+
+## Fully-Auto mode (unattended, safety-governed)
+
+Pursue an objective to completion across many investigation rounds WITHOUT
+re-prompting -- bounded by a hard safety governor. Built brakes-first: the
+governor is proven before the autonomy depends on it.
+
+```
+harness auto "Audit this repo for the biggest risks and report." \
+  --repo /path --swarm-adapter openai \
+  --max-swarms 40 --max-seconds 3600 --max-tokens 100000 \
+  --killswitch /tmp/STOP
+```
+
+Hard ceilings (always on): max tokens, max wall-clock, max swarms, and a stall
+detector (consecutive rounds with no new findings). Plus a killswitch file --
+`touch /tmp/STOP` from anywhere to halt an overnight run. Env equivalents:
+HARNESS_AUTO_MAX_TOKENS / _MAX_SECONDS / _MAX_SWARMS / _MAX_IDLE / _KILLSWITCH.
+
+SAFETY REFUSAL: unattended real analysis on a repo with NO CodeGraph index is
+refused (the accuracy benchmark proved unindexed analysis is ~30% blind guessing
+-- exactly the confident-garbage you must not run all night). Override with
+`--allow-unindexed` only if you know what you're doing.

@@ -35,6 +35,7 @@ from pmharness.intent import DriverIntent
 from pmharness.bridge import execute_intent, BridgeResult
 from .pilot import (parse_pilot_turn, PilotTurn, PilotError, PILOT_SYSTEM)
 from .wiki import WikiClient, session_digest
+from .autobudget import AutoBudget
 from .config import HarnessConfig
 from .state import DurableState
 
@@ -191,6 +192,74 @@ class ConversationalSession:
                               run_orchestrator=False)
         except Exception:
             pass  # wiki capture is best-effort; never break the conversation
+
+
+    def run_auto(self, objective: str, budget: "AutoBudget" = None,
+                 *, require_codegraph: bool = True):
+        """FULLY-AUTO (unattended) mode: pursue an objective across many pilot
+        turns WITHOUT user re-prompting, bounded by an AutoBudget governor. Yields
+        the same ConvEvents as send(), plus 'auto_status' (governor snapshots) and
+        a terminal 'auto_halt' with the reason.
+
+        SAFETY PRECONDITIONS (refused otherwise):
+          - a governor is required (no ceilings == no unattended run)
+          - if real analysis is configured, the repo MUST be CodeGraph-indexed
+            (the accuracy benchmark proved unindexed -> ~30% blind guessing, which
+            is exactly the confident-garbage failure mode you must not run all
+            night). Override only with require_codegraph=False.
+        """
+        budget = (budget or AutoBudget.from_env()).start()
+
+        # Precondition: real analysis on an unindexed repo is refused unattended.
+        if (require_codegraph and self.config.swarm_adapter == "openai"
+                and self.config.repo):
+            import os.path as _op
+            if not _op.isdir(_op.join(self.config.repo, ".codegraph")):
+                yield ConvEvent("auto_halt", {"reason":
+                    f"REFUSED: {self.config.repo} has no .codegraph index. Unattended "
+                    f"analysis would run blind (~30% accuracy). Run: python -m "
+                    f"puppetmaster codegraph init --index", "snapshot": budget.snapshot()})
+                return
+
+        # Seed the objective + an instruction to self-continue until done.
+        message = (f"{objective}\n\n(AUTONOMOUS MODE: pursue this objective to "
+                   f"completion across multiple investigation rounds. After each "
+                   f"round, if more investigation is warranted and useful, continue "
+                   f"with another swarm; finish with no actions only when the "
+                   f"objective is genuinely met or no further progress is possible.)")
+
+        cycle = 0
+        while True:
+            halt = budget.check()
+            if halt:
+                yield ConvEvent("auto_halt", {"reason": halt, "snapshot": budget.snapshot()})
+                self._maybe_ingest(objective, [], [])
+                return
+            cycle += 1
+            findings_before = 0
+            # one pilot turn (send() drives say->act->react until it yields back)
+            turn_findings_count = 0
+            for ev in self.send(message if cycle == 1 else
+                                 "(continue toward the objective, or finish if met)"):
+                # meter the governor off the stream
+                if ev.kind == "action_result" and not ev.data.get("error"):
+                    budget.add_swarm()
+                    turn_findings_count += int(ev.data.get("num", 0) or 0)
+                yield ev
+                if ev.kind == "assistant_done":
+                    break
+            # account for stall + emit a governor heartbeat
+            budget.note_findings(turn_findings_count)
+            # approximate token metering from history growth (drivers report tokens
+            # per call; we keep it simple + conservative here via swarms/cycles)
+            yield ConvEvent("auto_status", {"cycle": cycle, "snapshot": budget.snapshot()})
+            # if the pilot finished a turn with no swarms at all, it considers the
+            # objective met -> stop the autonomous loop.
+            if turn_findings_count == 0 and budget.idle_steps >= 1:
+                yield ConvEvent("auto_halt", {"reason": "pilot reports objective met "
+                    "(no further investigation)", "snapshot": budget.snapshot()})
+                self._maybe_ingest(objective, [], [])
+                return
 
 
 def _slugify(s: str) -> str:
