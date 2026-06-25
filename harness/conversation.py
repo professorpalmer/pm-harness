@@ -37,6 +37,10 @@ from .pilot import (parse_pilot_turn, PilotTurn, PilotError, PILOT_SYSTEM)
 from .wiki import WikiClient, session_digest
 
 
+from .skill_store import SkillStore
+from .skill_distiller import distill_session
+
+
 def _mcp_result_text(out: dict) -> str:
     """Flatten an MCP tools/call result into plain text for the transcript."""
     if not isinstance(out, dict):
@@ -80,13 +84,26 @@ class ConversationalSession:
             os.environ["HARNESS_REPO"] = config.repo
         if config.swarm_adapter:
             os.environ["HARNESS_SWARM_ADAPTER"] = config.swarm_adapter
+        # self-learning: load ACTIVE skills into the pilot's system context so
+        # the loop compounds (procedural memory). Pending skills are NOT loaded.
+        self._skills = SkillStore()
+        system = PILOT_SYSTEM
+        active = self._skills.list("active")
+        if active:
+            skills_block = "\n\n".join(
+                f"## Skill: {s.name}\n{s.description}\n{s.body}" for s in active)
+            system = (PILOT_SYSTEM + "\n\n# Learned skills (apply when relevant)\n"
+                      + skills_block)
         # the running transcript with the pilot (conversation memory)
-        self._history: list[dict] = [{"role": "system", "content": PILOT_SYSTEM}]
+        self._history: list[dict] = [{"role": "system", "content": system}]
         # optional durable-knowledge integration (portable-llm-wiki)
         self._wiki = WikiClient()
         self._wiki_auto = os.environ.get("HARNESS_WIKI_AUTO", "").strip() in ("1", "true", "yes")
         # optional MCP integration -- set by the server so the pilot can call MCP tools
         self._mcp = None
+        # self-learning: accumulate this session's real findings for distillation
+        self._session_findings: list = []
+        self._first_objective: str = ""
 
     @property
     def durable(self) -> DurableState:
@@ -223,6 +240,11 @@ class ConversationalSession:
     def _maybe_ingest(self, user_message: str, prose: list, findings: list) -> None:
         """Auto-ingest a session digest to the wiki when enabled and there are
         real findings worth capturing. Never fires the orchestrator (token-spend)."""
+        # accumulate for self-learning distillation (independent of wiki config)
+        if findings:
+            self._session_findings.extend(findings)
+            if not self._first_objective:
+                self._first_objective = user_message
         if not (self._wiki_auto and self._wiki.configured and findings):
             return
         try:
@@ -233,6 +255,16 @@ class ConversationalSession:
         except Exception:
             pass  # wiki capture is best-effort; never break the conversation
 
+
+    def distill(self) -> dict:
+        """Propose a PENDING candidate skill from this session's accumulated
+        findings. Human approval required before it ever loads into context.
+        Returns the distiller status dict."""
+        try:
+            return distill_session(self.pilot, self._first_objective or "(session)",
+                                   self._session_findings, self._skills)
+        except Exception as e:
+            return {"status": "error", "reason": str(e)}
 
     def run_auto(self, objective: str, budget: "AutoBudget" = None,
                  *, require_codegraph: bool = True):

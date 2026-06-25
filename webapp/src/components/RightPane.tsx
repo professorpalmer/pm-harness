@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { Database, Globe, FolderTree, GitBranch, Plug } from "lucide-react";
+import { Database, Globe, FolderTree, GitBranch, Plug, GraduationCap } from "lucide-react";
 import StatePane from "./StatePane";
 import BrowserPane from "./BrowserPane";
 import FileTree from "./FileTree";
 import SourceControl from "./SourceControl";
 import McpPane from "./McpPane";
+import SkillsPane from "./SkillsPane";
 
-type Tab = "state" | "browser" | "files" | "git" | "mcp";
+type Tab = "state" | "browser" | "files" | "git" | "mcp" | "skills";
 
 export default function RightPane({ artifacts }: {
   artifacts: { type: string; headline: string; confidence?: number }[];
@@ -20,6 +21,7 @@ export default function RightPane({ artifacts }: {
         <TabBtn active={tab === "files"} onClick={() => setTab("files")} icon={<FolderTree size={12} />} label="Files" />
         <TabBtn active={tab === "git"} onClick={() => setTab("git")} icon={<GitBranch size={12} />} label="Git" />
         <TabBtn active={tab === "mcp"} onClick={() => setTab("mcp")} icon={<Plug size={12} />} label="MCP" />
+        <TabBtn active={tab === "skills"} onClick={() => setTab("skills")} icon={<GraduationCap size={12} />} label="Skills" />
       </div>
       <div className="flex-1 overflow-hidden">
         {tab === "state" && <StatePane artifacts={artifacts} embedded />}
@@ -27,6 +29,7 @@ export default function RightPane({ artifacts }: {
         {tab === "files" && <FileTree />}
         {tab === "git" && <SourceControl />}
         {tab === "mcp" && <McpPane />}
+        {tab === "skills" && <SkillsPane />}
       </div>
     </aside>
   );

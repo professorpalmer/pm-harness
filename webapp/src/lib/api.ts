@@ -32,6 +32,10 @@ export const api = {
   mcpRemove: (name: string) => postJSON<{ ok: boolean }>("/api/mcp/remove", { name }),
   mcpStart: (name: string) => postJSON<{ ok: boolean; tools?: number; error?: string }>("/api/mcp/start", { name }),
   mcpStop: (name: string) => postJSON<{ ok: boolean }>("/api/mcp/stop", { name }),
+  skills: () => getJSON<any[]>("/api/skills"),
+  skillDistill: () => postJSON<{ status: string; slug?: string; name?: string; reason?: string }>("/api/skills/distill", {}),
+  skillApprove: (slug: string) => postJSON<{ ok: boolean }>("/api/skills/approve", { slug }),
+  skillReject: (slug: string) => postJSON<{ ok: boolean }>("/api/skills/reject", { slug }),
   auto: (objective: string, onEvent: (e: StreamEvent) => void, onDone?: () => void, onError?: (e: any) => void) =>
     stream(`/api/auto?objective=${encodeURIComponent(objective)}`, onEvent, onDone, onError),
 };

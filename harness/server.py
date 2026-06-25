@@ -23,6 +23,7 @@ from .config import HarnessConfig
 from .session import Session
 from .conversation import ConversationalSession
 from .mcp_manager import McpManager, CATALOG
+from .skill_store import SkillStore
 from . import workspaces as _ws
 from .sessions import SessionStore
 from .autobudget import AutoBudget
@@ -49,6 +50,7 @@ import tempfile as _tf
 _sessions = SessionStore(os.path.join(_cfg.state_dir or _tf.gettempdir(), "harness_sessions.json"))
 _mcp = McpManager()
 _pilot._mcp = _mcp
+_skills = SkillStore()
 _UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "harness-uploads")
 os.makedirs(_UPLOAD_DIR, exist_ok=True)
 
@@ -81,7 +83,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/api/workspaces/switch", "/api/workspaces/create",
                       "/api/sessions/create", "/api/sessions/switch",
                       "/api/mcp/add", "/api/mcp/remove", "/api/mcp/start",
-                      "/api/mcp/stop", "/api/mcp/call"):
+                      "/api/mcp/stop", "/api/mcp/call",
+                      "/api/skills/distill", "/api/skills/approve",
+                      "/api/skills/reject", "/api/skills/archive"):
             return self._handle_post_json(u.path)
         return self._send(404, json.dumps({"error": "not found"}))
 
@@ -130,6 +134,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, json.dumps({"ok": True, "result": out}))
             except Exception as e:
                 return self._send(200, json.dumps({"ok": False, "error": str(e)}))
+        if path == "/api/skills/distill":
+            return self._send(200, json.dumps(_pilot.distill()))
+        if path == "/api/skills/approve":
+            sk = _skills.set_state(body.get("slug", ""), "active")
+            return self._send(200, json.dumps({"ok": bool(sk)}))
+        if path == "/api/skills/reject":
+            _skills.set_state(body.get("slug", ""), "archived")
+            return self._send(200, json.dumps({"ok": True}))
+        if path == "/api/skills/archive":
+            _skills.set_state(body.get("slug", ""), "archived")
+            return self._send(200, json.dumps({"ok": True}))
         if path == "/api/sessions/create":
             return self._send(200, json.dumps(_sessions.create(body.get("title"))))
         if path == "/api/sessions/switch":
@@ -171,6 +186,12 @@ class Handler(BaseHTTPRequestHandler):
                            "description": t.description} for t in _mcp.tools()]}))
         if u.path == "/api/mcp/catalog":
             return self._send(200, json.dumps({"catalog": CATALOG}))
+        if u.path == "/api/skills":
+            return self._send(200, json.dumps([
+                {"slug": sk.slug, "name": sk.name, "description": sk.description,
+                 "state": sk.state, "source": sk.source, "used_count": sk.used_count,
+                 "body": sk.body}
+                for sk in _skills.list()]))
         if u.path == "/api/config":
             return self._send(200, json.dumps({
                 "driver": _cfg.driver, "reach": _cfg.reach,
