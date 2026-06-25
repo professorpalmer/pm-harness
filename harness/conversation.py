@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Iterator, Optional
 
 from pmharness import registry as reg
+from . import providers as prov
 from pmharness.intent import DriverIntent
 from pmharness.bridge import execute_intent, BridgeResult
 from .pilot import (parse_pilot_turn, PilotTurn, PilotError, PILOT_SYSTEM)
@@ -51,7 +52,13 @@ class ConversationalSession:
         self.config = config
         import tempfile
         self.state_dir = config.state_dir or tempfile.mkdtemp(prefix="pilot-")
-        self.pilot = reg.build(config.driver, reach=config.reach)
+        # Provider-aware pilot: 'provider:model' spans any provider whose key is
+        # set; a bare model resolves against available providers, else OpenRouter.
+        try:
+            self.pilot = prov.build_pilot(config.driver)
+        except prov.ProviderError:
+            # fall back to the eval registry (OpenRouter field) for known names
+            self.pilot = reg.build(config.driver, reach=config.reach)
         # propagate repo/adapter so the bridge runs real analysis when configured
         if config.repo:
             os.environ["HARNESS_REPO"] = config.repo

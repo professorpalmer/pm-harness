@@ -281,3 +281,22 @@ artifacts), so you see the controls without them being the whole output.
 
 Endpoints: GET /api/chat?message=... (SSE: message | action_start | action_result
 | assistant_done), GET /api/pilot?model=... (hot-swap the pilot).
+
+
+## Multi-provider pilot (swap across your keys)
+
+The pilot picker spans every provider you have a key for -- Anthropic, OpenAI,
+OpenRouter, Gemini, DeepSeek, Z.AI (GLM), MiniMax, xAI, NVIDIA. It detects which
+providers are usable from the environment and offers `provider:model` specs:
+
+```
+HARNESS_DRIVER=anthropic:claude-opus-4-8 harness gui   # if ANTHROPIC_API_KEY set
+HARNESS_DRIVER=gemini:gemini-flash-latest harness gui   # if GEMINI_API_KEY set
+HARNESS_DRIVER=openrouter:qwen/qwen3-coder-30b-a3b-instruct harness gui
+```
+
+The provider profile DATA (env-var names, base URLs, API modes) is adapted from
+the Hermes Agent project (MIT, Nous Research) -- see NOTICE.md. Only the
+declarative data is borrowed; transport stays the harness's own thin drivers.
+The picker in the GUI lists exactly the providers your keys unlock; swapping the
+pilot is one selection (your conversation layer, your cost choice).

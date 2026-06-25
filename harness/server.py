@@ -180,15 +180,16 @@ def _pilot_preflight():
 
 
 def _available_pilots():
-    """Models the user can pilot with, given the reach. For openrouter, expose a
-    curated swappable set; the current driver is always included/first."""
+    """Pilot 'provider:model' specs for every provider whose key is set in the
+    environment. Spans Anthropic/OpenAI/OpenRouter/Gemini/DeepSeek/Z.AI/... -- the
+    user picks from whatever they actually have keys for. The current driver is
+    always first so the picker shows it selected."""
+    from . import providers as prov
     cur = _cfg.driver
-    if _cfg.reach == "openrouter":
-        opts = ["qwen3-coder-30b", "glm-5.2", "deepseek-v4-pro",
-                "kimi-k2.6", "minimax-m2.7", "glm-4.7-flash"]
-    else:
-        opts = [cur]
-    return [cur] + [m for m in opts if m != cur]
+    pilots = prov.available_pilots()
+    # ensure the current driver appears first (it may already be in the list)
+    ordered = [cur] + [p for p in pilots if p != cur]
+    return ordered or [cur]
 
 
 def serve(host: str = "127.0.0.1", port: int = 8799) -> None:
