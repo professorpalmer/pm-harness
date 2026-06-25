@@ -59,10 +59,11 @@ def _run_gui(argv) -> int:
     ap = argparse.ArgumentParser(prog="harness gui", description="Launch the harness GUI")
     ap.add_argument("--port", type=int, default=8799)
     ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--force", action="store_true", help="Bypass the single-backend reuse check")
     args = ap.parse_args(argv)
     from .server import serve
     try:
-        serve(host=args.host, port=args.port)
+        serve(host=args.host, port=args.port, force=args.force)
     except KeyboardInterrupt:
         return 0
     return 0

@@ -405,9 +405,46 @@ def _available_pilots():
     return ordered or [cur]
 
 
-def serve(host: str = "127.0.0.1", port: int = 8799) -> None:
+def _cleanup_marker(marker_path: str, pid: int) -> None:
+    try:
+        if os.path.exists(marker_path):
+            with open(marker_path, "r", encoding="utf-8") as f:
+                m = json.load(f)
+            if m and isinstance(m, dict) and m.get("pid") == pid:
+                os.remove(marker_path)
+    except Exception:
+        pass
+
+
+def serve(host: str = "127.0.0.1", port: int = 8799, force: bool = False) -> None:
     import errno
     import sys
+    import urllib.request
+    import urllib.error
+    import time
+    import atexit
+
+    marker_dir = os.path.expanduser("~/.pmharness")
+    marker_path = os.path.join(marker_dir, "backend.json")
+
+    if not force:
+        try:
+            if os.path.exists(marker_path):
+                with open(marker_path, "r", encoding="utf-8") as f:
+                    m = json.load(f)
+                if m and isinstance(m, dict) and m.get("port"):
+                    m_port = m["port"]
+                    try:
+                        url = f"http://127.0.0.1:{m_port}/api/config"
+                        with urllib.request.urlopen(url, timeout=2.0) as resp:
+                            if resp.status == 200:
+                                print(f"pm-harness already running at http://{host}:{m_port} — reusing")
+                                return
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     # allow quick restarts without TIME_WAIT blocking the bind
     ThreadingHTTPServer.allow_reuse_address = True
     try:
@@ -420,16 +457,32 @@ def serve(host: str = "127.0.0.1", port: int = 8799) -> None:
                   file=sys.stderr)
             raise SystemExit(2)
         raise
+
+    port = srv.server_address[1]
+
+    try:
+        os.makedirs(marker_dir, exist_ok=True)
+        with open(marker_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "port": port,
+                "pid": os.getpid(),
+                "at": int(time.time() * 1000)
+            }, f)
+    except Exception:
+        pass
+
     print(f"pm-harness GUI on http://{host}:{port}  (driver={_cfg.driver})")
     # SECURITY/RESOURCE: ensure spawned MCP child processes are reaped on exit
     # (Ctrl-C, SIGTERM, SystemExit) instead of being orphaned.
-    import atexit, signal
+    import signal
     atexit.register(_mcp.stop_all)
+    atexit.register(_cleanup_marker, marker_path, os.getpid())
 
     def _graceful(signum, frame):
         try:
             _mcp.stop_all()
         finally:
+            _cleanup_marker(marker_path, os.getpid())
             raise SystemExit(0)
     for _sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -440,6 +493,7 @@ def serve(host: str = "127.0.0.1", port: int = 8799) -> None:
         srv.serve_forever()
     finally:
         _mcp.stop_all()
+        _cleanup_marker(marker_path, os.getpid())
 
 
 if __name__ == "__main__":

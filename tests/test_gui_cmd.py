@@ -17,12 +17,16 @@ def test_default_path_still_runs_task(capsys):
 def test_gui_subcommand_starts_server(monkeypatch):
     # _run_gui calls serve(); monkeypatch serve to capture args without blocking
     captured = {}
-    def fake_serve(host="127.0.0.1", port=8799):
-        captured["host"] = host; captured["port"] = port
+    def fake_serve(host="127.0.0.1", port=8799, force=False):
+        captured["host"] = host; captured["port"] = port; captured["force"] = force
     monkeypatch.setattr("harness.server.serve", fake_serve)
     code = cli.main(["gui", "--port", "8910", "--host", "127.0.0.1"])
     assert code == 0
-    assert captured == {"host": "127.0.0.1", "port": 8910}
+    assert captured == {"host": "127.0.0.1", "port": 8910, "force": False}
+
+    # test with --force
+    cli.main(["gui", "--port", "8910", "--host", "127.0.0.1", "--force"])
+    assert captured == {"host": "127.0.0.1", "port": 8910, "force": True}
 
 
 def test_gui_help_does_not_crash():
