@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Puppetmaster Harness</title>
+<link rel="stylesheet" href="/app.css"/>
+</head>
+<body>
+<div id="app">
+  <!-- LEFT: nav -->
+  <aside id="nav">
+    <div class="brand">
+      <span class="mark">PM</span>
+      <span class="title">Harness</span>
+    </div>
+    <button class="nav-btn active">New task</button>
+    <button class="nav-btn">Artifacts</button>
+    <button class="nav-btn">Jobs</button>
+    <div class="nav-section">DRIVER</div>
+    <div id="driver-card" class="driver-card">
+      <div class="driver-name" id="driver-name">--</div>
+      <div class="driver-meta" id="driver-meta">--</div>
+    </div>
+    <div class="nav-section">SESSION JOBS</div>
+    <div id="job-list" class="job-list"></div>
+  </aside>
+
+  <!-- CENTER: driver loop conversation -->
+  <main id="center">
+    <header id="center-head">
+      <span id="task-title">PM-Native Harness</span>
+      <span id="status-pill" class="pill idle">idle</span>
+    </header>
+    <div id="stream"></div>
+    <form id="composer">
+      <input id="prompt" autocomplete="off"
+             placeholder="Describe a task. The driver decides: swarm, answer, or stop."/>
+      <button id="send" type="submit">Run</button>
+    </form>
+  </main>
+
+  <!-- RIGHT: durable state -->
+  <aside id="state">
+    <header class="state-head">DURABLE STATE</header>
+    <div class="state-sub">Artifacts (live)</div>
+    <div id="artifact-list" class="artifact-list">
+      <div class="empty">Run a task to populate durable state.</div>
+    </div>
+  </aside>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -113,3 +113,33 @@ export OPENROUTER_API_KEY=***
 - `stub-oracle` scores 100% (control ceiling) driving real Puppetmaster.
 - Registry covers 10 current models across 3 tiers; open-weights + frontier rows
   pending API keys.
+
+
+## The Harness (product scaffold)
+
+Beyond the research rig, `harness/` is the productization: a PM-native harness
+with a Cursor 3.0 / Hermes-style three-pane GUI.
+
+- `harness/session.py` -- the driver loop: prompt -> open-weights driver emits a
+  DriverIntent -> real Puppetmaster Orchestrator executes -> REAL artifacts fed
+  back -> budget-bounded -> terminates. Yields structured events for the GUI.
+- `harness/state.py` -- DurableState: clean read layer over SwarmStore (jobs,
+  artifacts, live event stream). What the right pane renders.
+- `harness/config.py` -- swappable driver (default glm-5.2: MIT, efficient,
+  100% on the discriminating eval), reach, budget.
+- `harness/server.py` + `harness/web/` -- stdlib HTTP server streaming Session
+  events over SSE to a three-pane dark UI (left nav + driver card + jobs,
+  center driver-loop conversation, right durable-state artifacts).
+
+```bash
+# live (glm-5.2 driver):
+export OPENROUTER_API_KEY=***
+./scripts/harness_gui.sh                 # http://127.0.0.1:8799
+
+# no-key demo (stub driver, still drives real Puppetmaster):
+HARNESS_DRIVER=stub-oracle-v2 ./scripts/harness_gui.sh
+```
+
+The driver is config -- the research proved the whole open-weights field drives
+at 100% under this harness, so swapping glm-5.2 for kimi/deepseek/qwen is a
+one-line change.
