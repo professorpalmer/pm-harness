@@ -41,6 +41,29 @@ def _analysis_provider_payload() -> dict:
     }
 
 
+def _codegraph_indexed(repo_cwd: str) -> bool:
+    """True when the target repo has a CodeGraph index. Without it, the analysis
+    worker gets NO source context and guesses -- the benchmark proved accuracy
+    collapses from ~81% to ~30% (blind). We surface this loudly."""
+    import os
+    return os.path.isdir(os.path.join(repo_cwd, ".codegraph"))
+
+
+def _warn_if_unindexed(repo_cwd: str) -> None:
+    """Emit a clear warning (stderr) when real analysis runs on an unindexed repo.
+    Set HARNESS_REQUIRE_CODEGRAPH=1 to hard-fail instead of degrade silently."""
+    import os, sys
+    if _codegraph_indexed(repo_cwd):
+        return
+    msg = (f"[harness] WARNING: {repo_cwd} has no .codegraph index -- real analysis "
+           f"will run BLIND (no source context, ~30% accuracy vs ~81% indexed). "
+           f"Run: python -m puppetmaster codegraph init --index  (cwd={repo_cwd})")
+    if os.environ.get("HARNESS_REQUIRE_CODEGRAPH", "").strip() in ("1", "true", "yes"):
+        raise RuntimeError(msg.replace("WARNING", "ERROR") +
+                           "  [HARNESS_REQUIRE_CODEGRAPH=1]")
+    print(msg, file=sys.stderr)
+
+
 def _prepare_analysis_env() -> None:
     """Point the OpenAI adapter at OpenRouter via process env (masker-safe).
     Only acts when reach is openrouter (default) and a key is present."""
@@ -127,6 +150,7 @@ def execute_intent(
 
     if swarm_adapter == "openai" and repo_cwd:
         _prepare_analysis_env()
+        _warn_if_unindexed(repo_cwd)
         from puppetmaster.workers import WorkerSpec
         roles = intent.roles or ["explore"]
         specs = []

@@ -73,7 +73,13 @@ def run_doctor(argv) -> int:
     sa = os.environ.get("HARNESS_SWARM_ADAPTER", "demo").lower()
     repo = os.environ.get("HARNESS_REPO", "").strip()
     if sa == "openai" and repo:
-        _line("ok", "swarm adapter", f"openai (REAL read-only analysis of {repo})")
+        import os.path as _op
+        if _op.isdir(_op.join(repo, ".codegraph")):
+            _line("ok", "swarm adapter", f"openai (REAL analysis of {repo}, CodeGraph indexed)")
+        else:
+            _line("warn", "swarm adapter",
+                  f"openai analysis of {repo} but NO .codegraph index -- analysis runs "
+                  f"BLIND (~30% vs ~81% accuracy). Run: python -m puppetmaster codegraph init --index")
     elif sa == "openai" and not repo:
         _line("warn", "swarm adapter", "openai set but HARNESS_REPO empty -> falls back to demo substrate")
     else:
