@@ -35,6 +35,20 @@ from pmharness.intent import DriverIntent
 from pmharness.bridge import execute_intent, BridgeResult
 from .pilot import (parse_pilot_turn, PilotTurn, PilotError, PILOT_SYSTEM)
 from .wiki import WikiClient, session_digest
+
+
+def _mcp_result_text(out: dict) -> str:
+    """Flatten an MCP tools/call result into plain text for the transcript."""
+    if not isinstance(out, dict):
+        return str(out)
+    parts = []
+    for block in out.get("content", []) or []:
+        if isinstance(block, dict):
+            if block.get("type") == "text":
+                parts.append(block.get("text", ""))
+            elif "text" in block:
+                parts.append(str(block["text"]))
+    return "\n".join(parts) if parts else str(out)
 from .autobudget import AutoBudget
 from .config import HarnessConfig
 from .state import DurableState
@@ -71,6 +85,8 @@ class ConversationalSession:
         # optional durable-knowledge integration (portable-llm-wiki)
         self._wiki = WikiClient()
         self._wiki_auto = os.environ.get("HARNESS_WIKI_AUTO", "").strip() in ("1", "true", "yes")
+        # optional MCP integration -- set by the server so the pilot can call MCP tools
+        self._mcp = None
 
     @property
     def durable(self) -> DurableState:
@@ -133,10 +149,34 @@ class ConversationalSession:
                 action_seq += 1
                 aid = f"a{action_seq}"
                 yield ConvEvent("action_start", {
-                    "id": aid, "kind": act.kind, "goal": act.goal,
+                    "id": aid, "kind": act.kind, "goal": act.goal or act.tool,
                     "cwd": self.config.repo or None,
                     "adapter": self.config.swarm_adapter,
                 })
+                # ---- MCP tool call branch -------------------------------------
+                if act.kind == "call_mcp":
+                    if self._mcp is None:
+                        yield ConvEvent("action_result", {"id": aid, "error": "MCP not available"})
+                        self._history.append({"role": "user",
+                            "content": f"(mcp {aid} unavailable)"})
+                        continue
+                    try:
+                        out = self._mcp.call(act.tool, act.arguments)
+                        text = _mcp_result_text(out)
+                    except Exception as e:
+                        yield ConvEvent("action_result", {"id": aid, "error": f"mcp: {e}"})
+                        self._history.append({"role": "user",
+                            "content": f"(mcp {act.tool} failed: {e})"})
+                        continue
+                    yield ConvEvent("action_result", {
+                        "id": aid, "tool": act.tool, "num": 1,
+                        "types": ["mcp"], "adapter": "mcp", "mode": "tool",
+                        "artifacts": [{"type": "mcp", "headline": f"{act.tool}: {text[:120]}"}],
+                    })
+                    self._history.append({"role": "user",
+                        "content": f"(mcp {act.tool} returned)\n{text[:2000]}"})
+                    continue
+                # ---- swarm branch --------------------------------------------
                 intent = DriverIntent(action="run_swarm", goal=act.goal,
                                       roles=act.roles or None, rationale="pilot")
                 try:

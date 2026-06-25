@@ -25,6 +25,13 @@ export const api = {
   swapPilot: (model: string) => getJSON(`/api/pilot?model=${encodeURIComponent(model)}`),
   chat: (message: string, onEvent: (e: StreamEvent) => void, onDone?: () => void, onError?: (e: any) => void) =>
     stream(`/api/chat?message=${encodeURIComponent(message)}`, onEvent, onDone, onError),
+  mcp: () => getJSON<{ servers: any[]; tools: any[] }>("/api/mcp"),
+  mcpCatalog: () => getJSON<{ catalog: Record<string, any> }>("/api/mcp/catalog"),
+  mcpAdd: (name: string, command: string, args: string[], env: Record<string, string>) =>
+    postJSON<{ ok: boolean; tools?: number; error?: string }>("/api/mcp/add", { name, command, args, env }),
+  mcpRemove: (name: string) => postJSON<{ ok: boolean }>("/api/mcp/remove", { name }),
+  mcpStart: (name: string) => postJSON<{ ok: boolean; tools?: number; error?: string }>("/api/mcp/start", { name }),
+  mcpStop: (name: string) => postJSON<{ ok: boolean }>("/api/mcp/stop", { name }),
   auto: (objective: string, onEvent: (e: StreamEvent) => void, onDone?: () => void, onError?: (e: any) => void) =>
     stream(`/api/auto?objective=${encodeURIComponent(objective)}`, onEvent, onDone, onError),
 };

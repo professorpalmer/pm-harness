@@ -22,6 +22,7 @@ import uuid
 from .config import HarnessConfig
 from .session import Session
 from .conversation import ConversationalSession
+from .mcp_manager import McpManager, CATALOG
 from . import workspaces as _ws
 from .sessions import SessionStore
 from .autobudget import AutoBudget
@@ -46,6 +47,8 @@ _session = Session(_cfg)
 _pilot = ConversationalSession(_cfg)
 import tempfile as _tf
 _sessions = SessionStore(os.path.join(_cfg.state_dir or _tf.gettempdir(), "harness_sessions.json"))
+_mcp = McpManager()
+_pilot._mcp = _mcp
 _UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "harness-uploads")
 os.makedirs(_UPLOAD_DIR, exist_ok=True)
 
@@ -76,7 +79,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/upload":
             return self._handle_upload()
         if u.path in ("/api/workspaces/switch", "/api/workspaces/create",
-                      "/api/sessions/create", "/api/sessions/switch"):
+                      "/api/sessions/create", "/api/sessions/switch",
+                      "/api/mcp/add", "/api/mcp/remove", "/api/mcp/start",
+                      "/api/mcp/stop", "/api/mcp/call"):
             return self._handle_post_json(u.path)
         return self._send(404, json.dumps({"error": "not found"}))
 
@@ -98,6 +103,33 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/workspaces/create":
             return self._send(200, json.dumps(_ws.create_workspace(repo, body.get("name",""),
                               body.get("branch") or None)))
+        if path == "/api/mcp/add":
+            name = body.get("name", "")
+            server = {k: body[k] for k in ("command", "args", "env", "cwd") if k in body}
+            _mcp.save_server(name, server)
+            try:
+                tools = _mcp.start_server(name)
+                return self._send(200, json.dumps({"ok": True, "tools": len(tools)}))
+            except Exception as e:
+                return self._send(200, json.dumps({"ok": False, "error": str(e)}))
+        if path == "/api/mcp/remove":
+            _mcp.remove_server(body.get("name", ""))
+            return self._send(200, json.dumps({"ok": True}))
+        if path == "/api/mcp/start":
+            try:
+                tools = _mcp.start_server(body.get("name", ""))
+                return self._send(200, json.dumps({"ok": True, "tools": len(tools)}))
+            except Exception as e:
+                return self._send(200, json.dumps({"ok": False, "error": str(e)}))
+        if path == "/api/mcp/stop":
+            _mcp.stop_server(body.get("name", ""))
+            return self._send(200, json.dumps({"ok": True}))
+        if path == "/api/mcp/call":
+            try:
+                out = _mcp.call(body.get("tool", ""), body.get("arguments", {}))
+                return self._send(200, json.dumps({"ok": True, "result": out}))
+            except Exception as e:
+                return self._send(200, json.dumps({"ok": False, "error": str(e)}))
         if path == "/api/sessions/create":
             return self._send(200, json.dumps(_sessions.create(body.get("title"))))
         if path == "/api/sessions/switch":
@@ -133,6 +165,12 @@ class Handler(BaseHTTPRequestHandler):
                               "application/javascript")
         if u.path == "/app.css":
             return self._send(200, (_WEB / "app.css").read_text(), "text/css")
+        if u.path == "/api/mcp":
+            return self._send(200, json.dumps({"servers": _mcp.status(),
+                "tools": [{"server": t.server, "name": t.name, "qualified": t.qualified,
+                           "description": t.description} for t in _mcp.tools()]}))
+        if u.path == "/api/mcp/catalog":
+            return self._send(200, json.dumps({"catalog": CATALOG}))
         if u.path == "/api/config":
             return self._send(200, json.dumps({
                 "driver": _cfg.driver, "reach": _cfg.reach,
@@ -212,6 +250,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             _cfg.driver = model
             _pilot = ConversationalSession(_cfg)
+            _pilot._mcp = _mcp
             return self._send(200, json.dumps({"ok": True, "driver": model}))
         except Exception as e:
             return self._send(500, json.dumps({"error": str(e)}))

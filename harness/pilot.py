@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-VALID_ACTION_KINDS = {"run_swarm"}
+VALID_ACTION_KINDS = {"run_swarm", "call_mcp"}
 
 
 @dataclass
@@ -45,12 +45,16 @@ class PilotAction:
     kind: str
     goal: str = ""
     roles: list = field(default_factory=list)
+    tool: str = ""              # call_mcp: qualified MCP tool name (server.tool)
+    arguments: dict = field(default_factory=dict)  # call_mcp: tool arguments
 
     def validate(self) -> "PilotAction":
         if self.kind not in VALID_ACTION_KINDS:
             raise PilotError(f"unknown action kind: {self.kind!r}")
         if self.kind == "run_swarm" and not (self.goal or "").strip():
             raise PilotError("run_swarm action requires a non-empty goal")
+        if self.kind == "call_mcp" and not (self.tool or "").strip():
+            raise PilotError("call_mcp action requires a 'tool' (server.tool)")
         if self.roles and not isinstance(self.roles, list):
             raise PilotError("roles must be a list")
         return self
@@ -81,12 +85,20 @@ def _coerce_actions(raw_actions) -> list:
     for a in raw_actions:
         if not isinstance(a, dict):
             raise PilotError("each action must be an object")
-        kind = a.get("kind") or a.get("action") or a.get("tool") or "run_swarm"
+        kind = a.get("kind") or a.get("action") or "run_swarm"
+        # if a bare "tool" + "arguments" shape is given, treat as call_mcp
+        tool = a.get("tool") or ""
+        arguments = a.get("arguments") or a.get("args") or {}
+        if tool and kind in ("run_swarm",) and ("goal" not in a and "instruction" not in a):
+            kind = "call_mcp"
         goal = a.get("goal") or a.get("instruction") or a.get("task") or ""
         roles = a.get("roles") or []
         if isinstance(roles, str):
             roles = [roles]
-        actions.append(PilotAction(kind=str(kind), goal=str(goal), roles=roles).validate())
+        if not isinstance(arguments, dict):
+            arguments = {}
+        actions.append(PilotAction(kind=str(kind), goal=str(goal), roles=roles,
+                                   tool=str(tool), arguments=arguments).validate())
     return actions
 
 
