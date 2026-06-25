@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Circle, GitBranch, Boxes, Cpu, PanelLeft, PanelRight } from "lucide-react";
+import { Circle, GitBranch, Boxes, Cpu, PanelLeft, PanelRight, Coins } from "lucide-react";
 import { api, type Config } from "../lib/api";
 import { isDesktop } from "../lib/transport";
 
@@ -11,12 +11,56 @@ export default function StatusBar({ config, jobCount, leftOpen, rightOpen, onTog
   onToggleLeft: () => void; onToggleRight: () => void;
 }) {
   const [branch, setBranch] = useState("");
+  const [usage, setUsage] = useState<{ tokens_used: number; est_cost_usd: number } | null>(null);
+
+  const fetchUsage = () => {
+    api.getUsage()
+      .then((data) => {
+        if (data && data.session) {
+          setUsage({
+            tokens_used: data.session.tokens_used,
+            est_cost_usd: data.session.est_cost_usd,
+          });
+        }
+      })
+      .catch((err) => console.error("Failed to load usage in StatusBar", err));
+  };
+
   useEffect(() => {
     api.workspaces().then((ws) => {
       const active = ws.find((w) => w.active);
       if (active) setBranch(active.name);
     }).catch(() => {});
   }, [config]);
+
+  useEffect(() => {
+    fetchUsage();
+    const interval = setInterval(fetchUsage, 10000);
+    return () => clearInterval(interval);
+  }, [jobCount]);
+
+  const formatTokens = (num: number) => {
+    if (num >= 1000000) {
+      return (num / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+    }
+    if (num >= 1000) {
+      return (num / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    }
+    return num.toString();
+  };
+
+  const formatCost = (num: number) => {
+    if (num === 0) return "$0.00";
+    if (num < 0.001) {
+      return `$${num.toFixed(4)}`;
+    }
+    if (num < 0.01) {
+      return `$${num.toFixed(3)}`;
+    }
+    return `$${num.toFixed(2)}`;
+  };
+
+  const showUsage = usage && usage.tokens_used > 0;
 
   return (
     <div className="flex items-center gap-3 px-3 h-6 border-t border-edge bg-panel text-[10px] text-muted select-none">
@@ -28,6 +72,16 @@ export default function StatusBar({ config, jobCount, leftOpen, rightOpen, onTog
       <span className="flex items-center gap-1 text-good"><Circle size={7} className="fill-good text-good" /> ready</span>
       {branch && <span className="flex items-center gap-1"><GitBranch size={10} />{branch}</span>}
       <span className="flex items-center gap-1"><Boxes size={10} />{jobCount} job{jobCount === 1 ? "" : "s"}</span>
+      {showUsage && (
+        <>
+          <span className="w-px h-3 bg-edge/40" />
+          <span className="flex items-center gap-1 text-muted/80" title="Session token usage and estimated cost">
+            <Coins size={10} className="text-faint" />
+            <span>{formatTokens(usage.tokens_used)} tok</span>
+            <span className="text-good font-medium">~{formatCost(usage.est_cost_usd)}</span>
+          </span>
+        </>
+      )}
       <div className="flex-1" />
       <span className="flex items-center gap-1"><Cpu size={10} />{config?.driver?.split(":").pop() || "pilot"}</span>
       <span>{config?.reach || ""}</span>

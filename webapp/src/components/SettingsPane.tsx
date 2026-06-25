@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Settings as SettingsIcon, GitBranch, ChevronRight, ChevronDown, Plus, Trash2 } from "lucide-react";
+import { Settings as SettingsIcon, ChevronRight, ChevronDown, Plus, Trash2 } from "lucide-react";
 import { api, type Settings, type UsageData } from "../lib/api";
 
 export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => void }) {
@@ -11,36 +11,17 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
   const [usage, setUsage] = useState<UsageData | null>(null);
 
   // Feature states
-  const [worktrees, setWorktrees] = useState<any[]>([]);
-  const [maxWorktrees, setMaxWorktrees] = useState<number>(25);
   const [hooks, setHooks] = useState<any[]>([]);
   const [allowedEvents, setAllowedEvents] = useState<string[]>([]);
 
   // Expand/collapse states
-  const [worktreesOpen, setWorktreesOpen] = useState(false);
   const [hooksOpen, setHooksOpen] = useState(false);
-
-  // Form states for worktrees
-  const [newWtBranch, setNewWtBranch] = useState("");
-  const [newWtBase, setNewWtBase] = useState("HEAD");
-  const [wtError, setWtError] = useState("");
-  const [wtStatus, setWtStatus] = useState("");
 
   // Form states for hooks
   const [newHookEvent, setNewHookEvent] = useState("");
   const [newHookCommand, setNewHookCommand] = useState("");
   const [hookError, setHookError] = useState("");
   const [hookStatus, setHookStatus] = useState("");
-
-  const loadWorktrees = async () => {
-    try {
-      const data = await api.getWorktrees();
-      setWorktrees(data.worktrees || []);
-      setMaxWorktrees(data.max ?? 25);
-    } catch (err) {
-      console.error("Failed to load worktrees", err);
-    }
-  };
 
   const loadHooks = async () => {
     try {
@@ -98,7 +79,6 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
         console.error("Failed to load usage statistics", err);
       });
 
-    loadWorktrees();
     loadHooks();
   }, []);
 
@@ -340,178 +320,6 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
               </span>
             </button>
           </div>
-        </div>
-
-        {/* Git Worktrees Section */}
-        <div className="border-t border-edge pt-3 space-y-2">
-          <button
-            onClick={() => setWorktreesOpen(!worktreesOpen)}
-            className="w-full flex items-center justify-between text-left focus:outline-none"
-          >
-            <span className="uppercase tracking-wider text-[10px] text-faint font-semibold flex items-center gap-1">
-              <GitBranch size={11} className="text-accent" /> Git Worktrees
-            </span>
-            <span className="text-muted">
-              {worktreesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-            </span>
-          </button>
-
-          {worktreesOpen && (
-            <div className="space-y-3 bg-panel2/40 border border-edge/50 rounded p-2.5 mt-1">
-              {wtError && <div className="text-risk text-[10px] font-medium">{wtError}</div>}
-              {wtStatus && <div className="text-good text-[10px] font-medium">{wtStatus}</div>}
-
-              {/* Worktree List */}
-              <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                {worktrees.length === 0 ? (
-                  <div className="text-muted text-[10px]">No active worktrees found.</div>
-                ) : (
-                  worktrees.map((wt) => (
-                    <div key={wt.path} className="flex flex-col p-1.5 bg-panel2/65 border border-edge/30 rounded text-[11px] relative group">
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-txt flex items-center gap-1 truncate max-w-[150px]">
-                          {wt.branch || "detached"}
-                          {wt.is_main && (
-                            <span className="bg-accent/15 text-accent text-[9px] px-1 rounded font-bold uppercase tracking-wider">
-                              main
-                            </span>
-                          )}
-                          {wt.locked && (
-                            <span className="bg-risk/15 text-risk text-[9px] px-1 rounded font-bold uppercase tracking-wider">
-                              locked
-                            </span>
-                          )}
-                        </span>
-                        
-                        {!wt.is_main && (
-                          <button
-                            onClick={async () => {
-                              if (window.confirm(`Are you sure you want to remove worktree for branch "${wt.branch}"?`)) {
-                                try {
-                                  setWtError("");
-                                  const res = await api.removeWorktree(wt.path);
-                                  if (res.ok) {
-                                    setWtStatus("Worktree removed successfully");
-                                    setTimeout(() => setWtStatus(""), 2500);
-                                    loadWorktrees();
-                                  }
-                                } catch (err: any) {
-                                  setWtError(err?.error || "Failed to remove worktree");
-                                }
-                              }
-                            }}
-                            className="text-muted hover:text-risk transition-colors p-0.5"
-                            title="Remove worktree"
-                          >
-                            <Trash2 size={11} />
-                          </button>
-                        )}
-                      </div>
-                      <div className="text-faint text-[9px] font-mono truncate max-w-[210px] mt-0.5" title={wt.path}>
-                        {wt.path}
-                      </div>
-                      {wt.head && (
-                        <div className="text-muted text-[9px] font-mono mt-0.5">
-                          HEAD: {wt.head.slice(0, 7)}
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {/* Action Buttons & Max Count */}
-              <div className="flex items-center justify-between border-t border-edge/30 pt-2.5 mt-2 text-[11px]">
-                <button
-                  onClick={async () => {
-                    try {
-                      setWtError("");
-                      const res = await api.pruneWorktrees();
-                      if (res.ok) {
-                        setWtStatus("Worktrees pruned");
-                        setTimeout(() => setWtStatus(""), 2500);
-                        loadWorktrees();
-                      }
-                    } catch (err: any) {
-                      setWtError(err?.error || "Failed to prune worktrees");
-                    }
-                  }}
-                  className="bg-panel2 hover:bg-edge/50 border border-edge text-txt rounded px-2 py-1 font-medium transition-colors"
-                >
-                  Prune Worktrees
-                </button>
-
-                <div className="flex items-center gap-1.5">
-                  <span className="text-faint uppercase text-[9px] font-semibold">Max count:</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="100"
-                    value={maxWorktrees}
-                    onChange={async (e) => {
-                      const val = parseInt(e.target.value);
-                      if (!isNaN(val)) {
-                        setMaxWorktrees(val);
-                        try {
-                          await api.setWorktreeMax(val);
-                        } catch (err) {
-                          console.error("Failed to update max worktrees", err);
-                        }
-                      }
-                    }}
-                    className="w-12 bg-panel2 border border-edge rounded px-1.5 py-0.5 text-center font-mono focus:outline-none focus:border-accent"
-                  />
-                </div>
-              </div>
-
-              {/* Add Worktree Form */}
-              <div className="border-t border-edge/30 pt-2.5 mt-2 space-y-1.5">
-                <div className="text-[10px] uppercase tracking-wider text-faint font-semibold">
-                  Add Worktree
-                </div>
-                <div className="space-y-1">
-                  <input
-                    type="text"
-                    placeholder="Branch name (e.g., feature-x)"
-                    value={newWtBranch}
-                    onChange={(e) => setNewWtBranch(e.target.value)}
-                    className="w-full bg-panel2 border border-edge rounded px-2 py-1 text-txt placeholder:text-faint text-[11px] focus:outline-none focus:border-accent"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Base commit-ish (default: HEAD)"
-                    value={newWtBase}
-                    onChange={(e) => setNewWtBase(e.target.value)}
-                    className="w-full bg-panel2 border border-edge rounded px-2 py-1 text-txt placeholder:text-faint text-[11px] focus:outline-none focus:border-accent font-mono"
-                  />
-                  <button
-                    onClick={async () => {
-                      if (!newWtBranch.trim()) {
-                        setWtError("Branch name is required");
-                        return;
-                      }
-                      try {
-                        setWtError("");
-                        setWtStatus("Adding worktree...");
-                        await api.addWorktree(newWtBranch.trim(), newWtBase.trim() || undefined);
-                        setWtStatus("Worktree added");
-                        setNewWtBranch("");
-                        setNewWtBase("HEAD");
-                        setTimeout(() => setWtStatus(""), 2500);
-                        loadWorktrees();
-                      } catch (err: any) {
-                        setWtError(err?.error || "Failed to add worktree");
-                        setWtStatus("");
-                      }
-                    }}
-                    className="w-full bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30 hover:border-accent/50 rounded py-1 font-semibold text-[11px] transition-colors flex items-center justify-center gap-1"
-                  >
-                    <Plus size={11} /> Add Worktree
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Lifecycle Hooks Section */}
