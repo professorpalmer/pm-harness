@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .mcp_client import StdioMcpClient, McpTool, McpError
+from .mcp_http_client import HttpMcpClient
 
 CONFIG_DIR = Path(os.path.expanduser("~/.pmharness"))
 CONFIG_PATH = CONFIG_DIR / "mcp.json"
@@ -82,11 +83,14 @@ class McpManager:
             if name in self._clients and self._clients[name].alive:
                 return [t for t in self._tools.values() if t.server == name]
             cfg = _expand(server or self.load_config().get(name, {}))
-            if not cfg.get("command"):
-                raise McpError(f"MCP server '{name}' has no command configured")
-            client = StdioMcpClient(
-                name=name, command=cfg["command"], args=cfg.get("args"),
-                env=cfg.get("env"), cwd=cfg.get("cwd"))
+            if cfg.get("url"):
+                client = HttpMcpClient(name=name, url=cfg["url"], headers=cfg.get("headers"))
+            elif cfg.get("command"):
+                client = StdioMcpClient(
+                    name=name, command=cfg["command"], args=cfg.get("args"),
+                    env=cfg.get("env"), cwd=cfg.get("cwd"))
+            else:
+                raise McpError(f"MCP server '{name}' needs a 'command' (stdio) or 'url' (http)")
             try:
                 client.start()
                 tools = client.list_tools()
@@ -136,7 +140,8 @@ class McpManager:
             alive = name in self._clients and self._clients[name].alive
             ntools = sum(1 for t in self._tools.values() if t.server == name)
             out.append({
-                "name": name, "command": server.get("command", ""),
+                "name": name, "command": server.get("command", "") or server.get("url", ""),
+                "transport": "http" if server.get("url") else "stdio",
                 "running": alive, "tools": ntools,
                 "error": self._errors.get(name, ""),
             })

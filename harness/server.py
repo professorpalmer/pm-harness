@@ -171,7 +171,7 @@ class Handler(BaseHTTPRequestHandler):
                               body.get("branch") or None)))
         if path == "/api/mcp/add":
             name = body.get("name", "")
-            server = {k: body[k] for k in ("command", "args", "env", "cwd") if k in body}
+            server = {k: body[k] for k in ("command", "args", "env", "cwd", "url", "headers") if k in body}
             _mcp.save_server(name, server)
             try:
                 tools = _mcp.start_server(name)
