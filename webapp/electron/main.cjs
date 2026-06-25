@@ -73,15 +73,24 @@ async function startBackend() {
 
   // 2. Spawn a fresh backend on a free port and record the marker.
   backendPort = await freePort();
-  const repoRoot = path.resolve(__dirname, "..", "..");
+  // Backend resolution. In dev, __dirname is webapp/electron so ../.. is the repo.
+  // When packaged (.asar), that path is invalid -> resolve from env or the known
+  // install location. A fully self-contained bundle (PyInstaller) is the next
+  // step toward distribution; for a personal build we use the existing venv.
+  const { app } = require("electron");
+  const repoRoot = process.env.HARNESS_REPO
+    || (app.isPackaged ? path.join(os.homedir(), "pm-harness") : path.resolve(__dirname, "..", ".."));
   const py = process.env.PMHARNESS_PYTHON || path.join(repoRoot, ".venv", "bin", "python");
   backend = spawn(py, ["-m", "harness.cli", "gui", "--port", String(backendPort)], {
     cwd: repoRoot,
     env: { ...process.env, HARNESS_REPO: process.env.HARNESS_REPO || repoRoot },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  backend.stdout.on("data", (d) => process.stdout.write(`[backend] ${d}`));
-  backend.stderr.on("data", (d) => process.stderr.write(`[backend] ${d}`));
+  const _dbg = (msg) => { try { fs.appendFileSync(path.join(os.homedir(), ".pmharness", "electron.log"), `${new Date().toISOString()} ${msg}\n`); } catch {} };
+  _dbg(`spawn py=${py} cwd=${repoRoot} port=${backendPort} packaged=${app.isPackaged}`);
+  backend.on("error", (e) => _dbg(`spawn error: ${e.message}`));
+  backend.stdout.on("data", (d) => { _dbg(`[out] ${d}`); process.stdout.write(`[backend] ${d}`); });
+  backend.stderr.on("data", (d) => { _dbg(`[err] ${d}`); process.stderr.write(`[backend] ${d}`); });
   await waitForBackend(backendPort);
   try { fs.writeFileSync(markerPath(), JSON.stringify({ port: backendPort, pid: backend.pid, at: Date.now() })); } catch {}
 }
