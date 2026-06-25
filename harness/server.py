@@ -367,6 +367,81 @@ class Handler(BaseHTTPRequestHandler):
             sid = q.get("session", [None])[0] or _sessions.active or ""
             history = load_transcript(_cfg.state_dir or _tf.gettempdir(), sid)
             return self._send(200, json.dumps({"history": history}))
+        if u.path == "/api/sessions/export":
+            if self._guard():
+                return
+            q = parse_qs(u.query)
+            qtok = q.get("token", [""])[0]
+            if qtok and qtok != _TOKEN:
+                return self._send(403, json.dumps({"error": "missing or bad token"}))
+            sid = q.get("session", [None])[0] or _sessions.active or ""
+            fmt = q.get("format", ["json"])[0]
+            
+            meta = next((s for s in _sessions._sessions if s["id"] == sid), None)
+            history = load_transcript(_cfg.state_dir or _tf.gettempdir(), sid)
+            
+            title = meta.get("title", "Unknown Session") if meta else "Unknown Session"
+            filename_base = meta.get("title") if meta else ""
+            if not filename_base:
+                filename_base = sid or "session"
+            
+            import re
+            safe_title = re.sub(r'[^a-zA-Z0-9\-_]', '_', filename_base)
+            safe_title = re.sub(r'_+', '_', safe_title)
+            safe_title = safe_title.strip('_-')
+            if not safe_title:
+                safe_title = sid or "session"
+                
+            if fmt == "md":
+                import datetime
+                import time
+                created = meta.get("created") if meta else None
+                created_str = datetime.datetime.fromtimestamp(created).strftime('%Y-%m-%d %H:%M:%S') if created else "Unknown"
+                exported_str = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
+                
+                md_lines = []
+                md_lines.append(f"# {title or 'Unknown Session'}")
+                md_lines.append("")
+                md_lines.append(f"**Session ID:** {sid}  ")
+                md_lines.append(f"**Created:** {created_str}  ")
+                md_lines.append(f"**Exported:** {exported_str}")
+                md_lines.append("")
+                
+                for msg in history:
+                    role = msg.get("role", "").capitalize()
+                    content = msg.get("content", "")
+                    md_lines.append(f"## {role}")
+                    md_lines.append("")
+                    md_lines.append(content)
+                    md_lines.append("")
+                
+                body = "\n".join(md_lines)
+                data = body.encode("utf-8")
+                filename = f"{safe_title}.md"
+                ctype = "text/markdown"
+            else:
+                import time
+                created = meta.get("created") if meta else None
+                export_data = {
+                    "session_id": sid,
+                    "title": title or "Unknown Session",
+                    "created": created,
+                    "exported_at": time.time(),
+                    "messages": history
+                }
+                body = json.dumps(export_data, indent=2)
+                data = body.encode("utf-8")
+                filename = f"{safe_title}.json"
+                ctype = "application/json"
+                
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self._cors()
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if u.path == "/api/sessions":
             return self._send(200, json.dumps(_sessions.list()))
         if u.path == "/api/auto":

@@ -21,7 +21,7 @@ function authToken(): string {
   return (meta && meta.getAttribute("content")) || "";
 }
 
-function withToken(path: string): string {
+export function withToken(path: string): string {
   const tok = authToken();
   if (!tok) return path;
   return path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(tok);

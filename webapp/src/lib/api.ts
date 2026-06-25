@@ -1,5 +1,5 @@
 // Typed harness API -- thin wrappers over the transport seam.
-import { getJSON, postJSON, stream, type StreamEvent } from "./transport";
+import { getJSON, postJSON, stream, withToken, type StreamEvent } from "./transport";
 
 export type Config = {
   driver: string; reach: string; budget: number;
@@ -60,4 +60,6 @@ export const api = {
   skillReject: (slug: string) => postJSON<{ ok: boolean }>("/api/skills/reject", { slug }),
   auto: (objective: string, onEvent: (e: StreamEvent) => void, onDone?: () => void, onError?: (e: any) => void) =>
     stream(`/api/auto?objective=${encodeURIComponent(objective)}`, onEvent, onDone, onError),
+  exportUrl: (sessionId: string, format: "md" | "json") =>
+    withToken(`/api/sessions/export?session=${encodeURIComponent(sessionId)}&format=${format}`),
 };

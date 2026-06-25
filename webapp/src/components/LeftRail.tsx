@@ -36,6 +36,15 @@ export default function LeftRail({ jobsRefresh, onSessionChange }: {
     await loadSess();
   };
   const newSession = async () => { await api.createSession(); await loadSess(); };
+  const handleExport = (sid: string, format: "md" | "json") => {
+    const url = api.exportUrl(sid, format);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
 
   return (
     <aside className="bg-panel border-r border-edge flex flex-col h-full overflow-hidden">
@@ -64,12 +73,26 @@ export default function LeftRail({ jobsRefresh, onSessionChange }: {
       <Section title="Sessions" action={<IconBtn onClick={newSession}><Plus size={13} /></IconBtn>}>
         {sessions.length === 0 && <Empty>No sessions</Empty>}
         {sessions.map((s) => (
-          <button key={s.id} onClick={() => switchSession(s.id)}
-            className={`w-full text-left rounded px-2 py-1.5 mb-0.5 flex items-center gap-2 text-[13px] transition
-              ${s.active ? "bg-accent2/40 text-txt" : "hover:bg-panel2 text-muted"}`}>
-            <MessageSquare size={12} />
-            <span className="flex-1 truncate">{s.title || "Untitled"}</span>
-          </button>
+          <div key={s.id} className="group relative">
+            <button onClick={() => switchSession(s.id)}
+              className={`w-full text-left rounded px-2 py-1.5 mb-0.5 flex items-center gap-2 text-[13px] transition
+                ${s.active ? "bg-accent2/40 text-txt" : "hover:bg-panel2 text-muted"}`}>
+              <MessageSquare size={12} />
+              <span className="flex-1 truncate mr-12">{s.title || "Untitled"}</span>
+            </button>
+            <div className={`absolute right-1 top-1.5 hidden group-hover:flex items-center gap-1 bg-panel border border-edge rounded px-1 py-0.5 z-10
+              ${s.active ? "!flex" : ""}`}>
+              <button onClick={(e) => { e.stopPropagation(); handleExport(s.id, "md"); }}
+                className="text-[9px] font-bold text-muted hover:text-accent uppercase px-1">
+                md
+              </button>
+              <span className="text-[9px] text-edge">|</span>
+              <button onClick={(e) => { e.stopPropagation(); handleExport(s.id, "json"); }}
+                className="text-[9px] font-bold text-muted hover:text-accent uppercase px-1">
+                json
+              </button>
+            </div>
+          </div>
         ))}
       </Section>
 
