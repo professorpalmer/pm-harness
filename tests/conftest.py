@@ -61,3 +61,11 @@ def _no_network(request, monkeypatch):
         raise _BlockedNetwork(f"blocked outbound connect to {address!r} in tests")
 
     monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+
+
+@pytest.fixture(autouse=True)
+def _clear_wiki_env(monkeypatch):
+    monkeypatch.delenv("WIKI_API_BASE", raising=False)
+    monkeypatch.delenv("WIKI_OWNER_TOKEN", raising=False)
+    monkeypatch.delenv("HARNESS_WIKI_URL", raising=False)
+    monkeypatch.delenv("HARNESS_WIKI_TOKEN", raising=False)

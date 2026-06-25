@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 // Self-learning panel: review AUTO-DISTILLED candidate skills (PENDING) and
 // approve/reject. Approved skills load into the pilot's context next session.
 // The human gate is the point -- a bad auto-skill is worse than none.
-export default function SkillsPane() {
+export default function SkillsPane({ embedded = false }: { embedded?: boolean }) {
   const [skills, setSkills] = useState<any[]>([]);
   const [rules, setRules] = useState<any[]>([]);
   const [busy, setBusy] = useState("");
@@ -40,18 +40,29 @@ export default function SkillsPane() {
   const active = skills.filter((s) => s.state === "active");
 
   return (
-    <div className="flex flex-col h-full text-[12px]">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-edge">
-        <span className="uppercase tracking-wider text-[10px] text-faint font-medium flex items-center gap-1.5">
-          <GraduationCap size={11} /> Skills
-        </span>
-        <button onClick={distill} disabled={busy === "distill"}
-          className="text-[10px] flex items-center gap-1 px-1.5 h-5 rounded bg-accent2 text-accent hover:brightness-125 disabled:opacity-40">
-          <Sparkles size={10} /> Distill session
-        </button>
-      </div>
+    <div className={embedded ? "text-[12px] flex flex-col gap-2" : "flex flex-col h-full text-[12px]"}>
+      {!embedded && (
+        <div className="flex items-center justify-between px-3 py-2 border-b border-edge">
+          <span className="uppercase tracking-wider text-[10px] text-faint font-medium flex items-center gap-1.5">
+            <GraduationCap size={11} /> Skills
+          </span>
+          <button onClick={distill} disabled={busy === "distill"}
+            className="text-[10px] flex items-center gap-1 px-1.5 h-5 rounded bg-accent2 text-accent hover:brightness-125 disabled:opacity-40">
+            <Sparkles size={10} /> Distill session
+          </button>
+        </div>
+      )}
 
-      <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
+      <div className={embedded ? "space-y-2" : "flex-1 overflow-y-auto p-2 flex flex-col gap-2"}>
+        {embedded && (
+          <div className="flex justify-between items-center bg-panel2/40 border border-edge/30 rounded p-2 mb-1">
+            <span className="text-faint text-[10px]">Analyze current session to propose new skills and rules.</span>
+            <button onClick={distill} disabled={busy === "distill"}
+              className="text-[10px] flex items-center gap-1 px-2 py-1 rounded bg-accent2 text-accent hover:brightness-125 disabled:opacity-40">
+              <Sparkles size={10} /> Distill session
+            </button>
+          </div>
+        )}
         {msg && <div className="text-[10px] text-muted px-1">{msg}</div>}
 
         {pending.length > 0 && (

@@ -1,32 +1,130 @@
 import { useState, useEffect, useRef } from "react";
-import { Database, Globe, FolderTree, GitBranch, GitFork, Plug, GraduationCap, Settings, Network, SquareTerminal } from "lucide-react";
+import { Database, Globe, FolderTree, GitBranch, GitFork, Plug, Settings, SquareTerminal, Columns, Rows, Split, X } from "lucide-react";
 import StatePane from "./StatePane";
 import BrowserPane from "./BrowserPane";
 import FileTree from "./FileTree";
 import SourceControl from "./SourceControl";
 import WorktreesPane from "./WorktreesPane";
 import McpPane from "./McpPane";
-import SkillsPane from "./SkillsPane";
 import SettingsPane from "./SettingsPane";
-import WikiGraphPane from "./WikiGraphPane";
 import TerminalPane from "./TerminalPane";
 
-type Tab = "state" | "browser" | "files" | "git" | "worktrees" | "terminal" | "mcp" | "skills" | "wiki" | "settings";
+type Tab = "state" | "files" | "git" | "worktrees" | "terminal" | "browser" | "mcp" | "settings";
+
+const TAB_CONFIG: Record<Tab, { label: string; icon: React.ReactNode }> = {
+  state: { label: "State", icon: <Database size={12} /> },
+  files: { label: "Files", icon: <FolderTree size={12} /> },
+  git: { label: "Git", icon: <GitBranch size={12} /> },
+  worktrees: { label: "Worktrees", icon: <GitFork size={12} /> },
+  terminal: { label: "Terminal", icon: <SquareTerminal size={12} /> },
+  browser: { label: "Browser", icon: <Globe size={12} /> },
+  mcp: { label: "MCP", icon: <Plug size={12} /> },
+  settings: { label: "Settings", icon: <Settings size={12} /> },
+};
+
+interface SplitState {
+  isSplit: boolean;
+  primaryTab: Tab;
+  secondaryTab: Tab;
+  direction: "horizontal" | "vertical";
+  percent: number;
+}
 
 export default function RightPane({ artifacts, onOpenWizard }: {
   artifacts: { type: string; headline: string; confidence?: number }[];
   onOpenWizard: () => void;
 }) {
-  const [tab, setTab] = useState<Tab>("state");
-
-  useEffect(() => {
-    const onFocusTab = (e: any) => { if (e?.detail) setTab(e.detail as Tab); };
-    window.addEventListener("harness-focus-tab", onFocusTab as EventListener);
-    return () => window.removeEventListener("harness-focus-tab", onFocusTab as EventListener);
-  }, []);
   const asideRef = useRef<HTMLDivElement | null>(null);
-  const [width, setWidth] = useState<number>(600); // Sensible default for wide layout before measure
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState<number>(600);
+  const [isResizing, setIsResizing] = useState(false);
 
+  // Tab order state (drag to reorder, persisted in localStorage)
+  const [tabOrder, setTabOrder] = useState<Tab[]>(() => {
+    const saved = localStorage.getItem("pmharness.tabOrder");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as Tab[];
+        const validTabs: Tab[] = ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings"];
+        const filtered = parsed.filter(t => validTabs.includes(t));
+        const missing = validTabs.filter(t => !filtered.includes(t));
+        return [...filtered, ...missing];
+      } catch (e) {
+        // fallback
+      }
+    }
+    return ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings"];
+  });
+
+  const saveTabOrder = (newOrder: Tab[]) => {
+    setTabOrder(newOrder);
+    localStorage.setItem("pmharness.tabOrder", JSON.stringify(newOrder));
+  };
+
+  // Drag and drop state for reordering tabs
+  const [draggedTab, setDraggedTab] = useState<Tab | null>(null);
+
+  const handleDragStart = (e: React.DragEvent, tabId: Tab) => {
+    setDraggedTab(tabId);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e: React.DragEvent, targetTab: Tab) => {
+    e.preventDefault();
+    if (!draggedTab || draggedTab === targetTab) return;
+
+    const fromIndex = tabOrder.indexOf(draggedTab);
+    const toIndex = tabOrder.indexOf(targetTab);
+    if (fromIndex !== -1 && toIndex !== -1) {
+      const updated = [...tabOrder];
+      updated.splice(fromIndex, 1);
+      updated.splice(toIndex, 0, draggedTab);
+      saveTabOrder(updated);
+    }
+  };
+
+  const handleDragEnd = () => {
+    setDraggedTab(null);
+  };
+
+  // Split state (persisted in localStorage)
+  const [splitState, setSplitState] = useState<SplitState>(() => {
+    const saved = localStorage.getItem("pmharness.splitState");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        const validTabs: Tab[] = ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings"];
+        const primaryTab = validTabs.includes(parsed.primaryTab) ? parsed.primaryTab : "state";
+        const secondaryTab = validTabs.includes(parsed.secondaryTab) ? parsed.secondaryTab : "terminal";
+        return {
+          isSplit: !!parsed.isSplit,
+          primaryTab,
+          secondaryTab,
+          direction: parsed.direction === "vertical" ? "vertical" : "horizontal",
+          percent: typeof parsed.percent === "number" ? parsed.percent : 50,
+        };
+      } catch (e) {
+        // fallback
+      }
+    }
+    return {
+      isSplit: false,
+      primaryTab: "state",
+      secondaryTab: "terminal",
+      direction: "horizontal",
+      percent: 50,
+    };
+  });
+
+  const updateSplitState = (updater: Partial<SplitState> | ((prev: SplitState) => SplitState)) => {
+    setSplitState(prev => {
+      const next = typeof updater === "function" ? updater(prev) : { ...prev, ...updater };
+      localStorage.setItem("pmharness.splitState", JSON.stringify(next));
+      return next;
+    });
+  };
+
+  // ResizeObserver for measuring total width
   useEffect(() => {
     if (!asideRef.current) return;
     const observer = new ResizeObserver((entries) => {
@@ -38,48 +136,239 @@ export default function RightPane({ artifacts, onOpenWizard }: {
     return () => observer.disconnect();
   }, []);
 
-  const showLabel = (tabName: Tab) => {
-    if (width >= 580) return true;
-    if (width >= 380) return tab === tabName;
+  // Hotkey listener
+  useEffect(() => {
+    const onFocusTab = (e: any) => {
+      if (e?.detail) {
+        const targetTab = e.detail as Tab;
+        const validTabs: Tab[] = ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings"];
+        if (validTabs.includes(targetTab)) {
+          updateSplitState({ primaryTab: targetTab });
+        }
+      }
+    };
+    window.addEventListener("harness-focus-tab", onFocusTab as EventListener);
+    return () => window.removeEventListener("harness-focus-tab", onFocusTab as EventListener);
+  }, []);
+
+  // Draggable divider resize handler
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      let nextPercent = 50;
+
+      if (splitState.direction === "horizontal") {
+        const relativeY = e.clientY - rect.top;
+        nextPercent = (relativeY / rect.height) * 100;
+      } else {
+        const relativeX = e.clientX - rect.left;
+        nextPercent = (relativeX / rect.width) * 100;
+      }
+
+      // Clamp split percent between 15% and 85%
+      nextPercent = Math.max(15, Math.min(85, nextPercent));
+      updateSplitState({ percent: nextPercent });
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizing, splitState.direction]);
+
+  // Compute label visibility based on sub-pane widths
+  const primaryWidth = splitState.isSplit && splitState.direction === "vertical" ? width * (splitState.percent / 100) : width;
+  const secondaryWidth = splitState.isSplit && splitState.direction === "vertical" ? width * ((100 - splitState.percent) / 100) : width;
+
+  const showLabel = (tabName: Tab, paneWidth: number, activeTab: Tab) => {
+    if (paneWidth >= 580) return true;
+    if (paneWidth >= 380) return activeTab === tabName;
     return false;
+  };
+
+  const renderTabContent = (tabName: Tab) => {
+    switch (tabName) {
+      case "state":
+        return <StatePane artifacts={artifacts} embedded />;
+      case "browser":
+        return <BrowserPane />;
+      case "files":
+        return <FileTree />;
+      case "git":
+        return <SourceControl />;
+      case "terminal":
+        return <TerminalPane />;
+      case "worktrees":
+        return <WorktreesPane />;
+      case "mcp":
+        return <McpPane />;
+      case "settings":
+        return <SettingsPane onOpenWizard={onOpenWizard} />;
+      default:
+        return null;
+    }
   };
 
   return (
     <aside ref={asideRef} className="bg-panel border-l border-edge flex flex-col h-full overflow-hidden min-w-0">
-      <div className="flex flex-nowrap border-b border-edge overflow-x-auto scrollbar-none select-none">
-        <TabBtn active={tab === "state"} onClick={() => setTab("state")} icon={<Database size={12} />} label="State" showLabel={showLabel("state")} />
-        <TabBtn active={tab === "browser"} onClick={() => setTab("browser")} icon={<Globe size={12} />} label="Browser" showLabel={showLabel("browser")} />
-        <TabBtn active={tab === "files"} onClick={() => setTab("files")} icon={<FolderTree size={12} />} label="Files" showLabel={showLabel("files")} />
-        <TabBtn active={tab === "git"} onClick={() => setTab("git")} icon={<GitBranch size={12} />} label="Git" showLabel={showLabel("git")} />
-        <TabBtn active={tab === "terminal"} onClick={() => setTab("terminal")} icon={<SquareTerminal size={12} />} label="Terminal" showLabel={showLabel("terminal")} />
-        <TabBtn active={tab === "worktrees"} onClick={() => setTab("worktrees")} icon={<GitFork size={12} />} label="Worktrees" showLabel={showLabel("worktrees")} />
-        <TabBtn active={tab === "mcp"} onClick={() => setTab("mcp")} icon={<Plug size={12} />} label="MCP" showLabel={showLabel("mcp")} />
-        <TabBtn active={tab === "skills"} onClick={() => setTab("skills")} icon={<GraduationCap size={12} />} label="Skills" showLabel={showLabel("skills")} />
-        <TabBtn active={tab === "wiki"} onClick={() => setTab("wiki")} icon={<Network size={12} />} label="Wiki" showLabel={showLabel("wiki")} />
-        <TabBtn active={tab === "settings"} onClick={() => setTab("settings")} icon={<Settings size={12} />} label="Settings" showLabel={showLabel("settings")} />
-      </div>
-      <div className="flex-1 overflow-hidden">
-        {tab === "state" && <StatePane artifacts={artifacts} embedded />}
-        {tab === "browser" && <BrowserPane />}
-        {tab === "files" && <FileTree />}
-        {tab === "git" && <SourceControl />}
-        {tab === "terminal" && <TerminalPane />}
-        {tab === "worktrees" && <WorktreesPane />}
-        {tab === "mcp" && <McpPane />}
-        {tab === "skills" && <SkillsPane />}
-        {tab === "wiki" && <WikiGraphPane />}
-        {tab === "settings" && <SettingsPane onOpenWizard={onOpenWizard} />}
+      <div ref={containerRef} className={`flex-1 flex overflow-hidden min-h-0 ${splitState.isSplit && splitState.direction === "horizontal" ? "flex-col" : "flex-row"}`}>
+        {/* Primary Pane */}
+        <div
+          className="flex flex-col overflow-hidden min-h-0 min-w-0"
+          style={splitState.isSplit ? (splitState.direction === "horizontal" ? { height: `${splitState.percent}%` } : { width: `${splitState.percent}%` }) : { flex: 1 }}
+        >
+          {/* Primary Tab Bar */}
+          <div className="flex flex-nowrap border-b border-edge overflow-x-auto scrollbar-none select-none">
+            {tabOrder.map((tabName) => {
+              const config = TAB_CONFIG[tabName];
+              return (
+                <TabBtn
+                  key={tabName}
+                  active={splitState.primaryTab === tabName}
+                  onClick={() => updateSplitState({ primaryTab: tabName })}
+                  icon={config.icon}
+                  label={config.label}
+                  showLabel={showLabel(tabName, primaryWidth, splitState.primaryTab)}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, tabName)}
+                  onDragOver={(e) => handleDragOver(e, tabName)}
+                  onDragEnd={handleDragEnd}
+                  className={draggedTab === tabName ? "opacity-30" : ""}
+                />
+              );
+            })}
+
+            {/* Split controls */}
+            <div className="flex items-center px-1 border-l border-edge bg-panel2/35 gap-0.5 shrink-0 select-none">
+              {!splitState.isSplit ? (
+                <button
+                  onClick={() => updateSplitState({ isSplit: true, secondaryTab: splitState.primaryTab === "terminal" ? "browser" : "terminal" })}
+                  title="Split Pane"
+                  className="p-1.5 text-faint hover:text-txt hover:bg-edge/40 rounded transition-colors"
+                >
+                  <Split size={12} />
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => updateSplitState(prev => ({ ...prev, direction: prev.direction === "horizontal" ? "vertical" : "horizontal" }))}
+                    title={splitState.direction === "horizontal" ? "Split Vertically" : "Split Horizontally"}
+                    className="p-1.5 text-faint hover:text-txt hover:bg-edge/40 rounded transition-colors"
+                  >
+                    {splitState.direction === "horizontal" ? <Columns size={12} /> : <Rows size={12} />}
+                  </button>
+                  <button
+                    onClick={() => updateSplitState({ isSplit: false })}
+                    title="Close Split"
+                    className="p-1.5 text-faint hover:text-risk hover:bg-edge/40 rounded transition-colors"
+                  >
+                    <X size={12} />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Primary Pane Content */}
+          <div className="flex-1 overflow-hidden min-h-0">
+            {renderTabContent(splitState.primaryTab)}
+          </div>
+        </div>
+
+        {/* Resizable Split Divider */}
+        {splitState.isSplit && (
+          <div
+            onMouseDown={handleMouseDown}
+            className={
+              splitState.direction === "horizontal"
+                ? "h-1 hover:h-1.5 cursor-row-resize bg-edge hover:bg-accent/40 border-t border-b border-edge/35 transition-all select-none shrink-0"
+                : "w-1 hover:w-1.5 cursor-col-resize bg-edge hover:bg-accent/40 border-l border-r border-edge/35 transition-all select-none shrink-0"
+            }
+          />
+        )}
+
+        {/* Secondary Pane */}
+        {splitState.isSplit && (
+          <div
+            className="flex flex-col overflow-hidden min-h-0 min-w-0"
+            style={splitState.direction === "horizontal" ? { height: `${100 - splitState.percent}%` } : { width: `${100 - splitState.percent}%` }}
+          >
+            {/* Secondary Tab Bar */}
+            <div className="flex flex-nowrap border-b border-edge overflow-x-auto scrollbar-none select-none">
+              {tabOrder.map((tabName) => {
+                const config = TAB_CONFIG[tabName];
+                return (
+                  <TabBtn
+                    key={tabName}
+                    active={splitState.secondaryTab === tabName}
+                    onClick={() => updateSplitState({ secondaryTab: tabName })}
+                    icon={config.icon}
+                    label={config.label}
+                    showLabel={showLabel(tabName, secondaryWidth, splitState.secondaryTab)}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, tabName)}
+                    onDragOver={(e) => handleDragOver(e, tabName)}
+                    onDragEnd={handleDragEnd}
+                    className={draggedTab === tabName ? "opacity-30" : ""}
+                  />
+                );
+              })}
+
+              {/* Split controls for Secondary Pane */}
+              <div className="flex items-center px-1 border-l border-edge bg-panel2/35 gap-0.5 shrink-0 select-none">
+                <button
+                  onClick={() => updateSplitState(prev => ({ ...prev, direction: prev.direction === "horizontal" ? "vertical" : "horizontal" }))}
+                  title={splitState.direction === "horizontal" ? "Split Vertically" : "Split Horizontally"}
+                  className="p-1.5 text-faint hover:text-txt hover:bg-edge/40 rounded transition-colors"
+                >
+                  {splitState.direction === "horizontal" ? <Columns size={12} /> : <Rows size={12} />}
+                </button>
+                <button
+                  onClick={() => updateSplitState({ isSplit: false })}
+                  title="Close Split"
+                  className="p-1.5 text-faint hover:text-risk hover:bg-edge/40 rounded transition-colors"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+
+            {/* Secondary Pane Content */}
+            <div className="flex-1 overflow-hidden min-h-0">
+              {renderTabContent(splitState.secondaryTab)}
+            </div>
+          </div>
+        )}
       </div>
     </aside>
   );
 }
 
-function TabBtn({ active, onClick, icon, label, showLabel }: {
+function TabBtn({ active, onClick, icon, label, showLabel, draggable, onDragStart, onDragOver, onDragEnd, className }: {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
   showLabel: boolean;
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent) => void;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDragEnd?: (e: React.DragEvent) => void;
+  className?: string;
 }) {
   const btnRef = useRef<HTMLButtonElement | null>(null);
 
@@ -94,8 +383,12 @@ function TabBtn({ active, onClick, icon, label, showLabel }: {
       ref={btnRef}
       onClick={onClick}
       title={label}
-      className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-2.5 px-1.5 text-[10px] uppercase tracking-wider font-medium transition whitespace-nowrap
-        ${active ? "text-txt border-b-[1.5px] border-accent" : "text-faint hover:text-muted"}`}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragEnd={onDragEnd}
+      className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-2 px-1 text-[10px] uppercase tracking-wider font-medium transition whitespace-nowrap
+        ${active ? "text-txt border-b-[1.5px] border-accent bg-panel2/10" : "text-faint hover:text-muted hover:bg-panel2/5"} ${className || ""}`}
     >
       <span className="flex-shrink-0 flex items-center justify-center">{icon}</span>
       {showLabel && <span className="text-[10px] tracking-wider select-none">{label}</span>}

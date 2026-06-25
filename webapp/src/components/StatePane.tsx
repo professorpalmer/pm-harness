@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
-import { api, type CodegraphStatus } from "../lib/api";
+import { ChevronDown, ChevronRight, Loader2, RefreshCw } from "lucide-react";
+import { api, type CodegraphStatus, type WikiGraphData } from "../lib/api";
 
 export default function StatePane({ artifacts }: {
   artifacts: { type: string; headline: string; confidence?: number; id?: string; created_by?: string; [key: string]: any }[];
@@ -9,6 +9,10 @@ export default function StatePane({ artifacts }: {
   // CodeGraph status state
   const [cg, setCg] = useState<CodegraphStatus | null>(null);
   const [reindexing, setReindexing] = useState(false);
+
+  // Wiki status state
+  const [wiki, setWiki] = useState<WikiGraphData | null>(null);
+  const [loadingWiki, setLoadingWiki] = useState(false);
 
   const fetchCg = async () => {
     try {
@@ -19,8 +23,21 @@ export default function StatePane({ artifacts }: {
     }
   };
 
+  const fetchWiki = async () => {
+    setLoadingWiki(true);
+    try {
+      const res = await api.getWikiGraph();
+      setWiki(res);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingWiki(false);
+    }
+  };
+
   useEffect(() => {
     fetchCg();
+    fetchWiki();
   }, []);
 
   // Poll /api/codegraph every 10s while indexing
@@ -213,6 +230,59 @@ export default function StatePane({ artifacts }: {
               </div>
             )}
           </>
+        )}
+      </div>
+
+      {/* Wiki Stats Section */}
+      <div className="mx-2 mb-3 bg-panel border border-edge rounded-lg p-2.5 shrink-0">
+        <div className="flex items-center justify-between pb-1.5 border-b border-edge/60">
+          <div className="flex items-center gap-1.5 font-semibold text-txt text-[12px]">
+            <span className="text-accent tracking-wide uppercase text-[10px]">Wiki</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {loadingWiki ? (
+              <Loader2 className="w-2.5 h-2.5 animate-spin text-faint" />
+            ) : wiki?.status === "ok" ? (
+              <span className="text-[9px] text-good font-bold px-1.5 py-0.5 rounded bg-good/10 border border-good/20 uppercase">
+                Connected
+              </span>
+            ) : wiki?.status === "not_configured" ? (
+              <span className="text-[9px] text-faint font-semibold px-1.5 py-0.5 rounded bg-panel2 border border-edge/50 uppercase">
+                Not Connected
+              </span>
+            ) : (
+              <span className="text-[9px] text-accent font-semibold px-1.5 py-0.5 rounded bg-accent2 border border-accent/20 uppercase">
+                Error
+              </span>
+            )}
+            <button
+              onClick={fetchWiki}
+              disabled={loadingWiki}
+              className="text-[9px] bg-edge hover:bg-edge2 disabled:opacity-50 text-txt px-1.5 py-0.5 rounded transition-colors font-medium border border-edge2 flex items-center justify-center"
+              title="Refresh Wiki Stats"
+            >
+              <RefreshCw className={`w-2.5 h-2.5 ${loadingWiki ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        </div>
+
+        {wiki?.status === "not_configured" ? (
+          <div className="text-[11px] text-muted italic pt-2 px-0.5">Wiki not connected</div>
+        ) : wiki?.status === "error" ? (
+          <div className="text-[11px] text-accent italic pt-2 px-0.5">{wiki.error || "Failed to fetch wiki status"}</div>
+        ) : (
+          <div className="pt-2 text-[11px] text-txt">
+            {wiki ? (
+              <div className="flex justify-between items-center">
+                <span>Wiki: <strong className="text-good">{(wiki.nodes || []).length}</strong> pages, <strong className="text-good">{(wiki.edges || []).length}</strong> links</span>
+                {wiki.base_url && (
+                  <span className="text-[9px] text-faint truncate max-w-[150px]">{wiki.base_url}</span>
+                )}
+              </div>
+            ) : (
+              <div className="text-faint text-[10px]">Loading stats...</div>
+            )}
+          </div>
         )}
       </div>
 
