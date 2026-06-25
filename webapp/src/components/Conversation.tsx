@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Loader2, Send, Zap, Square, GitBranch } from "lucide-react";
+import { ChevronRight, Loader2, Send, Zap, Square } from "lucide-react";
 import { api, type Config } from "../lib/api";
 import PilotPicker from "./PilotPicker";
 
@@ -105,13 +105,7 @@ export default function Conversation({ config, onArtifacts, onJobChange }: {
           </div>
         </div>
       </div>
-      {/* thin status strip (branch + context vibe, Hermes-style) */}
-      <div className="flex items-center gap-3 px-4 py-1 border-t border-edge text-[10px] text-muted">
-        <span className="flex items-center gap-1"><GitBranch size={10} />{config?.driver?.split(":").pop()?.slice(0, 20) || "pilot"}</span>
-        <span>{config?.reach || ""}</span>
-        <div className="flex-1" />
-        <span>budget {config?.budget ?? "-"}</span>
-      </div>
+
     </main>
   );
 }
