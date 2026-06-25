@@ -80,18 +80,19 @@ export default function BrowserPane() {
         </form>
         <NavBtn label="Open externally" onClick={() => window.open(url, "_blank")}><ExternalLink size={12} /></NavBtn>
       </div>
-      <div className="flex-1 relative bg-white">
+      <div className="flex-1 relative overflow-hidden bg-bg" style={{ backgroundColor: "#0a0a0c" }}>
         {isDesktop ? (
           // Real browser: Electron <webview> bypasses X-Frame-Options/CSP. Created
           // via dangerouslySetInnerHTML so React does not re-mount it per render
           // (which would lose its navigation methods + history).
           <webview
+            key="desktop-webview"
             ref={webviewRef as any}
             src={DEFAULT_URL}
             // @ts-expect-error -- webview is an Electron element, not in React JSX types
             allowpopups="true"
             className="absolute inset-0 w-full h-full border-0"
-            style={{ display: "flex" }}
+            style={{ display: "flex", width: "100%", height: "100%", backgroundColor: "#0a0a0c" }}
           />
         ) : (
           <>

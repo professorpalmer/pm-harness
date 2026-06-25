@@ -24,7 +24,7 @@ export default function App() {
   const [jobCount, setJobCount] = useState(0);
 
   const [leftW, setLeftW] = useState(() => num(LS.left, 248));
-  const [rightW, setRightW] = useState(() => num(LS.right, 320));
+  const [rightW, setRightW] = useState(() => Math.max(340, num(LS.right, 340)));
   const [leftOpen, setLeftOpen] = useState(() => bool(LS.leftOpen, true));
   const [rightOpen, setRightOpen] = useState(() => bool(LS.rightOpen, true));
 
@@ -94,7 +94,7 @@ export default function App() {
         </div>
         {rightOpen && (
           <>
-            <Resizer side="right" onResize={(dx) => setRightW((w) => clamp(w + dx, 240, 640))} />
+            <Resizer side="right" onResize={(dx) => setRightW((w) => clamp(w + dx, 340, 640))} />
             <div style={{ width: rightW }} className="shrink-0 h-full overflow-hidden">
               <RightPane artifacts={artifacts} onOpenWizard={() => setShowWizard(true)} />
             </div>

@@ -82,7 +82,7 @@ function TabBtn({ active, onClick, icon, label, showLabel }: {
       ref={btnRef}
       onClick={onClick}
       title={label}
-      className={`flex-1 min-w-[36px] flex items-center justify-center gap-1 py-2.5 px-1.5 text-[10px] uppercase tracking-wider font-medium transition whitespace-nowrap flex-shrink-0
+      className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-2.5 px-1.5 text-[10px] uppercase tracking-wider font-medium transition whitespace-nowrap
         ${active ? "text-txt border-b-[1.5px] border-accent" : "text-faint hover:text-muted"}`}
     >
       <span className="flex-shrink-0 flex items-center justify-center">{icon}</span>
