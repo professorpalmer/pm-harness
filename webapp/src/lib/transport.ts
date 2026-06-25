@@ -58,4 +58,20 @@ export async function uploadFile(file: File): Promise<{ path: string; name: stri
   return j.saved || [];
 }
 
+// Native desktop bridges (file tree + git). Web build returns not-supported.
+export const nativeFs = {
+  readDir: (dir: string): Promise<{ ok: boolean; nodes?: any[]; error?: string }> =>
+    ipc?.fs?.readDir ? ipc.fs.readDir(dir) : Promise.resolve({ ok: false, error: "web build" }),
+  readFile: (file: string): Promise<{ ok: boolean; content?: string; error?: string }> =>
+    ipc?.fs?.readFile ? ipc.fs.readFile(file) : Promise.resolve({ ok: false, error: "web build" }),
+};
+export const nativeGit = {
+  status: (repo: string): Promise<any> =>
+    ipc?.git?.status ? ipc.git.status(repo) : Promise.resolve({ ok: false, error: "web build" }),
+  diff: (repo: string, file?: string): Promise<any> =>
+    ipc?.git?.diff ? ipc.git.diff(repo, file) : Promise.resolve({ ok: false, error: "web build" }),
+  branches: (repo: string): Promise<any> =>
+    ipc?.git?.branches ? ipc.git.branches(repo) : Promise.resolve({ ok: false, error: "web build" }),
+};
+
 export const isDesktop = !!ipc;
