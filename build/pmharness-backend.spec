@@ -70,7 +70,7 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,
+    target_arch=os.environ.get('PMHARNESS_TARGET_ARCH', None),
     codesign_identity=None,
     entitlements_file=None,
 )

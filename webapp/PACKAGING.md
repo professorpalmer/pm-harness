@@ -72,30 +72,23 @@ CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist:mac
 
 ---
 
-## Universal Binary Support & Investigation
+## Universal Build
 
-As part of our commitment to platform independence, we investigated the feasibility of building a universal (arm64 + x86_64) macOS binary for PM Harness.
+To build a universal macOS application containing a fat (arm64 + x86_64) Python backend executable inside a universal Electron app, run:
 
-### Investigation Findings
-1. Python Interpreter Analysis:
-   - The project's active virtualenv Python interpreter (`~/pm-harness/.venv/bin/python`) is an arm64-only Mach-O executable.
-   - Run verification outputs:
-     `file ~/pm-harness/.venv/bin/python` -> `Mach-O 64-bit executable arm64`
-     `lipo -archs ~/pm-harness/.venv/bin/python` -> `arm64`
-2. PyInstaller Limitations:
-   - PyInstaller bundles the backend binary by collecting the currently active Python interpreter and its dynamically loaded compiled libraries (.so / .dylib files).
-   - Because PyInstaller uses the active interpreter, it can only produce a universal2 (arm64 + x86_64) backend binary if the Python interpreter itself is a universal2 binary containing both architectures.
-3. Verdict:
-   - Creating a universal build of the entire PM Harness package is currently blocked because the underlying Python virtual environment interpreter is arm64-only.
-   - While Electron natively supports packaging universal macOS applications (by fetching both arm64 and x64 runtimes), a universal Electron .app with an arm64-only embedded backend binary would crash on Intel-based Macs. Therefore, it is an all-or-nothing requirement. We keep the build target strictly `arm64` for now to prevent shipping broken binaries to Intel users.
+```bash
+./scripts/build_universal.sh
+```
 
-### Real Path to Universal Binaries
-To build a fully functional universal2 package in the future, follow these steps:
-1. Install a universal2 Python interpreter (3.9+) on your build machine (e.g., by downloading the macOS universal2 installer from python.org).
-2. Re-create the virtual environment using the universal2 Python interpreter.
-3. Configure the backend build script (scripts/build_backend.sh) and PyInstaller spec (build/pmharness-backend.spec) to target `universal2` (e.g., passing `--target-arch universal2` to PyInstaller).
-4. Update the `electron-builder` configuration in webapp/package.json's `mac` section to change `target` to include `universal` (or `arm64` and `x64` targets) instead of just `arm64`.
-5. Verify both architectures are present in the resulting backend binary using `lipo -archs webapp/backend-dist/pmharness-backend`.
+### Requirements & Behavior
+- Universal Python: Building a universal binary requires a universal2 Python interpreter. This machine already has one (Python 3.12 at /Library/Frameworks/Python.framework, archs x86_64+arm64), and the script auto-detects it. On a machine without one, download the macOS universal2 installer from https://www.python.org/downloads/macos/.
+- VERIFIED: the universal2 backend binary has been built and confirmed via `lipo -archs` (x86_64 arm64) and serves /api/config at HTTP 200.
+- Auto-detection: The script automatically searches for a universal2 Python at `/Library/Frameworks/Python.framework/Versions/*/bin/python3` and `/usr/local/bin/python3`.
+- Explicit path: You can point the script directly to a universal2 Python by setting the `UNIVERSAL_PYTHON` environment variable:
+  ```bash
+  UNIVERSAL_PYTHON=/usr/local/bin/python3 ./scripts/build_universal.sh
+  ```
+- Workflow: The script creates a separate virtual environment (`.venv-universal`), compiles a universal2 backend binary with PyInstaller (`--target-arch universal2`), and packages the Electron app with `electron-builder --universal` using `x64ArchFiles` to safely embed the fat backend binary.
 
 ## App Icon Generation
 

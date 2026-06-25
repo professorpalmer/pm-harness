@@ -2,6 +2,7 @@ results/*.sqlite
 __pycache__/
 *.pyc
 .venv/
+.venv-universal/
 *.egg-info/
 .env
 
