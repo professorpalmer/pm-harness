@@ -75,6 +75,21 @@ export type RecommendResult = {
   roles: Record<string, string>;
 };
 
+export type UsageData = {
+  session: {
+    tokens_used: number;
+    est_cost_usd: number;
+    driver: string;
+    price_in: number;
+    price_out: number;
+  };
+  jobs: {
+    job_id: string;
+    tokens: number;
+    est_cost_usd: number;
+  }[];
+};
+
 export const api = {
   providers: () => getJSON<ProviderInfo[]>("/api/providers"),
   probeProvider: (provider: string) => postJSON<ProbeResult>("/api/providers/probe", { provider }),
@@ -87,6 +102,7 @@ export const api = {
   recommend: () => getJSON<RecommendResult>("/api/registry/recommend"),
 
   config: () => getJSON<Config>("/api/config"),
+  getUsage: () => getJSON<UsageData>("/api/usage"),
   settings: () => getJSON<Settings>("/api/settings"),
   updateSettings: (partial: Partial<Settings> & { api_key?: string; clear_api_key?: boolean }) => postJSON<Settings>("/api/settings", partial),
   jobs: () => getJSON<Job[]>("/api/jobs"),

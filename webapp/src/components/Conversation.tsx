@@ -25,6 +25,79 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   const [distillNotice, setDistillNotice] = useState<string | null>(null);
   const cancelRef = useRef<null | (() => void)>(null);
   const feedRef = useRef<HTMLDivElement>(null);
+  const [msgQueue, setMsgQueue] = useState<{ text: string; auto: boolean }[]>([]);
+
+  // Request notifications permission on mount
+  useEffect(() => {
+    const notifyPref = localStorage.getItem("pmharness.notify");
+    const isNotifyEnabled = notifyPref !== null ? notifyPref === "true" : true;
+    if (isNotifyEnabled && typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, []);
+
+  const triggerCompletionEffects = () => {
+    const notifyPref = localStorage.getItem("pmharness.notify");
+    const isNotifyEnabled = notifyPref !== null ? notifyPref === "true" : true;
+
+    const soundPref = localStorage.getItem("pmharness.sound");
+    const isSoundEnabled = soundPref !== null ? soundPref === "true" : false;
+
+    const isHidden = document.hidden || !document.hasFocus();
+    if (isNotifyEnabled && isHidden) {
+      if (typeof Notification !== "undefined") {
+        if (Notification.permission === "granted") {
+          new Notification("Puppetmaster", {
+            body: "Run complete",
+          });
+        } else if (Notification.permission !== "denied") {
+          Notification.requestPermission().then((permission) => {
+            if (permission === "granted") {
+              new Notification("Puppetmaster", {
+                body: "Run complete",
+              });
+            }
+          });
+        }
+      }
+    }
+
+    if (isSoundEnabled) {
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+          gain.gain.setValueAtTime(0.08, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + 0.15);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.15);
+        }
+      } catch (err) {
+        console.error("Failed to play completion sound:", err);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (status === "done" || status === "error") {
+      triggerCompletionEffects();
+
+      const queuePrefVal = localStorage.getItem("pmharness.queueMessages");
+      const isQueueEnabled = queuePrefVal !== null ? queuePrefVal === "true" : true;
+
+      if (isQueueEnabled && msgQueue.length > 0) {
+        const nextMsg = msgQueue[0];
+        setMsgQueue((prev) => prev.slice(1));
+        executeSend(nextMsg.text, nextMsg.auto);
+      }
+    }
+  }, [status]);
 
   useEffect(() => { feedRef.current?.scrollTo(0, feedRef.current.scrollHeight); }, [items]);
 
@@ -55,11 +128,10 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     setItems((prev) => prev.map((it) =>
       it.kind === "card" && it.card.id === id ? { kind: "card", card: { ...it.card, ...patch } } : it));
 
-  const send = () => {
-    const msg = input.trim(); if (!msg || status === "thinking" || status === "executing") return;
+  const executeSend = (msg: string, useAuto: boolean) => {
     setItems((p) => [...p, { kind: "msg", msg: { role: "user", text: msg } }]);
-    setInput(""); setStatus("thinking");
-    const streamer = auto
+    setStatus("thinking");
+    const streamer = useAuto
       ? (cb: any, done: any, err: any) => api.auto(msg, cb, done, err)
       : (cb: any, done: any, err: any) => api.chat(msg, cb, done, err);
     cancelRef.current = streamer((ev: any) => {
@@ -120,6 +192,27 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
        () => { setStatus("error"); cancelRef.current = null; });
   };
 
+  const send = () => {
+    const msg = input.trim(); if (!msg) return;
+
+    const queuePrefVal = localStorage.getItem("pmharness.queueMessages");
+    const isQueueEnabled = queuePrefVal !== null ? queuePrefVal === "true" : true;
+    const isBusy = status === "thinking" || status === "executing";
+
+    if (isBusy) {
+      if (isQueueEnabled) {
+        setMsgQueue((prev) => [...prev, { text: msg, auto }]);
+        setInput("");
+        return;
+      } else {
+        return;
+      }
+    }
+
+    setInput("");
+    executeSend(msg, auto);
+  };
+
   const stop = () => { cancelRef.current?.(); cancelRef.current = null; setStatus("idle"); };
 
   return (
@@ -156,6 +249,33 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
               >
                 Dismiss
               </button>
+            </div>
+          )}
+          {msgQueue.length > 0 && (
+            <div className="mb-2 space-y-1.5">
+              {msgQueue.map((qm, idx) => (
+                <div key={idx} className="flex items-center justify-between bg-panel2/60 border border-edge/60 rounded-lg px-3 py-1.5 text-[12px] text-muted">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 bg-accent/10 text-accent rounded">
+                      queued
+                    </span>
+                    <span className="truncate max-w-md">{qm.text}</span>
+                    {qm.auto && (
+                      <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 bg-warn/15 text-warn rounded">
+                        auto
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => {
+                      setMsgQueue((prev) => prev.filter((_, i) => i !== idx));
+                    }}
+                    className="text-risk hover:underline text-[10.5px] font-medium ml-2"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ))}
             </div>
           )}
           {/* compact composer: input + a single tidy control row */}

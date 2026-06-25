@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Settings as SettingsIcon } from "lucide-react";
-import { api, type Settings } from "../lib/api";
+import { api, type Settings, type UsageData } from "../lib/api";
 
 export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => void }) {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -8,6 +8,36 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [keyInput, setKeyInput] = useState("");
+  const [usage, setUsage] = useState<UsageData | null>(null);
+
+  const [notify, setNotify] = useState(() => {
+    const val = localStorage.getItem("pmharness.notify");
+    return val !== null ? val === "true" : true;
+  });
+  const [sound, setSound] = useState(() => {
+    const val = localStorage.getItem("pmharness.sound");
+    return val !== null ? val === "true" : false;
+  });
+  const [queueMessages, setQueueMessages] = useState(() => {
+    const val = localStorage.getItem("pmharness.queueMessages");
+    return val !== null ? val === "true" : true;
+  });
+
+  const toggleNotify = () => {
+    const newVal = !notify;
+    setNotify(newVal);
+    localStorage.setItem("pmharness.notify", String(newVal));
+  };
+  const toggleSound = () => {
+    const newVal = !sound;
+    setSound(newVal);
+    localStorage.setItem("pmharness.sound", String(newVal));
+  };
+  const toggleQueue = () => {
+    const newVal = !queueMessages;
+    setQueueMessages(newVal);
+    localStorage.setItem("pmharness.queueMessages", String(newVal));
+  };
 
   useEffect(() => {
     api.settings()
@@ -15,6 +45,12 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
       .catch((err) => {
         setError("Failed to load settings");
         console.error(err);
+      });
+
+    api.getUsage()
+      .then(setUsage)
+      .catch((err) => {
+        console.error("Failed to load usage statistics", err);
       });
   }, []);
 
@@ -202,6 +238,124 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
               </button>
             )}
           </div>
+        </div>
+
+        {/* Observability & Queue Prefs */}
+        <div className="space-y-3 border-t border-edge pt-3">
+          <label className="block uppercase tracking-wider text-[10px] text-faint font-semibold">
+            Observability & Queue
+          </label>
+          
+          <div className="space-y-2">
+            {/* Desktop Notifications Toggle */}
+            <button
+              onClick={toggleNotify}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded border transition text-left ${
+                notify
+                  ? "bg-accent/10 border-accent/30 text-accent"
+                  : "bg-panel2 border-edge text-muted"
+              }`}
+            >
+              <span className="font-medium text-[11px]">Desktop notifications</span>
+              <span className="text-[10px] uppercase font-bold tracking-wider">
+                {notify ? "on" : "off"}
+              </span>
+            </button>
+            
+            {/* Completion Sound Toggle */}
+            <button
+              onClick={toggleSound}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded border transition text-left ${
+                sound
+                  ? "bg-accent/10 border-accent/30 text-accent"
+                  : "bg-panel2 border-edge text-muted"
+              }`}
+            >
+              <span className="font-medium text-[11px]">Completion sound</span>
+              <span className="text-[10px] uppercase font-bold tracking-wider">
+                {sound ? "on" : "off"}
+              </span>
+            </button>
+
+            {/* Queue Messages Toggle */}
+            <button
+              onClick={toggleQueue}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded border transition text-left ${
+                queueMessages
+                  ? "bg-accent/10 border-accent/30 text-accent"
+                  : "bg-panel2 border-edge text-muted"
+              }`}
+            >
+              <span className="font-medium text-[11px]">Queue concurrent messages</span>
+              <span className="text-[10px] uppercase font-bold tracking-wider">
+                {queueMessages ? "on" : "off"}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Usage / Cost Dashboard Section */}
+        <div className="border-t border-edge pt-3 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <label className="block uppercase tracking-wider text-[10px] text-faint font-semibold">
+              Token & Cost Usage
+            </label>
+            <button
+              onClick={() => {
+                api.getUsage()
+                  .then(setUsage)
+                  .catch((err) => console.error("Failed to refresh usage", err));
+              }}
+              className="text-[9px] uppercase font-bold tracking-wider text-accent hover:underline bg-transparent border-0 p-0"
+            >
+              Refresh
+            </button>
+          </div>
+
+          {usage ? (
+            <div className="space-y-2.5 bg-panel2 border border-edge/50 rounded p-2.5">
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-faint">Session Tokens:</span>
+                  <span className="text-txt font-mono font-medium">{usage.session.tokens_used.toLocaleString()}</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-faint">Session Cost (estimated):</span>
+                  <span className="text-good font-mono font-medium">${usage.session.est_cost_usd.toFixed(6)}</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px] border-t border-edge/30 pt-1 mt-1">
+                  <span className="text-faint">Active Driver:</span>
+                  <span className="text-txt font-mono font-medium">{usage.session.driver}</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-faint">Price in/out (per Mtok):</span>
+                  <span className="text-muted font-mono font-medium">${usage.session.price_in}/${usage.session.price_out}</span>
+                </div>
+              </div>
+
+              {usage.jobs && usage.jobs.length > 0 && (
+                <div className="space-y-1 border-t border-edge/40 pt-1.5 mt-1.5">
+                  <div className="text-[9px] uppercase tracking-wider text-faint font-semibold mb-1">
+                    PM Job Costs (estimated)
+                  </div>
+                  <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
+                    {usage.jobs.map((job: any) => (
+                      <div key={job.job_id} className="flex items-center justify-between text-[10px] font-mono">
+                        <span className="text-muted truncate max-w-[120px]">{job.job_id}</span>
+                        <span className="text-faint text-[9px]">{job.tokens.toLocaleString()} tok</span>
+                        <span className="text-txt font-medium">${job.est_cost_usd.toFixed(6)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-[10px] text-muted">Loading usage statistics...</p>
+          )}
+          <p className="text-[9px] text-muted font-mono">
+            All costs are estimated locally based on catalog rates. No live billing APIs are called.
+          </p>
         </div>
 
         {/* Read-Only Info */}

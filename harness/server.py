@@ -516,6 +516,81 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(_get_settings_dict()))
         if u.path == "/api/jobs":
             return self._send(200, json.dumps(_session.state().list_jobs()))
+        if u.path == "/api/usage":
+            if self._guard():
+                return
+            qtok = parse_qs(u.query).get("token", [""])[0]
+            if qtok != _TOKEN and self.headers.get("X-Harness-Token", "") != _TOKEN:
+                return self._send(403, json.dumps({"error": "missing or bad token"}))
+            price_in = 0.5
+            price_out = 2.0
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            catalog_path = os.path.join(base_dir, "pmharness", "catalog.json")
+            if os.path.exists(catalog_path):
+                try:
+                    with open(catalog_path, "r", encoding="utf-8") as f:
+                        catalog_data = json.load(f)
+                        for m in catalog_data.get("models", []):
+                            if m.get("name") == _cfg.driver or _cfg.driver in m.get("name", "") or m.get("name", "") in _cfg.driver:
+                                price_in = m.get("price_in", price_in)
+                                price_out = m.get("price_out", price_out)
+                                break
+                except Exception:
+                    pass
+            tokens_used = getattr(_pilot, "_tokens_used", 0)
+            est_session_cost = (tokens_used / 1.0e6) * price_out
+            jobs_list = []
+            try:
+                jobs = _session.state().list_jobs()
+                for j in jobs:
+                    jid = j.get("id")
+                    if jid:
+                        try:
+                            from puppetmaster.models import ArtifactType
+                            from puppetmaster.usage import aggregate_token_usage
+                            store = _session.state().store
+                            artifacts = store.list_artifacts(jid)
+                            routing = []
+                            seen_router_tasks = set()
+                            total = 0.0
+                            for artifact in artifacts:
+                                if artifact.type == ArtifactType.ROUTING and artifact.created_by == "router":
+                                    task_id = artifact.task_id
+                                    if task_id:
+                                        if task_id in seen_router_tasks:
+                                            continue
+                                        seen_router_tasks.add(task_id)
+                                    routing.append(artifact)
+                            for artifact in routing:
+                                payload = artifact.payload or {}
+                                cost = float(payload.get("estimated_cost_usd") or 0.0)
+                                total += cost
+                            tokens = 0
+                            try:
+                                token_usage_dict = aggregate_token_usage(artifacts)
+                                tokens = token_usage_dict.get("total_tokens", 0)
+                            except Exception:
+                                pass
+                            jobs_list.append({
+                                "job_id": jid,
+                                "tokens": tokens,
+                                "est_cost_usd": round(total, 6)
+                            })
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            response_data = {
+                "session": {
+                    "tokens_used": tokens_used,
+                    "est_cost_usd": round(est_session_cost, 6),
+                    "driver": _cfg.driver,
+                    "price_in": price_in,
+                    "price_out": price_out
+                },
+                "jobs": jobs_list
+            }
+            return self._send(200, json.dumps(response_data))
         if u.path == "/api/artifacts":
             q = parse_qs(u.query)
             jid = q.get("job_id", [""])[0]
