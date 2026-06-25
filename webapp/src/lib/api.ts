@@ -27,8 +27,10 @@ export const api = {
     stream(`/api/chat?message=${encodeURIComponent(message)}`, onEvent, onDone, onError),
   mcp: () => getJSON<{ servers: any[]; tools: any[] }>("/api/mcp"),
   mcpCatalog: () => getJSON<{ catalog: Record<string, any> }>("/api/mcp/catalog"),
-  mcpAdd: (name: string, command: string, args: string[], env: Record<string, string>) =>
-    postJSON<{ ok: boolean; tools?: number; error?: string }>("/api/mcp/add", { name, command, args, env }),
+  mcpAdd: (name: string, command?: string, args?: string[], env?: Record<string, string>, url?: string) => {
+    const payload = url ? { name, url } : { name, command, args, env };
+    return postJSON<{ ok: boolean; tools?: number; error?: string }>("/api/mcp/add", payload);
+  },
   mcpRemove: (name: string) => postJSON<{ ok: boolean }>("/api/mcp/remove", { name }),
   mcpStart: (name: string) => postJSON<{ ok: boolean; tools?: number; error?: string }>("/api/mcp/start", { name }),
   mcpStop: (name: string) => postJSON<{ ok: boolean }>("/api/mcp/stop", { name }),

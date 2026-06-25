@@ -43,7 +43,14 @@ export default function McpPane() {
           <div key={s.name} className="border border-edge rounded-lg p-2 bg-panel2/40">
             <div className="flex items-center gap-2">
               <span className={`w-1.5 h-1.5 rounded-full ${s.running ? "bg-good" : "bg-faint"}`} />
-              <span className="font-medium text-txt flex-1 truncate">{s.name}</span>
+              <span className="font-medium text-txt flex-1 truncate flex items-center gap-1.5">
+                <span>{s.name}</span>
+                {s.transport && (
+                  <span className="px-1 py-0.5 rounded bg-panel border border-edge text-faint text-[8.5px] font-mono uppercase tracking-wider">
+                    {s.transport}
+                  </span>
+                )}
+              </span>
               <span className="text-faint text-[10px]">{s.running ? `${s.tools} tools` : "stopped"}</span>
               {s.running
                 ? <button onClick={() => stop(s.name)} disabled={busy === s.name} title="Stop" className="text-muted hover:text-warn"><Square size={12} /></button>
@@ -78,21 +85,28 @@ function AddForm({ catalog, onDone }: { catalog: Record<string, any>; onDone: ()
   const [command, setCommand] = useState("npx");
   const [argStr, setArgStr] = useState("");
   const [envStr, setEnvStr] = useState("");
+  const [url, setUrl] = useState("");
   const [err, setErr] = useState("");
 
   const pickPreset = (key: string) => {
     const c = catalog[key];
     if (!c) return;
-    setName(key); setCommand(c.command); setArgStr((c.args || []).join(" "));
+    setName(key); setCommand(c.command || ""); setArgStr((c.args || []).join(" "));
     setEnvStr((c.env_hint || []).map((k: string) => `${k}=`).join("\n"));
+    setUrl("");
   };
 
   const submit = async () => {
-    const args = argStr.trim() ? argStr.trim().split(/\s+/) : [];
-    const env: Record<string, string> = {};
-    envStr.split("\n").forEach((l) => { const i = l.indexOf("="); if (i > 0) env[l.slice(0, i).trim()] = l.slice(i + 1).trim(); });
-    const r = await api.mcpAdd(name.trim(), command.trim(), args, env);
-    if (r.ok) onDone(); else setErr(r.error || "failed to add");
+    if (url.trim()) {
+      const r = await api.mcpAdd(name.trim(), undefined, undefined, undefined, url.trim());
+      if (r.ok) onDone(); else setErr(r.error || "failed to add");
+    } else {
+      const args = argStr.trim() ? argStr.trim().split(/\s+/) : [];
+      const env: Record<string, string> = {};
+      envStr.split("\n").forEach((l) => { const i = l.indexOf("="); if (i > 0) env[l.slice(0, i).trim()] = l.slice(i + 1).trim(); });
+      const r = await api.mcpAdd(name.trim(), command.trim(), args, env);
+      if (r.ok) onDone(); else setErr(r.error || "failed to add");
+    }
   };
 
   return (
@@ -105,15 +119,25 @@ function AddForm({ catalog, onDone }: { catalog: Record<string, any>; onDone: ()
       </div>
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="name (e.g. github)"
         className="bg-bg border border-edge rounded px-2 h-6 text-[11px] focus:outline-none focus:border-accent2" />
-      <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="command (npx, uvx, ...)"
+      
+      <input value={url} onChange={(e) => { setUrl(e.target.value); if (e.target.value.trim()) { setCommand(""); setArgStr(""); setEnvStr(""); } }}
+        placeholder="URL (for HTTP, e.g. http://localhost:8000/mcp)"
         className="bg-bg border border-edge rounded px-2 h-6 text-[11px] font-mono focus:outline-none focus:border-accent2" />
-      <input value={argStr} onChange={(e) => setArgStr(e.target.value)} placeholder="args (space-separated)"
-        className="bg-bg border border-edge rounded px-2 h-6 text-[11px] font-mono focus:outline-none focus:border-accent2" />
-      <textarea value={envStr} onChange={(e) => setEnvStr(e.target.value)} placeholder="env (KEY=value per line)"
-        rows={2} className="bg-bg border border-edge rounded px-2 py-1 text-[11px] font-mono resize-none focus:outline-none focus:border-accent2" />
+
+      {!url.trim() && (
+        <>
+          <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="command (npx, uvx, ...)"
+            className="bg-bg border border-edge rounded px-2 h-6 text-[11px] font-mono focus:outline-none focus:border-accent2" />
+          <input value={argStr} onChange={(e) => setArgStr(e.target.value)} placeholder="args (space-separated)"
+            className="bg-bg border border-edge rounded px-2 h-6 text-[11px] font-mono focus:outline-none focus:border-accent2" />
+          <textarea value={envStr} onChange={(e) => setEnvStr(e.target.value)} placeholder="env (KEY=value per line)"
+            rows={2} className="bg-bg border border-edge rounded px-2 py-1 text-[11px] font-mono resize-none focus:outline-none focus:border-accent2" />
+        </>
+      )}
+
       {err && <div className="text-risk text-[10px]">{err}</div>}
       <div className="flex gap-1.5">
-        <button onClick={submit} disabled={!name.trim() || !command.trim()}
+        <button onClick={submit} disabled={!name.trim() || (!url.trim() && !command.trim())}
           className="flex-1 h-6 rounded bg-accent text-black/90 text-[11px] font-semibold flex items-center justify-center gap-1 disabled:opacity-40">
           <Check size={11} /> Add &amp; start
         </button>

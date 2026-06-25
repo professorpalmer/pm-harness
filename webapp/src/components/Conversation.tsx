@@ -21,6 +21,7 @@ export default function Conversation({ config, onArtifacts, onJobChange }: {
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<"idle"|"thinking"|"executing"|"done"|"error">("idle");
   const [auto, setAuto] = useState(false);
+  const [distillNotice, setDistillNotice] = useState<string | null>(null);
   const cancelRef = useRef<null | (() => void)>(null);
   const feedRef = useRef<HTMLDivElement>(null);
 
@@ -53,6 +54,37 @@ export default function Conversation({ config, onArtifacts, onJobChange }: {
         onJobChange();
       } else if (ev.kind === "auto_status") {
         setStatus("executing");
+      } else if (ev.kind === "distilled") {
+        const parts: string[] = [];
+        if (d.skill) {
+          const { status, name, reason } = d.skill;
+          if (status === "proposed") {
+            parts.push(`proposed 1 skill${name ? ` ("${name}")` : ""}`);
+          } else if (status === "duplicate") {
+            parts.push("1 duplicate skill skipped");
+          } else if (status === "skipped") {
+            parts.push(`skill skipped${reason ? ` (${reason})` : ""}`);
+          }
+        }
+        if (d.rules) {
+          const { status, proposed, duplicates } = d.rules;
+          const pCount = proposed?.length || 0;
+          const dCount = duplicates?.length || 0;
+          if (pCount > 0 && dCount > 0) {
+            parts.push(`proposed ${pCount} rule${pCount === 1 ? "" : "s"} (${dCount} duplicate${dCount === 1 ? "" : "s"} skipped)`);
+          } else if (pCount > 0) {
+            parts.push(`proposed ${pCount} rule${pCount === 1 ? "" : "s"}`);
+          } else if (dCount > 0) {
+            parts.push(`${dCount} duplicate rule${dCount === 1 ? "" : "s"} skipped`);
+          } else if (status === "duplicate") {
+            parts.push("skipped duplicate rules");
+          } else if (status === "skipped") {
+            parts.push("skipped rules");
+          }
+        }
+        if (parts.length > 0) {
+          setDistillNotice(`Self-learning: ${parts.join(", ")} - review in Skills tab`);
+        }
       } else if (ev.kind === "auto_halt") {
         setStatus("done");
         setItems((p) => [...p, { kind: "msg", msg: { role: "assistant", text: "HALT: " + (d.reason || "") } }]);
@@ -89,6 +121,19 @@ export default function Conversation({ config, onArtifacts, onJobChange }: {
 
       <div className="px-6 pb-4 pt-1">
         <div className="max-w-3xl mx-auto">
+          {distillNotice && (
+            <div className="mb-3 px-3.5 py-2 bg-panel border border-warn/20 rounded-xl flex items-center justify-between text-[12px] shadow-lg text-txt/90">
+              <span className="flex-1">
+                {distillNotice}
+              </span>
+              <button
+                onClick={() => setDistillNotice(null)}
+                className="text-faint hover:text-muted transition font-medium text-[10.5px] ml-3 px-2 py-0.5 rounded border border-edge hover:bg-panel2"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           {/* compact composer: input + a single tidy control row */}
           <div className="bg-panel2/80 border border-edge rounded-2xl focus-within:border-edge2 shadow-lg shadow-black/20 transition">
             <textarea value={input} onChange={(e) => setInput(e.target.value)}
