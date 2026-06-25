@@ -12,8 +12,9 @@ type Card = {
 };
 type Item = { kind: "msg"; msg: Msg } | { kind: "card"; card: Card };
 
-export default function Conversation({ config, onArtifacts, onJobChange }: {
+export default function Conversation({ config, activeSessionId, onArtifacts, onJobChange }: {
   config: Config | null;
+  activeSessionId: string | null;
   onArtifacts: (a: { type: string; headline: string }[]) => void;
   onJobChange: () => void;
 }) {
@@ -26,6 +27,29 @@ export default function Conversation({ config, onArtifacts, onJobChange }: {
   const feedRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { feedRef.current?.scrollTo(0, feedRef.current.scrollHeight); }, [items]);
+
+  useEffect(() => {
+    if (activeSessionId) {
+      api.sessionTranscript(activeSessionId)
+        .then((res) => {
+          const loadedItems = (res.history || [])
+            .filter((m: any) => m.role === "assistant" || (m.role === "user" && !m.content.startsWith("(")))
+            .map((m: any) => ({
+              kind: "msg" as const,
+              msg: {
+                role: m.role as "user" | "assistant",
+                text: m.content || ""
+              }
+            }));
+          setItems(loadedItems);
+        })
+        .catch(() => {
+          setItems([]);
+        });
+    } else {
+      setItems([]);
+    }
+  }, [activeSessionId]);
 
   const setCard = (id: string, patch: Partial<Card>) =>
     setItems((prev) => prev.map((it) =>

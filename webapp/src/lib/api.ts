@@ -32,6 +32,7 @@ export const api = {
   createWorkspace: (name: string, branch?: string) =>
     postJSON("/api/workspaces/create", { name, branch }),
   sessions: () => getJSON<Session[]>("/api/sessions"),
+  sessionTranscript: (session: string) => getJSON<{ history: any[] }>(`/api/sessions/transcript?session=${encodeURIComponent(session)}`),
   createSession: (title?: string) => postJSON<Session>("/api/sessions/create", { title }),
   switchSession: (id: string) => postJSON("/api/sessions/switch", { id }),
   swapPilot: (model: string) => getJSON(`/api/pilot?model=${encodeURIComponent(model)}`),

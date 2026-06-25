@@ -63,3 +63,38 @@ class SessionStore:
     @property
     def active(self) -> Optional[str]:
         return self._active
+
+
+def save_transcript(state_dir: str, session_id: str, messages: list) -> None:
+    if not session_id:
+        return
+    # Sanitize session_id to prevent directory traversal
+    safe_sid = "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))
+    if not safe_sid:
+        return
+    trans_dir = os.path.join(state_dir, "transcripts")
+    os.makedirs(trans_dir, exist_ok=True)
+    p = os.path.join(trans_dir, f"{safe_sid}.json")
+    tmp = p + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(messages, f, indent=2)
+        os.replace(tmp, p)
+    except Exception:
+        pass
+
+
+def load_transcript(state_dir: str, session_id: str) -> list:
+    if not session_id:
+        return []
+    safe_sid = "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))
+    if not safe_sid:
+        return []
+    p = os.path.join(state_dir, "transcripts", f"{safe_sid}.json")
+    if not os.path.exists(p):
+        return []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []

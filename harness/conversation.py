@@ -130,6 +130,20 @@ class ConversationalSession:
     def durable(self) -> DurableState:
         return DurableState(self.state_dir)
 
+    def export_history(self) -> list:
+        """Returns the non-system messages (self._history minus the seeded system prompt) as a serializable list."""
+        if len(self._history) <= 1:
+            return []
+        return [dict(m) for m in self._history[1:]]
+
+    def load_history(self, messages: list) -> None:
+        """Replaces the conversation turns (keep the freshly-built system prompt at index 0 -- which contains current skills/rules -- then append the loaded user/assistant messages). Do NOT persist the system prompt; only persist the user/assistant turns."""
+        if not self._history:
+            self._history = [{"role": "system", "content": ""}]
+        system_prompt = self._history[0]
+        cleaned = [m for m in messages if m.get("role") != "system"]
+        self._history = [system_prompt] + cleaned
+
     def _render_history(self) -> str:
         """Flatten transcript into a single prompt for completion-style drivers."""
         lines = []

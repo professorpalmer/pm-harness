@@ -27,7 +27,7 @@ from .mcp_manager import McpManager, CATALOG
 from .skill_store import SkillStore
 from .rule_store import RuleStore
 from . import workspaces as _ws
-from .sessions import SessionStore
+from .sessions import SessionStore, save_transcript, load_transcript
 from .autobudget import AutoBudget
 
 
@@ -52,6 +52,13 @@ import tempfile as _tf
 _sessions = SessionStore(os.path.join(_cfg.state_dir or _tf.gettempdir(), "harness_sessions.json"))
 _mcp = McpManager()
 _pilot._mcp = _mcp
+
+# Startup: Restore the active/most-recent session's transcript into _pilot
+if _sessions.active:
+    _startup_history = load_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active)
+    if _startup_history:
+        _pilot.load_history(_startup_history)
+
 _skills = SkillStore()
 _rules = RuleStore()
 _UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "harness-uploads")
@@ -216,9 +223,19 @@ class Handler(BaseHTTPRequestHandler):
             _rules.set_state(body.get("slug", ""), "archived")
             return self._send(200, json.dumps({"ok": True}))
         if path == "/api/sessions/create":
-            return self._send(200, json.dumps(_sessions.create(body.get("title"))))
+            if _sessions.active:
+                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_history())
+            res = _sessions.create(body.get("title"))
+            _pilot.load_history([])
+            return self._send(200, json.dumps(res))
         if path == "/api/sessions/switch":
-            return self._send(200, json.dumps(_sessions.switch(body.get("id",""))))
+            if _sessions.active:
+                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_history())
+            res = _sessions.switch(body.get("id",""))
+            if res.get("ok") and _sessions.active:
+                history = load_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active)
+                _pilot.load_history(history)
+            return self._send(200, json.dumps(res))
         if path == "/api/settings":
             driver = body.get("driver")
             if driver is not None:
@@ -349,6 +366,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._swap_pilot(q.get("model", [""])[0])
         if u.path == "/api/workspaces":
             return self._send(200, json.dumps(_ws.list_workspaces(_cfg.repo)))
+        if u.path == "/api/sessions/transcript":
+            q = parse_qs(u.query)
+            sid = q.get("session", [None])[0] or _sessions.active or ""
+            history = load_transcript(_cfg.state_dir or _tf.gettempdir(), sid)
+            return self._send(200, json.dumps({"history": history}))
         if u.path == "/api/sessions":
             return self._send(200, json.dumps(_sessions.list()))
         if u.path == "/api/auto":
@@ -397,6 +419,9 @@ class Handler(BaseHTTPRequestHandler):
             # client (browser tab) went away -> stop the governor loop promptly
             # instead of burning budget for a gone client.
             _pilot.cancel()
+        finally:
+            if _sessions.active:
+                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_history())
 
     def _swap_pilot(self, model: str):
         """Hot-swap the pilot model (the whole point: your key -> your pilot)."""
@@ -434,6 +459,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
+        finally:
+            if _sessions.active:
+                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_history())
 
 
 def _pilot_preflight():

@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { GitBranch, Plus, MessageSquare, Boxes, Check, Loader2 } from "lucide-react";
 import { api, type Workspace, type Session, type Job } from "../lib/api";
 
-export default function LeftRail({ jobsRefresh }: {
+export default function LeftRail({ jobsRefresh, onSessionChange }: {
   jobsRefresh: number;
+  onSessionChange?: (id: string) => void;
 }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -11,7 +12,13 @@ export default function LeftRail({ jobsRefresh }: {
   const [swapping, setSwapping] = useState<string | null>(null);
 
   const loadWs = () => api.workspaces().then(setWorkspaces).catch(() => {});
-  const loadSess = () => api.sessions().then(setSessions).catch(() => {});
+  const loadSess = () => api.sessions().then((sess) => {
+    setSessions(sess);
+    const active = sess.find((s) => s.active);
+    if (active) {
+      onSessionChange?.(active.id);
+    }
+  }).catch(() => {});
   useEffect(() => { loadWs(); loadSess(); }, []);
   useEffect(() => { api.jobs().then(setJobs).catch(() => {}); }, [jobsRefresh]);
 
@@ -23,6 +30,10 @@ export default function LeftRail({ jobsRefresh }: {
     const name = prompt("New workspace name (creates a git branch):");
     if (!name) return;
     await api.createWorkspace(name); await loadWs();
+  };
+  const switchSession = async (id: string) => {
+    await api.switchSession(id);
+    await loadSess();
   };
   const newSession = async () => { await api.createSession(); await loadSess(); };
 
@@ -53,7 +64,7 @@ export default function LeftRail({ jobsRefresh }: {
       <Section title="Sessions" action={<IconBtn onClick={newSession}><Plus size={13} /></IconBtn>}>
         {sessions.length === 0 && <Empty>No sessions</Empty>}
         {sessions.map((s) => (
-          <button key={s.id} onClick={() => api.switchSession(s.id)}
+          <button key={s.id} onClick={() => switchSession(s.id)}
             className={`w-full text-left rounded px-2 py-1.5 mb-0.5 flex items-center gap-2 text-[13px] transition
               ${s.active ? "bg-accent2/40 text-txt" : "hover:bg-panel2 text-muted"}`}>
             <MessageSquare size={12} />

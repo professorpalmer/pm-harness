@@ -17,6 +17,7 @@ const bool = (k: string, d: boolean) => { const v = localStorage.getItem(k); ret
 
 export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [artifacts, setArtifacts] = useState<{ type: string; headline: string; confidence?: number }[]>([]);
   const [jobsRefresh, setJobsRefresh] = useState(0);
   const [jobCount, setJobCount] = useState(0);
@@ -53,7 +54,7 @@ export default function App() {
         {leftOpen && (
           <>
             <div style={{ width: leftW }} className="shrink-0 h-full overflow-hidden">
-              <LeftRail jobsRefresh={jobsRefresh} />
+              <LeftRail jobsRefresh={jobsRefresh} onSessionChange={setActiveSessionId} />
             </div>
             <Resizer side="left" onResize={(dx) => setLeftW((w) => clamp(w + dx, 180, 420))} />
           </>
@@ -61,6 +62,7 @@ export default function App() {
         <div className="flex-1 min-w-0 h-full">
           <Conversation
             config={config}
+            activeSessionId={activeSessionId}
             onArtifacts={(a) => setArtifacts((prev) => [...a, ...prev])}
             onJobChange={() => setJobsRefresh((n) => n + 1)}
           />
