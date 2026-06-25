@@ -54,8 +54,27 @@ def _render(ev) -> None:
         print(_c("31;1", "ERROR: ") + (d.get("error") or ""))
 
 
+def _run_gui(argv) -> int:
+    ap = argparse.ArgumentParser(prog="harness gui", description="Launch the harness GUI")
+    ap.add_argument("--port", type=int, default=8799)
+    ap.add_argument("--host", default="127.0.0.1")
+    args = ap.parse_args(argv)
+    from .server import serve
+    try:
+        serve(host=args.host, port=args.port)
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="harness", description="PM-native harness (headless)")
+    raw = list(sys.argv[1:] if argv is None else argv)
+    # Subcommand dispatch: `harness gui ...`. Default (no subcommand) = run a task.
+    if raw and raw[0] == "gui":
+        return _run_gui(raw[1:])
+
+    ap = argparse.ArgumentParser(prog="harness",
+        description="PM-native harness. Run a task, or `harness gui` for the UI.")
     ap.add_argument("prompt", help="the task to drive")
     ap.add_argument("--driver", default=None, help="driver name (default from config/env)")
     ap.add_argument("--reach", default=None, choices=["openrouter", "native"])
@@ -64,7 +83,7 @@ def main(argv=None) -> int:
                     help="attach an image (repeatable); transcribed via the vision sidecar")
     ap.add_argument("--state-dir", default=None)
     ap.add_argument("--json", action="store_true", help="emit raw JSON events")
-    args = ap.parse_args(argv)
+    args = ap.parse_args(raw)
 
     cfg = HarnessConfig.from_env()
     if args.driver: cfg.driver = args.driver

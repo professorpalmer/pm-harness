@@ -4,6 +4,7 @@ const stream = $("#stream"), artList = $("#artifact-list"),
       attachments = $("#attachments");
 let running = false;
 let pending = [];  // {path, name} uploaded, awaiting run
+let activeES = null;
 
 async function loadConfig(){
   const c = await (await fetch("/api/config")).json();
@@ -83,10 +84,12 @@ function run(prompt){
   pending=[]; renderChips();
   let url = "/api/run?prompt="+encodeURIComponent(prompt);
   if(imgs.length) url += "&images="+encodeURIComponent(imgs.join("|"));
-  const es = new EventSource(url);
+  const es = new EventSource(url); activeES = es;
+  $("#send").hidden = true; $("#stop").hidden = false;
   es.onmessage = (m)=>{
     const ev = JSON.parse(m.data);
-    if(ev.kind==="done"){ es.close(); running=false; $("#send").disabled=false;
+    if(ev.kind==="done"){ es.close(); activeES=null; running=false;
+      $("#send").disabled=false; $("#send").hidden=false; $("#stop").hidden=true;
       if(pill.textContent==="running") setStatus("done"); refreshJobs(); return; }
     const d = ev.data||{};
     if(ev.kind==="vision"){
@@ -116,7 +119,8 @@ function run(prompt){
         (d.raw?`<div class="muted">raw: ${esc(d.raw)}</div>`:""), true); setStatus("error");
     }
   };
-  es.onerror = ()=>{ es.close(); running=false; $("#send").disabled=false;
+  es.onerror = ()=>{ es.close(); activeES=null; running=false; $("#send").disabled=false;
+    $("#send").hidden=false; $("#stop").hidden=true;
     if(pill.textContent==="running") setStatus("error"); };
 }
 
@@ -124,6 +128,12 @@ $("#composer").addEventListener("submit", e=>{
   e.preventDefault(); const p = $("#prompt").value.trim();
   if(!p) return; $("#prompt").value=""; run(p);
 });
+$("#stop").onclick = ()=>{
+  if(activeES){ activeES.close(); activeES=null; }
+  running=false; $("#send").disabled=false; $("#send").hidden=false; $("#stop").hidden=true;
+  setStatus("idle");
+  addTurn("error", "stopped by user", null, true);
+};
 $("#attach").onclick = ()=> $("#file").click();
 $("#file").onchange = e=> uploadFiles(e.target.files);
 
