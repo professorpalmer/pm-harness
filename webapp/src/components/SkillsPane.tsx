@@ -7,25 +7,34 @@ import { api } from "../lib/api";
 // The human gate is the point -- a bad auto-skill is worse than none.
 export default function SkillsPane() {
   const [skills, setSkills] = useState<any[]>([]);
+  const [rules, setRules] = useState<any[]>([]);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
   const [expanded, setExpanded] = useState<string>("");
 
-  const refresh = () => api.skills().then(setSkills).catch(() => {});
+  const refresh = () => {
+    api.skills().then(setSkills).catch(() => {});
+    api.rules().then(setRules).catch(() => {});
+  };
   useEffect(() => { refresh(); const t = setInterval(refresh, 5000); return () => clearInterval(t); }, []);
 
   const distill = async () => {
     setBusy("distill"); setMsg("");
     try {
       const r = await api.skillDistill();
-      setMsg(r.status === "proposed" ? `Proposed: ${r.name}`
-        : r.status === "duplicate" ? "Skipped: similar skill exists"
-        : `Skipped: ${r.reason || r.status}`);
+      const sk = r.skill?.status === "proposed" ? `skill: ${r.skill.name}` : `skill: ${r.skill?.status || "none"}`;
+      const ru = r.rules?.status === "proposed" ? `rules: ${r.rules.proposed?.length || 0}` : `rules: ${r.rules?.status || "none"}`;
+      setMsg(`Distilled -- ${sk}, ${ru}`);
       await refresh();
     } finally { setBusy(""); }
   };
   const approve = async (slug: string) => { setBusy(slug); try { await api.skillApprove(slug); await refresh(); } finally { setBusy(""); } };
   const reject = async (slug: string) => { setBusy(slug); try { await api.skillReject(slug); await refresh(); } finally { setBusy(""); } };
+  const approveRule = async (slug: string) => { setBusy(slug); try { await api.ruleApprove(slug); await refresh(); } finally { setBusy(""); } };
+  const rejectRule = async (slug: string) => { setBusy(slug); try { await api.ruleReject(slug); await refresh(); } finally { setBusy(""); } };
+
+  const pendingRules = rules.filter((r) => r.state === "pending");
+  const activeRules = rules.filter((r) => r.state === "active");
 
   const pending = skills.filter((s) => s.state === "pending");
   const active = skills.filter((s) => s.state === "active");
@@ -77,6 +86,34 @@ export default function SkillsPane() {
                 <button onClick={() => reject(s.slug)} title="Archive" className="text-muted hover:text-risk"><Archive size={11} /></button>
               </div>
               <div className="text-faint text-[10px] mt-0.5">{s.description}</div>
+            </div>
+          ))}
+        </div>
+
+        {pendingRules.length > 0 && (
+          <div>
+            <div className="uppercase tracking-wider text-[10px] text-warn mb-1 px-1">Pending rules ({pendingRules.length})</div>
+            {pendingRules.map((r) => (
+              <div key={r.slug} className="border border-warn/30 rounded-lg p-2 bg-warn/5 mb-1.5">
+                <div className="text-txt text-[11px]">{r.text}</div>
+                <div className="flex gap-1.5 mt-1.5">
+                  <button onClick={() => approveRule(r.slug)} disabled={busy === r.slug}
+                    className="flex-1 h-6 rounded bg-good/20 text-good text-[10px] font-medium flex items-center justify-center gap-1"><Check size={11} /> Approve</button>
+                  <button onClick={() => rejectRule(r.slug)} disabled={busy === r.slug}
+                    className="flex-1 h-6 rounded bg-risk/15 text-risk text-[10px] font-medium flex items-center justify-center gap-1"><X size={11} /> Reject</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div>
+          <div className="uppercase tracking-wider text-[10px] text-faint mb-1 px-1">Active rules ({activeRules.length})</div>
+          {activeRules.length === 0 && <div className="text-faint text-[10px] px-1">No active rules yet.</div>}
+          {activeRules.map((r) => (
+            <div key={r.slug} className="border border-edge rounded-lg p-2 bg-panel2/40 mb-1.5 flex items-center gap-2">
+              <span className="text-txt text-[11px] flex-1">{r.text}</span>
+              <button onClick={() => rejectRule(r.slug)} title="Archive" className="text-muted hover:text-risk"><Archive size={11} /></button>
             </div>
           ))}
         </div>

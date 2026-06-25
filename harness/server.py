@@ -24,6 +24,7 @@ from .session import Session
 from .conversation import ConversationalSession
 from .mcp_manager import McpManager, CATALOG
 from .skill_store import SkillStore
+from .rule_store import RuleStore
 from . import workspaces as _ws
 from .sessions import SessionStore
 from .autobudget import AutoBudget
@@ -51,6 +52,7 @@ _sessions = SessionStore(os.path.join(_cfg.state_dir or _tf.gettempdir(), "harne
 _mcp = McpManager()
 _pilot._mcp = _mcp
 _skills = SkillStore()
+_rules = RuleStore()
 _UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "harness-uploads")
 os.makedirs(_UPLOAD_DIR, exist_ok=True)
 
@@ -85,7 +87,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/api/mcp/add", "/api/mcp/remove", "/api/mcp/start",
                       "/api/mcp/stop", "/api/mcp/call",
                       "/api/skills/distill", "/api/skills/approve",
-                      "/api/skills/reject", "/api/skills/archive"):
+                      "/api/skills/reject", "/api/skills/archive",
+                      "/api/rules/approve", "/api/rules/reject"):
             return self._handle_post_json(u.path)
         return self._send(404, json.dumps({"error": "not found"}))
 
@@ -145,6 +148,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/skills/archive":
             _skills.set_state(body.get("slug", ""), "archived")
             return self._send(200, json.dumps({"ok": True}))
+        if path == "/api/rules/approve":
+            ok = _rules.set_state(body.get("slug", ""), "active")
+            return self._send(200, json.dumps({"ok": ok}))
+        if path == "/api/rules/reject":
+            _rules.set_state(body.get("slug", ""), "archived")
+            return self._send(200, json.dumps({"ok": True}))
         if path == "/api/sessions/create":
             return self._send(200, json.dumps(_sessions.create(body.get("title"))))
         if path == "/api/sessions/switch":
@@ -192,6 +201,11 @@ class Handler(BaseHTTPRequestHandler):
                  "state": sk.state, "source": sk.source, "used_count": sk.used_count,
                  "body": sk.body}
                 for sk in _skills.list()]))
+        if u.path == "/api/rules":
+            return self._send(200, json.dumps([
+                {"slug": r.slug, "text": r.text, "scope": r.scope,
+                 "state": r.state, "source": r.source}
+                for r in _rules.list()]))
         if u.path == "/api/config":
             return self._send(200, json.dumps({
                 "driver": _cfg.driver, "reach": _cfg.reach,

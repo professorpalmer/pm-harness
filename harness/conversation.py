@@ -38,7 +38,8 @@ from .wiki import WikiClient, session_digest
 
 
 from .skill_store import SkillStore
-from .skill_distiller import distill_session
+from .skill_distiller import distill_session, distill_rules
+from .rule_store import RuleStore
 
 
 def _mcp_result_text(out: dict) -> str:
@@ -92,8 +93,14 @@ class ConversationalSession:
         if active:
             skills_block = "\n\n".join(
                 f"## Skill: {s.name}\n{s.description}\n{s.body}" for s in active)
-            system = (PILOT_SYSTEM + "\n\n# Learned skills (apply when relevant)\n"
+            system = (system + "\n\n# Learned skills (apply when relevant)\n"
                       + skills_block)
+        # standing conventions (always-on, terse) -- distinct from task skills
+        self._rules = RuleStore()
+        active_rules = self._rules.list("active")
+        if active_rules:
+            rules_block = "\n".join(f"- {r.text}" for r in active_rules)
+            system = (system + "\n\n# Standing rules (ALWAYS honor)\n" + rules_block)
         # the running transcript with the pilot (conversation memory)
         self._history: list[dict] = [{"role": "system", "content": system}]
         # optional durable-knowledge integration (portable-llm-wiki)
@@ -257,14 +264,21 @@ class ConversationalSession:
 
 
     def distill(self) -> dict:
-        """Propose a PENDING candidate skill from this session's accumulated
-        findings. Human approval required before it ever loads into context.
-        Returns the distiller status dict."""
+        """Propose PENDING candidate skill(s) AND rule(s) from this session's
+        accumulated findings. Human approval required before either loads into
+        context. Returns a combined status dict."""
+        out = {}
         try:
-            return distill_session(self.pilot, self._first_objective or "(session)",
-                                   self._session_findings, self._skills)
+            out["skill"] = distill_session(self.pilot, self._first_objective or "(session)",
+                                           self._session_findings, self._skills)
         except Exception as e:
-            return {"status": "error", "reason": str(e)}
+            out["skill"] = {"status": "error", "reason": str(e)}
+        try:
+            out["rules"] = distill_rules(self.pilot, self._first_objective or "(session)",
+                                         self._session_findings, self._rules)
+        except Exception as e:
+            out["rules"] = {"status": "error", "reason": str(e)}
+        return out
 
     def run_auto(self, objective: str, budget: "AutoBudget" = None,
                  *, require_codegraph: bool = True):

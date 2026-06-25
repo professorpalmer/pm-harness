@@ -139,3 +139,57 @@ def distill_session(pilot, objective: str, findings: List[dict],
                   state="pending", source=source)
     store.save(skill)
     return {"status": "proposed", "slug": skill.slug, "name": skill.name}
+
+
+# ---- Rules distillation -----------------------------------------------------
+from .rule_store import RuleStore, Rule
+
+RULES_SYSTEM = (
+    "You extract standing CONVENTIONS from a finished session: terse always/never "
+    "constraints a future agent must honor for this project (e.g. 'never use "
+    "emojis in output', 'always run tests before claiming done'). These are NOT "
+    "task procedures -- they are rules. Output ONE JSON object only:\n"
+    '{"rules": [{"text": "<imperative constraint>", "scope": "global"}]}\n'
+    "Output {\"rules\": []} if no durable convention emerged. Max 3 rules; only "
+    "genuinely reusable constraints, not task-specific notes."
+)
+
+
+def distill_rules(pilot, objective: str, findings: List[dict],
+                  store: "RuleStore", source: str = "distilled:session") -> dict:
+    """Propose PENDING candidate rules from a finished session. Returns
+    {status, proposed: [slugs], duplicates: [slugs]}."""
+    if not findings:
+        return {"status": "skipped", "reason": "no findings"}
+    digest = "\n".join(f"- {f.get('headline','')}" for f in findings
+                       if f.get("type") != "verification")
+    if not digest.strip():
+        return {"status": "skipped", "reason": "no signal"}
+    prompt = (f"Objective: {objective}\n\nWhat happened:\n{digest}\n\n"
+              f"Extract standing conventions now.")
+    resp = pilot.complete(prompt, system=RULES_SYSTEM)
+    text = getattr(resp, "text", "") or ""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return {"status": "skipped", "reason": "no envelope"}
+    try:
+        obj = json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        try:
+            obj = json.loads(_escape_ctrl_in_strings(text[start:end + 1]))
+        except json.JSONDecodeError:
+            return {"status": "skipped", "reason": "parse failed"}
+    proposed, dups = [], []
+    for r in (obj.get("rules") or [])[:3]:
+        rtext = (r.get("text") or "").strip()
+        if not rtext:
+            continue
+        dup = store.exists_similar(rtext)
+        if dup:
+            dups.append(dup); continue
+        rule = Rule(text=rtext, scope=(r.get("scope") or "global").strip(),
+                    state="pending", source=source)
+        store.add(rule)
+        proposed.append(rule.slug)
+    return {"status": "proposed" if proposed else ("duplicate" if dups else "skipped"),
+            "proposed": proposed, "duplicates": dups}
