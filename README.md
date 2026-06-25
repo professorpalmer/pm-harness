@@ -219,3 +219,23 @@ Reports ok / warn / fail per check with an actionable hint. The Puppetmaster
 seam and durable store are hard checks (fail -> exit 1); a missing driver or
 vision key is a warning (the harness still loads, stub drivers still work). Run
 this first on a new machine to see exactly what to set.
+
+
+## Fully-open vision (no frontier model anywhere)
+
+By default the vision sidecar uses Gemini (a stand-in). Set
+`HARNESS_VLM_REACH=openrouter` to route an OPEN VLM instead -- default
+`qwen/qwen3-vl-30b-a3b-instruct` (Apache-2.0, pairs with the qwen3-coder
+driver), overridable via `HARNESS_VLM_MODEL`. With this, the whole path is open:
+open VLM transcribes -> open driver reasons -> Puppetmaster orchestrates. No
+black box anywhere. Verified live: qwen3-vl transcribed a screenshot (AUTH_TOKEN
++ a function), the qwen3-coder driver answered correctly from the text alone.
+
+## Dogfooding notes
+
+Driven live on qwen3-coder-30b against real tasks: trivia -> answer (0 swarms),
+underspecified prompts -> answer (no wasted swarm), open-ended audits -> multi-
+swarm investigation then a grounded conclusion. qwen is thorough on audit-style
+prompts (it investigates multiple angles up to budget); lower `--budget` for a
+snappier loop, raise it for deeper investigation. The GUI thinking-indicators
+keep long multi-swarm runs legible.

@@ -35,7 +35,10 @@ def _system(budget: int) -> str:
 
 You drive a multi-turn loop with an orchestration budget of {budget} swarm
 step(s). Each run_swarm consumes one step; afterward you see its real artifacts.
-Stop (with a grounded rationale) once the objective is met. Answer trivia
+Stop (with a grounded rationale) once the objective is met. Do NOT repeat a
+near-identical swarm goal -- if the prior artifacts answered the question, stop;
+if a NEW sub-question remains, narrow to it; never re-run the same investigation.
+Answer trivia
 directly with zero swarms. Never loop the same swarm. Emit ONLY the JSON object."""
 
 
