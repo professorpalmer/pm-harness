@@ -69,9 +69,16 @@ def _run_gui(argv) -> int:
 
 def main(argv=None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
-    # Subcommand dispatch: `harness gui ...`. Default (no subcommand) = run a task.
+    if raw and raw[0] in ("--version", "-V"):
+        from . import __version__
+        print(f"harness {__version__}")
+        return 0
+    # Subcommand dispatch. Default (no subcommand) = run a task.
     if raw and raw[0] == "gui":
         return _run_gui(raw[1:])
+    if raw and raw[0] == "eval":
+        from .eval_cmd import run_eval
+        return run_eval(raw[1:])
 
     ap = argparse.ArgumentParser(prog="harness",
         description="PM-native harness. Run a task, or `harness gui` for the UI.")
@@ -95,6 +102,11 @@ def main(argv=None) -> int:
         session = Session(cfg)
     except Exception as e:
         print(_c("31;1", f"failed to build session: {e}"), file=sys.stderr)
+        return 1
+
+    pre = session.preflight()
+    if pre:
+        print(_c("31;1", pre), file=sys.stderr)
         return 1
 
     if not args.json:

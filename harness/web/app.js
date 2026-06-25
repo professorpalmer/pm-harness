@@ -10,6 +10,12 @@ async function loadConfig(){
   const c = await (await fetch("/api/config")).json();
   $("#driver-name").textContent = c.driver;
   $("#driver-meta").textContent = `reach=${c.reach} · budget=${c.budget}`;
+  if(c.preflight){
+    const b = el("turn err");
+    b.innerHTML = `<div class="turn-head"><span class="badge error">setup</span>`+
+      `<span>driver not ready</span></div><div class="turn-body">${esc(c.preflight)}</div>`;
+    stream.appendChild(b);
+  }
 }
 function setStatus(s){ pill.className = "pill " + s; pill.textContent = s; }
 function el(cls, html){ const d=document.createElement("div"); d.className=cls;
@@ -25,6 +31,16 @@ function addTurn(action, headHtml, bodyHtml, isErr){
   if(bodyHtml!=null) t.appendChild(el("turn-body", bodyHtml));
   stream.appendChild(t); stream.scrollTop = stream.scrollHeight;
   return t;
+}
+
+function addUser(text, bodyHtml){
+  const t = el("turn user");
+  const h = el("turn-head");
+  h.appendChild(el("who", "you"));
+  const lbl = document.createElement("span"); lbl.textContent = text; h.appendChild(lbl);
+  t.appendChild(h);
+  if(bodyHtml!=null) t.appendChild(el("turn-body", bodyHtml));
+  stream.appendChild(t); stream.scrollTop = stream.scrollHeight;
 }
 
 function pushArtifacts(arts){
@@ -80,7 +96,7 @@ function run(prompt){
   $("#send").disabled = true;
   const imgs = pending.map(p=>p.path);
   const userBody = imgs.length ? `<div class="muted">${imgs.length} image(s) attached</div>` : null;
-  addTurn("stop", `<span class="muted">you</span> &nbsp; ${esc(prompt)}`, userBody);
+  addUser(prompt, userBody);
   pending=[]; renderChips();
   let url = "/api/run?prompt="+encodeURIComponent(prompt);
   if(imgs.length) url += "&images="+encodeURIComponent(imgs.join("|"));
@@ -112,7 +128,7 @@ function run(prompt){
       addTurn("run_swarm", `job ${esc(d.job_id)} · ${d.num} artifacts · ${esc((d.types||[]).join(", "))}`, body);
       pushArtifacts(d.artifacts);
     } else if(ev.kind==="final"){
-      addTurn(d.action, `final · ${d.forced?"(forced) ":""}`, `<div class="rationale">${esc(d.rationale)}</div>`);
+      addTurn(d.action, d.forced?"final (forced)":"final", `<div class="rationale">${esc(d.rationale)}</div>`);
       setStatus(d.forced?"error":"done");
     } else if(ev.kind==="error"){
       addTurn("error", `error`, `<div>${esc(d.error)}</div>`+

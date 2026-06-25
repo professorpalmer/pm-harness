@@ -191,3 +191,18 @@ The three-pane GUI (`./scripts/harness_gui.sh`) now supports:
 - Vision events render inline (transcription char count + preview).
 - Job history persists in Puppetmaster's store and reloads on page load; click a
   job to inspect its artifacts in the right pane.
+
+
+## Reproducible eval + config
+
+```bash
+harness eval                          # offline oracle smoke (no keys)
+harness eval --driver glm-5.2 --reach openrouter --stage s4   # one live driver
+harness --version
+```
+
+Config layering (env wins over file wins over defaults): set defaults in
+`~/.harness.json` (`{"driver": "glm-5.2", "budget": 3}`) and override per-run
+with `HARNESS_DRIVER=...`. Missing-key is handled gracefully -- the CLI and GUI
+surface a clear, actionable message (which env var to set, or use the stub
+driver) instead of a stack trace.

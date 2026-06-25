@@ -70,6 +70,22 @@ class Session:
     def state(self) -> DurableState:
         return DurableState(self.state_dir)
 
+    def preflight(self) -> Optional[str]:
+        """Return an actionable error string if the driver cannot run (missing
+        key), else None. Lets surfaces fail clearly instead of stack-tracing on
+        the first API call."""
+        import os
+        d = self.driver
+        env = getattr(d, "api_key_env", None)
+        if env and not os.environ.get(env, "").strip():
+            reach = self.config.reach
+            hint = ("set OPENROUTER_API_KEY" if reach == "openrouter"
+                    else f"set {env}")
+            return (f"Driver '{self.config.driver}' needs an API key but {env} is "
+                    f"not set. {hint}, or use HARNESS_DRIVER=stub-oracle-v2 for a "
+                    f"no-key demo.")
+        return None
+
     def run(self, prompt: str, images: Optional[list] = None) -> Iterator[SessionEvent]:
         """Drive the loop, yielding an event per step. The GUI consumes this.
 

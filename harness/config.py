@@ -17,10 +17,28 @@ class HarnessConfig:
 
     @classmethod
     def from_env(cls) -> "HarnessConfig":
+        """Layered config: defaults < ~/.harness.json < environment. Env wins so
+        a one-off override never requires editing the file."""
         import os
+        import json
+        from pathlib import Path
+
+        file_cfg = {}
+        path = Path(os.environ.get("HARNESS_CONFIG", str(Path.home() / ".harness.json")))
+        if path.exists():
+            try:
+                file_cfg = json.loads(path.read_text())
+            except (ValueError, OSError):
+                file_cfg = {}
+
+        def pick(env_key, file_key, default):
+            if env_key in os.environ:
+                return os.environ[env_key]
+            return file_cfg.get(file_key, default)
+
         return cls(
-            driver=os.environ.get("HARNESS_DRIVER", "glm-5.2"),
-            reach=os.environ.get("HARNESS_REACH", "openrouter"),
-            budget=int(os.environ.get("HARNESS_BUDGET", "3")),
-            state_dir=os.environ.get("HARNESS_STATE_DIR", ""),
+            driver=pick("HARNESS_DRIVER", "driver", "glm-5.2"),
+            reach=pick("HARNESS_REACH", "reach", "openrouter"),
+            budget=int(pick("HARNESS_BUDGET", "budget", 3)),
+            state_dir=pick("HARNESS_STATE_DIR", "state_dir", ""),
         )

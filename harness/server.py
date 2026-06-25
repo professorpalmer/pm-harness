@@ -93,7 +93,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/config":
             return self._send(200, json.dumps({
                 "driver": _cfg.driver, "reach": _cfg.reach,
-                "budget": _cfg.budget, "state_dir": _session.state_dir}))
+                "budget": _cfg.budget, "state_dir": _session.state_dir,
+                "preflight": _session.preflight()}))
         if u.path == "/api/jobs":
             return self._send(200, json.dumps(_session.state().list_jobs()))
         if u.path == "/api/artifacts":
@@ -112,6 +113,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
+        pre = _session.preflight()
+        if pre:
+            self.wfile.write(f"data: {json.dumps({'kind':'error','turn':0,'data':{'error':pre}})}\n\n".encode())
+            self.wfile.write(b"data: {\"kind\": \"done\"}\n\n")
+            self.wfile.flush()
+            return
         try:
             for ev in _session.run(prompt, images=images or None):
                 payload = json.dumps({"kind": ev.kind, "turn": ev.turn, "data": ev.data})
