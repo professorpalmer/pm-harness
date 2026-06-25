@@ -93,6 +93,10 @@ def main(argv=None) -> int:
     ap.add_argument("--image", action="append", default=[], dest="images",
                     help="attach an image (repeatable); transcribed via the vision sidecar")
     ap.add_argument("--state-dir", default=None)
+    ap.add_argument("--repo", default=None,
+                    help="target repo for REAL read-only analysis (sets HARNESS_REPO)")
+    ap.add_argument("--swarm-adapter", default=None, choices=["demo", "openai"],
+                    help="demo (free/safe substrate) | openai (real read-only code analysis)")
     ap.add_argument("--json", action="store_true", help="emit raw JSON events")
     args = ap.parse_args(raw)
 
@@ -101,6 +105,8 @@ def main(argv=None) -> int:
     if args.reach: cfg.reach = args.reach
     if args.budget is not None: cfg.budget = args.budget
     if args.state_dir: cfg.state_dir = args.state_dir
+    if args.repo: cfg.repo = args.repo
+    if args.swarm_adapter: cfg.swarm_adapter = args.swarm_adapter
 
     try:
         session = Session(cfg)

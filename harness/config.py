@@ -14,6 +14,8 @@ class HarnessConfig:
     budget: int = 3                  # orchestration steps per task
     state_dir: str = ""              # PM state dir; blank -> per-session temp
     worker_mode: str = "subprocess"
+    repo: str = ""                   # target repo for REAL analysis (HARNESS_REPO)
+    swarm_adapter: str = "demo"      # demo (free/safe) | openai (real read-only analysis)
 
     @classmethod
     def from_env(cls) -> "HarnessConfig":
@@ -41,4 +43,6 @@ class HarnessConfig:
             reach=pick("HARNESS_REACH", "reach", "openrouter"),
             budget=int(pick("HARNESS_BUDGET", "budget", 3)),
             state_dir=pick("HARNESS_STATE_DIR", "state_dir", ""),
+            repo=pick("HARNESS_REPO", "repo", ""),
+            swarm_adapter=pick("HARNESS_SWARM_ADAPTER", "swarm_adapter", "demo"),
         )

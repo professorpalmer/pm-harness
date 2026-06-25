@@ -69,6 +69,16 @@ def run_doctor(argv) -> int:
         _line("fail", f"driver {cfg.driver}", f"build failed: {e}")
         hard_fail = True
 
+    # 3b. Swarm adapter -- demo (substrate) vs openai (real read-only analysis)
+    sa = os.environ.get("HARNESS_SWARM_ADAPTER", "demo").lower()
+    repo = os.environ.get("HARNESS_REPO", "").strip()
+    if sa == "openai" and repo:
+        _line("ok", "swarm adapter", f"openai (REAL read-only analysis of {repo})")
+    elif sa == "openai" and not repo:
+        _line("warn", "swarm adapter", "openai set but HARNESS_REPO empty -> falls back to demo substrate")
+    else:
+        _line("ok", "swarm adapter", "demo (deterministic substrate -- set HARNESS_SWARM_ADAPTER=openai + HARNESS_REPO for real analysis)")
+
     # 4. Vision sidecar key (warn-only; vision is optional). The backend depends
     # on HARNESS_VLM_REACH: openrouter -> open VLM (OPENROUTER_API_KEY), else Gemini.
     vlm_reach = os.environ.get("HARNESS_VLM_REACH", "").lower()

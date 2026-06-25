@@ -239,3 +239,24 @@ swarm investigation then a grounded conclusion. qwen is thorough on audit-style
 prompts (it investigates multiple angles up to budget); lower `--budget` for a
 snappier loop, raise it for deeper investigation. The GUI thinking-indicators
 keep long multi-swarm runs legible.
+
+
+## Real codebase analysis (read-only)
+
+By default swarms run on a deterministic local substrate (free, no real code
+analysis -- labeled "demo substrate" in output). To analyze a REAL repo:
+
+```
+harness --repo /path/to/repo --swarm-adapter openai \
+        "Investigate how X works here and report findings."
+```
+
+This routes read-only analysis workers (CodeGraph-injected) against the repo via
+OpenRouter (open model, default qwen3-coder-30b; override HARNESS_ANALYSIS_MODEL).
+Safety: triple-guarded read-only -- the openai adapter is not edit-capable, specs
+carry read_only/no_edit/dry_run, and a test asserts the target repo is never
+mutated. Safe even on live-service repos.
+
+Honest limit: a cheap 30B analysis model reads the right files (real file-cited
+evidence) but can fabricate specifics -- findings are directionally useful and
+need verification. Pin a stronger HARNESS_ANALYSIS_MODEL for high-stakes work.

@@ -21,6 +21,39 @@ from typing import Any, Optional
 from .intent import DriverIntent
 
 
+def _analysis_provider_payload() -> dict:
+    """Provider knobs for the read-only analysis worker. Defaults to OpenRouter
+    (funded, open models) since the OpenAI adapter speaks the OpenAI-compatible
+    schema; set HARNESS_ANALYSIS_REACH=openai to use the native OpenAI API.
+
+    The API KEY is NOT placed in the payload (transiting tool/secret layers can
+    truncate it); instead _prepare_analysis_env() sets OPENAI_API_KEY +
+    OPENAI_BASE_URL in the process env, which the adapter reads natively."""
+    import os
+    reach = (os.environ.get("HARNESS_ANALYSIS_REACH", "openrouter") or "openrouter").lower()
+    if reach == "openai":
+        return {"skip_preflight": True}
+    model = os.environ.get("HARNESS_ANALYSIS_MODEL", "qwen/qwen3-coder-30b-a3b-instruct")
+    return {
+        "model": model,
+        "openai_allow_untrusted_base_url": True,
+        "skip_preflight": True,
+    }
+
+
+def _prepare_analysis_env() -> None:
+    """Point the OpenAI adapter at OpenRouter via process env (masker-safe).
+    Only acts when reach is openrouter (default) and a key is present."""
+    import os
+    reach = (os.environ.get("HARNESS_ANALYSIS_REACH", "openrouter") or "openrouter").lower()
+    if reach == "openai":
+        return
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if key:
+        os.environ["OPENAI_API_KEY"] = key
+        os.environ["OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
+
+
 @dataclass
 class BridgeResult:
     job_id: str
@@ -73,26 +106,67 @@ def execute_intent(
     if not intent.goal:
         raise ValueError("cannot execute run_swarm intent without a goal")
 
+    import os as _os
     from puppetmaster.store_factory import create_store
     from puppetmaster.orchestrator import Orchestrator
 
     tmp = state_dir or tempfile.mkdtemp(prefix="pmh-exec-")
     store = create_store("sqlite", tmp)
 
-    # The default role path (roles=None) uses the built-in local demo adapter:
-    # no API keys, deterministic, free. If the driver named known roles we honor
-    # them; execution still routes through the local adapter for the driver eval.
-    result = Orchestrator(store).run(
-        intent.goal,
-        roles=intent.roles,
-        worker_mode=worker_mode or "subprocess",
-    )
+    # Swarm adapter selection (safety-first):
+    #   demo (default)  -> built-in local demo adapter: deterministic, free, no
+    #                      real code analysis. The substrate for driver eval.
+    #   openai          -> REAL LLM analysis of REAL code. We build READ-ONLY
+    #                      analysis WorkerSpecs pointed at the target repo cwd so
+    #                      Puppetmaster injects CodeGraph context. The "openai"
+    #                      adapter is NOT in _EDIT_CAPABLE_ADAPTERS, and we also
+    #                      stamp read_only=True -- a triple guard so a real run
+    #                      can NEVER edit a target repo (safe even on live repos).
+    swarm_adapter = (_os.environ.get("HARNESS_SWARM_ADAPTER", "demo") or "demo").lower()
+    repo_cwd = _os.environ.get("HARNESS_REPO", "").strip()
+
+    if swarm_adapter == "openai" and repo_cwd:
+        _prepare_analysis_env()
+        from puppetmaster.workers import WorkerSpec
+        roles = intent.roles or ["explore"]
+        specs = []
+        for r in roles:
+            specs.append(WorkerSpec(
+                role=r,
+                instruction=(
+                    f"{intent.goal}\n\nAnalyze the REAL codebase at {repo_cwd}. "
+                    f"Emit evidenced findings/risks/decisions as artifacts. This is "
+                    f"a READ-ONLY analysis: do not edit, create, or delete any files."
+                ),
+                adapter="openai",
+                payload={
+                    "read_only": True, "no_edit": True, "dry_run": True,
+                    "cwd": repo_cwd, "prompt": intent.goal,
+                    "auto_route": False,
+                    # Route analysis through OpenRouter (funded, open models) by
+                    # default; the OpenAI adapter speaks the OpenAI-compatible
+                    # schema so base_url + key + an open model just works. Falls
+                    # back to native OpenAI only if HARNESS_ANALYSIS_REACH=openai.
+                    **_analysis_provider_payload(),
+                },
+            ))
+        # inline: the analysis worker runs in-process so the env-based key
+        # wiring propagates reliably, and it yields richer multi-artifact output.
+        result = Orchestrator(store).run(
+            intent.goal, specs=specs, worker_mode=worker_mode or "inline",
+        )
+        adapter = "openai"
+    else:
+        # The default role path (roles=None) uses the built-in local demo adapter:
+        # no API keys, deterministic, free. Label as demo substrate honestly.
+        result = Orchestrator(store).run(
+            intent.goal,
+            roles=intent.roles,
+            worker_mode=worker_mode or "subprocess",
+        )
+        adapter = "demo"
 
     artifacts = list(result.artifacts)
-    # The default role path routes through Puppetmaster's built-in local demo
-    # adapter -- deterministic substrate, NOT real codebase analysis. Label it so
-    # surfaces can be honest. (Real-worker routing is a configured enhancement.)
-    adapter = "demo"
     return BridgeResult(
         job_id=result.job.id,
         status=str(result.job.status),

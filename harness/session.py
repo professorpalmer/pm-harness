@@ -69,6 +69,13 @@ class Session:
         self.config = config or HarnessConfig.from_env()
         self.state_dir = self.config.state_dir or tempfile.mkdtemp(prefix="harness-")
         self.driver = reg.build(self.config.driver, reach=self.config.reach)
+        # Propagate repo/adapter to env so the bridge's execute_intent picks them
+        # up. Real analysis requires BOTH a repo and the openai adapter.
+        import os as _os
+        if self.config.repo:
+            _os.environ["HARNESS_REPO"] = self.config.repo
+        if self.config.swarm_adapter:
+            _os.environ["HARNESS_SWARM_ADAPTER"] = self.config.swarm_adapter
 
     def state(self) -> DurableState:
         return DurableState(self.state_dir)
