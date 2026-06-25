@@ -16,8 +16,10 @@ export default function PilotPicker({ config }: {
   if (!config) return null;
   return (
     <select value={current} onChange={(e) => swap(e.target.value)}
-      className="bg-panel2 border border-edge rounded-md px-2 py-1 text-xs text-txt focus:outline-none focus:border-accent2">
-      {models.map((m) => <option key={m} value={m}>{m}</option>)}
+      title="Pilot model"
+      className="bg-bg border border-edge rounded-md px-1.5 h-6 text-[11px] text-muted hover:text-txt
+                 focus:outline-none focus:border-accent2 max-w-[160px]">
+      {models.map((m) => <option key={m} value={m}>{m.split(":").pop()}</option>)}
     </select>
   );
 }

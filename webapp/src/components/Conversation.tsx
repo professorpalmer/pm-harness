@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Loader2, Send, Zap, Square } from "lucide-react";
+import { ChevronRight, Loader2, Send, Zap, Square, GitBranch } from "lucide-react";
 import { api, type Config } from "../lib/api";
 import PilotPicker from "./PilotPicker";
 
@@ -68,12 +68,9 @@ export default function Conversation({ config, onArtifacts, onJobChange }: {
 
   return (
     <main className="flex flex-col h-full min-w-0 bg-bg">
-      <header className="flex items-center justify-between px-4 py-3 border-b border-edge">
+      <header className="flex items-center justify-between px-4 py-2.5 border-b border-edge">
         <span className="font-semibold text-sm">PM-Native Harness</span>
-        <div className="flex items-center gap-2">
-          <PilotPicker config={config} />
-          <StatusPill status={status} />
-        </div>
+        <StatusPill status={status} />
       </header>
 
       <div ref={feedRef} className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3">
@@ -87,22 +84,33 @@ export default function Conversation({ config, onArtifacts, onJobChange }: {
           : <ActionCard key={i} card={it.card} onToggle={() => setCard(it.card.id, { open: !it.card.open })} />)}
       </div>
 
-      <div className="border-t border-edge p-3">
-        <div className="flex items-end gap-2">
-          <button onClick={() => setAuto((a) => !a)} title="Fully-Auto mode"
-            className={`px-2.5 h-9 rounded-lg border text-xs flex items-center gap-1 transition
-              ${auto ? "bg-warn/20 border-warn/40 text-warn" : "bg-panel2 border-edge text-muted"}`}>
-            <Zap size={13} /> Auto
-          </button>
+      <div className="px-3 pb-2 pt-1">
+        {/* composer card: textarea on top, compact floating controls below (Hermes-style) */}
+        <div className="bg-panel2 border border-edge rounded-xl focus-within:border-accent2 transition">
           <textarea value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
             rows={1} placeholder={auto ? "Give the pilot an objective to pursue autonomously..." : "Message the pilot..."}
-            className="flex-1 bg-panel2 border border-edge rounded-lg px-3 py-2 text-sm resize-none
-                       focus:outline-none focus:border-accent2 max-h-32" />
-          {status === "thinking" || status === "executing"
-            ? <button onClick={stop} className="px-4 h-9 rounded-lg bg-risk/20 border border-risk/40 text-risk text-sm font-semibold flex items-center gap-1"><Square size={13} />Stop</button>
-            : <button onClick={send} className="px-4 h-9 rounded-lg bg-accent2 border border-accent2 text-accent text-sm font-semibold flex items-center gap-1 hover:brightness-125"><Send size={13} />{auto ? "Run" : "Send"}</button>}
+            className="w-full bg-transparent px-3 pt-2.5 pb-1 text-sm resize-none focus:outline-none max-h-40" />
+          <div className="flex items-center gap-1.5 px-2 pb-2">
+            <button onClick={() => setAuto((a) => !a)} title="Fully-Auto mode"
+              className={`px-2 h-6 rounded-md border text-[11px] flex items-center gap-1 transition
+                ${auto ? "bg-warn/20 border-warn/40 text-warn" : "bg-bg border-edge text-muted hover:text-txt"}`}>
+              <Zap size={11} /> Auto
+            </button>
+            <div className="flex-1" />
+            <PilotPicker config={config} />
+            {status === "thinking" || status === "executing"
+              ? <button onClick={stop} className="px-2.5 h-6 rounded-md bg-risk/20 border border-risk/40 text-risk text-[11px] font-medium flex items-center gap-1"><Square size={10} />Stop</button>
+              : <button onClick={send} className="px-2.5 h-6 rounded-md bg-accent2 border border-accent2 text-accent text-[11px] font-medium flex items-center gap-1 hover:brightness-125"><Send size={10} />{auto ? "Run" : "Send"}</button>}
+          </div>
         </div>
+      </div>
+      {/* thin status strip (branch + context vibe, Hermes-style) */}
+      <div className="flex items-center gap-3 px-4 py-1 border-t border-edge text-[10px] text-muted">
+        <span className="flex items-center gap-1"><GitBranch size={10} />{config?.driver?.split(":").pop()?.slice(0, 20) || "pilot"}</span>
+        <span>{config?.reach || ""}</span>
+        <div className="flex-1" />
+        <span>budget {config?.budget ?? "-"}</span>
       </div>
     </main>
   );

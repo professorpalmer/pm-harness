@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type Config } from "./lib/api";
 import LeftRail from "./components/LeftRail";
 import Conversation from "./components/Conversation";
-import StatePane from "./components/StatePane";
+import RightPane from "./components/RightPane";
 
 export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
@@ -19,7 +19,7 @@ export default function App() {
         onArtifacts={(a) => setArtifacts((prev) => [...a, ...prev])}
         onJobChange={() => setJobsRefresh((n) => n + 1)}
       />
-      <StatePane artifacts={artifacts} />
+      <RightPane artifacts={artifacts} />
     </div>
   );
 }
