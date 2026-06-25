@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { GitBranch, Plus, MessageSquare, Boxes, Check, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { api, type Workspace, type Session, type Job } from "../lib/api";
+import { pickFolder } from "../lib/transport";
 
 export default function LeftRail({ jobsRefresh, onSessionChange }: {
   jobsRefresh: number;
@@ -51,7 +52,6 @@ export default function LeftRail({ jobsRefresh, onSessionChange }: {
     }
   };
 
-  const [openPath, setOpenPath] = useState("");
   const [opening, setOpening] = useState(false);
   const [workspaceInfo, setWorkspaceInfo] = useState<any>(null);
 
@@ -71,14 +71,13 @@ export default function LeftRail({ jobsRefresh, onSessionChange }: {
   }).catch(() => {});
   useEffect(() => { loadWs(); loadSess(); fetchWorkspace(); }, []);
 
-  const handleOpenFolder = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!openPath.trim()) return;
+  const handleOpenFolder = async () => {
+    const picked = await pickFolder();
+    if (!picked) return;
     setOpening(true);
     try {
-      const res = await api.openWorkspace(openPath);
+      const res = await api.openWorkspace(picked);
       if (res.ok) {
-        setOpenPath("");
         fetchWorkspace();
         await loadWs();
         window.dispatchEvent(new Event("harness-config-changed"));
@@ -211,22 +210,13 @@ export default function LeftRail({ jobsRefresh, onSessionChange }: {
         ) : (
           <div className="text-[11px] text-faint italic mb-2">No folder open</div>
         )}
-        <form onSubmit={handleOpenFolder} className="flex gap-1.5">
-          <input
-            type="text"
-            placeholder="Absolute path to folder..."
-            value={openPath}
-            onChange={(e) => setOpenPath(e.target.value)}
-            className="flex-1 min-w-0 bg-bg border border-edge rounded px-1.5 py-1 text-[11px] text-txt focus:outline-none focus:border-accent"
-          />
-          <button
-            type="submit"
-            disabled={opening}
-            className="bg-accent/15 hover:bg-accent/25 text-accent text-[11px] font-semibold px-2 py-1 rounded transition disabled:opacity-50 shrink-0"
-          >
-            {opening ? "Opening..." : "Open"}
-          </button>
-        </form>
+        <button
+          onClick={handleOpenFolder}
+          disabled={opening}
+          className="w-full bg-accent/15 hover:bg-accent/25 text-accent text-[11px] font-semibold px-2 py-1.5 rounded transition disabled:opacity-50"
+        >
+          {opening ? "Opening..." : "Open Folder..."}
+        </button>
       </div>
 
       {/* WORKSPACES */}

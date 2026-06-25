@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Loader2, Send, Zap, Square } from "lucide-react";
+import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, GitBranch } from "lucide-react";
 import { api, type Config } from "../lib/api";
 import PilotPicker from "./PilotPicker";
+import { pickFolder } from "../lib/transport";
 
 type Msg = { role: "user" | "assistant"; text: string };
 type Card = {
@@ -280,6 +281,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
             </div>
           )}
           {/* compact composer: input + a single tidy control row */}
+          <WorkspaceChip />
           <div className="bg-panel2/80 border border-edge rounded-xl focus-within:border-edge2 shadow-lg shadow-black/20 transition">
             <textarea value={input} onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
@@ -304,6 +306,78 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
       </div>
 
     </main>
+  );
+}
+
+
+function WorkspaceChip() {
+  const [ws, setWs] = useState<{ repo: string; branch: string; recents?: string[] } | null>(null);
+  const [open, setOpen] = useState(false);
+  const refresh = () => api.getWorkspace().then((w) => setWs(w as any)).catch(() => {});
+  useEffect(() => {
+    refresh();
+    const h = () => refresh();
+    window.addEventListener("harness-config-changed", h);
+    return () => window.removeEventListener("harness-config-changed", h);
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const onClick = () => setOpen(false);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("click", onClick);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("click", onClick); };
+  }, [open]);
+
+  const openPath = async (p: string) => {
+    setOpen(false);
+    try {
+      const res = await api.openWorkspace(p);
+      if ((res as any).ok) { refresh(); window.dispatchEvent(new Event("harness-config-changed")); }
+    } catch { /* ignore */ }
+  };
+  const browse = async () => {
+    const picked = await pickFolder();
+    if (picked) await openPath(picked);
+  };
+  const base = (p: string) => p ? p.replace(/\/+$/, "").split("/").pop() || p : "";
+  const name = ws?.repo ? base(ws.repo) : "No folder";
+  const recents = (ws?.recents || []).filter((r) => r !== ws?.repo);
+
+  return (
+    <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] relative">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        className="flex items-center gap-1 text-muted hover:text-txt transition rounded px-1 py-0.5 hover:bg-panel2/60">
+        <Folder size={11} className="text-faint" />
+        <span className="font-medium">{name}</span>
+        <ChevronDown size={11} className="text-faint" />
+      </button>
+      {ws?.branch ? <span className="text-faint flex items-center gap-0.5"><GitBranch size={10} />{ws.branch}</span> : null}
+      <span className="text-faint/70">Local</span>
+      {open && (
+        <div onClick={(e) => e.stopPropagation()}
+          className="absolute bottom-full left-0 mb-1 w-64 bg-panel border border-edge rounded-lg shadow-xl shadow-black/40 py-1 z-50">
+          {recents.length > 0 && (
+            <>
+              <div className="text-[9px] uppercase tracking-wider text-faint px-3 py-1">Recents</div>
+              {recents.map((r) => (
+                <button key={r} onClick={() => openPath(r)}
+                  className="w-full text-left px-3 py-1.5 hover:bg-panel2 transition flex flex-col">
+                  <span className="text-txt font-medium text-[11px]">{base(r)}</span>
+                  <span className="text-faint text-[9px] font-mono truncate">{r}</span>
+                </button>
+              ))}
+              <div className="border-t border-edge/50 my-1" />
+            </>
+          )}
+          <button onClick={browse}
+            className="w-full text-left px-3 py-1.5 hover:bg-panel2 transition flex items-center gap-2 text-txt text-[11px]">
+            <Folder size={12} className="text-accent" /> Open Folder...
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

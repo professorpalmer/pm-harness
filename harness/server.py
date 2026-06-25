@@ -313,8 +313,18 @@ class Handler(BaseHTTPRequestHandler):
             ws_json_path = os.path.expanduser("~/.pmharness/workspace.json")
             try:
                 os.makedirs(os.path.dirname(ws_json_path), exist_ok=True)
+                recents = []
+                if os.path.exists(ws_json_path):
+                    try:
+                        with open(ws_json_path) as f:
+                            recents = json.load(f).get("recents", []) or []
+                    except Exception:
+                        recents = []
+                # prepend, dedupe (keep first occurrence), cap 8
+                recents = [target_repo] + [r for r in recents if r != target_repo]
+                recents = recents[:8]
                 with open(ws_json_path, "w") as f:
-                    json.dump({"repo": target_repo}, f)
+                    json.dump({"repo": target_repo, "recents": recents}, f)
                 os.chmod(ws_json_path, 0o600)
             except Exception:
                 pass
@@ -832,11 +842,19 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
             cg_status = _get_codegraph_status(repo) if repo else "unsupported"
+            recents = []
+            try:
+                if os.path.exists(_WORKSPACE_JSON):
+                    with open(_WORKSPACE_JSON) as f:
+                        recents = json.load(f).get("recents", []) or []
+            except Exception:
+                recents = []
             return self._send(200, json.dumps({
                 "repo": repo,
                 "branch": branch,
                 "is_git": is_git,
-                "codegraph_status": cg_status
+                "codegraph_status": cg_status,
+                "recents": recents
             }))
         if u.path == "/api/codegraph":
             if self._guard():

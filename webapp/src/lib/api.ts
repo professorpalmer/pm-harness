@@ -184,7 +184,7 @@ export const api = {
   setWorktreeMax: (max: number) => postJSON<{ ok: boolean }>("/api/worktrees/max", { max }),
 
   openWorkspace: (path: string) => postJSON<{ ok: boolean; repo: string; branch: string; is_git: boolean; codegraph: "indexing" | "ready" | "unsupported" }>("/api/workspace/open", { path }),
-  getWorkspace: () => getJSON<{ repo: string; branch: string; is_git: boolean; codegraph_status: string }>("/api/workspace"),
+  getWorkspace: () => getJSON<{ repo: string; branch: string; is_git: boolean; codegraph_status: string; recents?: string[] }>("/api/workspace"),
 
   getHooks: () => getJSON<{ hooks: Hook[]; events: string[] }>("/api/hooks"),
   addHook: (event: string, command: string) => postJSON<Hook>("/api/hooks/add", { event, command }),

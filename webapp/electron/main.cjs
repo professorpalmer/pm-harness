@@ -7,7 +7,7 @@
 // The renderer is the SAME React app as the web build; only the transport
 // implementation differs (IPC here vs fetch/SSE on the web).
 
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 app.name = "Puppetmaster";
 const { spawn } = require("node:child_process");
 const http = require("node:http");
@@ -141,6 +141,13 @@ function backendRequest(method, apiPath, body) {
 
 ipcMain.handle("harness:getJSON", (_e, p) => backendRequest("GET", p));
 ipcMain.handle("harness:postJSON", (_e, p, body) => backendRequest("POST", p, body));
+
+// Native folder picker (Cursor-style "Open Folder"). Returns absolute path or null.
+ipcMain.handle("harness:pickFolder", async () => {
+  const res = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] });
+  if (res.canceled || !res.filePaths || !res.filePaths.length) return null;
+  return res.filePaths[0];
+});
 
 // SSE stream: bridge backend EventSource-style stream to renderer via events.
 ipcMain.on("harness:stream", (event, channelId, apiPath) => {

@@ -92,3 +92,12 @@ export const nativeGit = {
 };
 
 export const isDesktop = !!ipc;
+
+// Native folder picker. Electron: OS dialog via IPC. Web: prompt fallback.
+export async function pickFolder(): Promise<string | null> {
+  if (ipc && typeof ipc.pickFolder === "function") {
+    try { return await ipc.pickFolder(); } catch { return null; }
+  }
+  const p = (typeof window !== "undefined") ? window.prompt("Absolute path to folder:") : null;
+  return p && p.trim() ? p.trim() : null;
+}
