@@ -27,6 +27,7 @@ Events yielded (for GUI/CLI):
 import os
 import threading
 import time
+import subprocess
 from dataclasses import dataclass, field
 from typing import Iterator, Optional
 
@@ -36,6 +37,15 @@ from pmharness.intent import DriverIntent
 from pmharness.bridge import execute_intent, BridgeResult
 from .pilot import (parse_pilot_turn, PilotTurn, PilotError, PILOT_SYSTEM)
 from .wiki import WikiClient, session_digest
+
+
+def is_safe_path(path: str, parent: str) -> bool:
+    try:
+        real_p = os.path.realpath(path)
+        real_parent = os.path.realpath(parent)
+        return os.path.commonpath([real_parent, real_p]) == real_parent
+    except ValueError:
+        return False
 
 
 from .skill_store import SkillStore
@@ -177,13 +187,30 @@ class ConversationalSession:
 
         for step in range(HARD_PILOT_STEPS):
             # 1. Ask the pilot for its next conversational turn.
-            sys_prompt = PILOT_SYSTEM
+            base_sys = self._history[0]["content"]
+            cg_section = ""
+            if self.config.repo:
+                try:
+                    from puppetmaster.codegraph import codegraph_context, codegraph_prompt_section
+                    cg_slice = codegraph_context(task=user_message, cwd=self.config.repo)
+                    if cg_slice:
+                        cg_section = codegraph_prompt_section(cg_slice)
+                except Exception:
+                    pass
+
+            sys_prompt = base_sys
+            if cg_section:
+                sys_prompt += "\n\n" + cg_section
+
+            self._history[0]["content"] = sys_prompt
             prompt = self._render_history()
             try:
                 resp = self.pilot.complete(prompt, system=sys_prompt)
             except Exception as e:
                 yield ConvEvent("error", {"error": f"pilot transport: {e}"})
                 return
+            finally:
+                self._history[0]["content"] = base_sys
             # real token metering: prompt + completion (drivers report tokens_out;
             # estimate tokens_in from prompt length when not provided).
             self._tokens_used += int(getattr(resp, "tokens_out", 0) or 0)
@@ -217,11 +244,176 @@ class ConversationalSession:
             for act in turn.actions:
                 action_seq += 1
                 aid = f"a{action_seq}"
+                act_goal = act.goal
+                if act.kind in ("read_file", "write_file", "list_dir"):
+                    act_goal = act.path or "(workspace root)"
+                elif act.kind == "run_command":
+                    act_goal = act.command
+                elif act.kind == "call_mcp":
+                    act_goal = act.tool
+
                 yield ConvEvent("action_start", {
-                    "id": aid, "kind": act.kind, "goal": act.goal or act.tool,
+                    "id": aid, "kind": act.kind, "goal": act_goal or act.tool,
                     "cwd": self.config.repo or None,
                     "adapter": self.config.swarm_adapter,
                 })
+                # ---- read_file branch -----------------------------------------
+                if act.kind == "read_file":
+                    if not self.config.repo:
+                        error_msg = "No workspace directory (config.repo) is open."
+                        yield ConvEvent("action_result", {"id": aid, "error": error_msg})
+                        self._history.append({"role": "user", "content": f"(read_file {aid} failed: {error_msg})"})
+                        continue
+                    target_path = act.path
+                    if not os.path.isabs(target_path):
+                        target_path = os.path.join(self.config.repo, target_path)
+                    if not is_safe_path(target_path, self.config.repo):
+                        error_msg = f"Path traversal attempt rejected: {act.path}"
+                        yield ConvEvent("action_result", {"id": aid, "error": error_msg})
+                        self._history.append({"role": "user", "content": f"(read_file {aid} failed: {error_msg})"})
+                        continue
+                    try:
+                        if not os.path.exists(target_path):
+                            raise FileNotFoundError(f"File not found: {act.path}")
+                        if os.path.isdir(target_path):
+                            raise IsADirectoryError(f"Path is a directory: {act.path}")
+                        with open(target_path, "r", encoding="utf-8", errors="replace") as f:
+                            content = f.read(200 * 1024)
+                        is_truncated = os.path.getsize(target_path) > 200 * 1024
+                        if is_truncated:
+                            content += "\n\n... (file truncated to 200KB) ..."
+                        yield ConvEvent("action_result", {
+                            "id": aid, "num": 1, "types": ["file"], "adapter": "local", "mode": "tool",
+                            "artifacts": [{"type": "file", "headline": f"Read {len(content)} chars from {act.path}"}],
+                        })
+                        self._history.append({"role": "user", "content": f"(read_file {act.path} returned)\n{content}"})
+                    except Exception as e:
+                        yield ConvEvent("action_result", {"id": aid, "error": str(e)})
+                        self._history.append({"role": "user", "content": f"(read_file {act.path} failed: {e})"})
+                    continue
+                # ---- write_file branch ----------------------------------------
+                if act.kind == "write_file":
+                    if not self.config.repo:
+                        error_msg = "No workspace directory (config.repo) is open."
+                        yield ConvEvent("action_result", {"id": aid, "error": error_msg})
+                        self._history.append({"role": "user", "content": f"(write_file {aid} failed: {error_msg})"})
+                        continue
+                    target_path = act.path
+                    if not os.path.isabs(target_path):
+                        target_path = os.path.join(self.config.repo, target_path)
+                    if not is_safe_path(target_path, self.config.repo):
+                        error_msg = f"Path traversal attempt rejected: {act.path}"
+                        yield ConvEvent("action_result", {"id": aid, "error": error_msg})
+                        self._history.append({"role": "user", "content": f"(write_file {aid} failed: {error_msg})"})
+                        continue
+                    try:
+                        target_dir = os.path.dirname(target_path)
+                        os.makedirs(target_dir, exist_ok=True)
+                        import tempfile
+                        fd, temp_path = tempfile.mkstemp(dir=target_dir, prefix=".tmp-")
+                        try:
+                            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                                f.write(act.content)
+                            os.replace(temp_path, target_path)
+                        except Exception as e:
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                            raise e
+                        bytes_written = len(act.content.encode('utf-8'))
+                        yield ConvEvent("action_result", {
+                            "id": aid, "num": 1, "types": ["file"], "adapter": "local", "mode": "tool",
+                            "artifacts": [{"type": "file", "headline": f"Wrote {bytes_written} bytes to {act.path}"}],
+                        })
+                        self._history.append({"role": "user", "content": f"(write_file {act.path} successfully wrote {bytes_written} bytes)"})
+                    except Exception as e:
+                        yield ConvEvent("action_result", {"id": aid, "error": str(e)})
+                        self._history.append({"role": "user", "content": f"(write_file {act.path} failed: {e})"})
+                    continue
+                # ---- run_command branch ---------------------------------------
+                if act.kind == "run_command":
+                    if not self.config.repo:
+                        error_msg = "No workspace directory (config.repo) is open."
+                        yield ConvEvent("action_result", {"id": aid, "error": error_msg})
+                        self._history.append({"role": "user", "content": f"(run_command {aid} failed: {error_msg})"})
+                        continue
+                    try:
+                        p = subprocess.run(
+                            act.command,
+                            shell=True,
+                            cwd=self.config.repo,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            text=True,
+                            timeout=120
+                        )
+                        output = p.stdout or ""
+                        exit_code = p.returncode
+                    except subprocess.TimeoutExpired as te:
+                        out_str = te.stdout.decode('utf-8', errors='replace') if isinstance(te.stdout, bytes) else (te.stdout or "")
+                        output = out_str + f"\n\n[TimeoutExpired after 120 seconds]"
+                        exit_code = -1
+                    except Exception as e:
+                        output = f"Failed to execute command: {e}"
+                        exit_code = -1
+                    MAX_CAP = 50 * 1024
+                    if len(output) > MAX_CAP:
+                        output = output[:MAX_CAP] + "\n\n... (output truncated to 50KB) ..."
+                    yield ConvEvent("action_result", {
+                        "id": aid, "num": 1, "types": ["command"], "adapter": "local", "mode": "tool",
+                        "artifacts": [{"type": "command", "headline": f"Command exited with {exit_code}"}],
+                    })
+                    self._history.append({"role": "user", "content": f"(run_command '{act.command}' completed with exit code {exit_code})\n{output}"})
+                    continue
+                # ---- list_dir branch ------------------------------------------
+                if act.kind == "list_dir":
+                    if not self.config.repo:
+                        error_msg = "No workspace directory (config.repo) is open."
+                        yield ConvEvent("action_result", {"id": aid, "error": error_msg})
+                        self._history.append({"role": "user", "content": f"(list_dir {aid} failed: {error_msg})"})
+                        continue
+                    target_path = act.path
+                    if not target_path or not target_path.strip():
+                        target_path = self.config.repo
+                    else:
+                        if not os.path.isabs(target_path):
+                            target_path = os.path.join(self.config.repo, target_path)
+                    if not is_safe_path(target_path, self.config.repo):
+                        error_msg = f"Path traversal attempt rejected: {act.path}"
+                        yield ConvEvent("action_result", {"id": aid, "error": error_msg})
+                        self._history.append({"role": "user", "content": f"(list_dir {aid} failed: {error_msg})"})
+                        continue
+                    try:
+                        if not os.path.exists(target_path):
+                            raise FileNotFoundError(f"Directory not found: {act.path}")
+                        if not os.path.isdir(target_path):
+                            raise IsADirectoryError(f"Path is not a directory: {act.path}")
+                        entries = []
+                        skip_names = {".git", "node_modules", ".venv", ".codegraph"}
+                        for entry in os.scandir(target_path):
+                            if entry.name in skip_names:
+                                continue
+                            is_dir = entry.is_dir()
+                            entries.append({
+                                "name": entry.name,
+                                "is_dir": is_dir,
+                                "size": entry.stat().st_size if not is_dir else 0
+                            })
+                        entries.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+                        text_list = []
+                        for e in entries:
+                            suffix = "/" if e["is_dir"] else ""
+                            size_str = f" ({e['size']} bytes)" if not e["is_dir"] else ""
+                            text_list.append(f"{e['name']}{suffix}{size_str}")
+                        result_text = "\n".join(text_list) if text_list else "(empty directory)"
+                        yield ConvEvent("action_result", {
+                            "id": aid, "num": 1, "types": ["dir"], "adapter": "local", "mode": "tool",
+                            "artifacts": [{"type": "dir", "headline": f"Listed {len(entries)} items in {act.path or '/'}"}],
+                        })
+                        self._history.append({"role": "user", "content": f"(list_dir {act.path or '/'} returned)\n{result_text}"})
+                    except Exception as e:
+                        yield ConvEvent("action_result", {"id": aid, "error": str(e)})
+                        self._history.append({"role": "user", "content": f"(list_dir {act.path or '/'} failed: {e})"})
+                    continue
                 # ---- MCP tool call branch -------------------------------------
                 if act.kind == "call_mcp":
                     if self._mcp is None:

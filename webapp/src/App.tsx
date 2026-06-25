@@ -30,7 +30,18 @@ export default function App() {
 
   const [showWizard, setShowWizard] = useState(false);
 
-  useEffect(() => { api.config().then(setConfig).catch(() => {}); }, []);
+  const fetchConfig = () => {
+    api.config().then(setConfig).catch(() => {});
+  };
+
+  useEffect(() => { fetchConfig(); }, []);
+  useEffect(() => {
+    window.addEventListener("harness-config-changed", fetchConfig);
+    return () => {
+      window.removeEventListener("harness-config-changed", fetchConfig);
+    };
+  }, []);
+
   useEffect(() => { api.jobs().then((j) => setJobCount(j.length)).catch(() => {}); }, [jobsRefresh]);
 
   // First-run behavior checking

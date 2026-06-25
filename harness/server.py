@@ -35,6 +35,17 @@ _WEB = Path(__file__).resolve().parent / "web"
 # One shared session per server process (single-user local app).
 _state_dir = os.environ.get("HARNESS_STATE_DIR", "")
 _cfg = HarnessConfig.from_env()
+_WORKSPACE_JSON = os.path.expanduser("~/.pmharness/workspace.json")
+if not os.environ.get("HARNESS_REPO") and os.path.exists(_WORKSPACE_JSON):
+    try:
+        with open(_WORKSPACE_JSON, "r") as _ws_f:
+            _ws_data = json.load(_ws_f)
+            if _ws_data.get("repo") and os.path.isdir(_ws_data["repo"]):
+                _cfg.repo = _ws_data["repo"]
+                os.environ["HARNESS_REPO"] = _ws_data["repo"]
+    except Exception:
+        pass
+
 if _state_dir:
     _cfg.state_dir = _state_dir
 
@@ -117,6 +128,61 @@ def _parse_bool(val) -> bool:
     return False
 
 
+_codegraph_status = "unsupported"
+
+
+def _index_codegraph_bg(repo_path: str):
+    global _codegraph_status
+    _codegraph_status = "indexing"
+    try:
+        import sys
+        import subprocess
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "puppetmaster", "codegraph", "init", "--index"],
+            cwd=repo_path,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+        def wait_and_update():
+            global _codegraph_status
+            try:
+                proc.wait(timeout=600)  # max 10 mins
+                if proc.returncode == 0:
+                    _codegraph_status = "ready"
+                else:
+                    _codegraph_status = "unsupported"
+            except Exception:
+                _codegraph_status = "unsupported"
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        threading.Thread(target=wait_and_update, daemon=True).start()
+    except Exception:
+        _codegraph_status = "unsupported"
+
+
+def _get_codegraph_status(repo_path: str) -> str:
+    global _codegraph_status
+    if not repo_path:
+        return "unsupported"
+    if _codegraph_status == "indexing":
+        return "indexing"
+
+    try:
+        import puppetmaster.codegraph as cg
+        if os.path.isdir(os.path.join(repo_path, ".codegraph")):
+            _codegraph_status = "ready"
+            return "ready"
+        else:
+            return "unsupported"
+    except Exception:
+        _codegraph_status = "unsupported"
+        return "unsupported"
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # quiet
         pass
@@ -174,7 +240,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/api/registry", "/api/roles", "/api/pilot/validate",
                       "/api/worktrees/add", "/api/worktrees/remove",
                       "/api/worktrees/prune", "/api/worktrees/max",
-                      "/api/hooks/add", "/api/hooks/update", "/api/hooks/remove"):
+                      "/api/hooks/add", "/api/hooks/update", "/api/hooks/remove",
+                      "/api/workspace/open"):
             return self._handle_post_json(u.path)
         return self._send(404, json.dumps({"error": "not found"}))
 
@@ -196,6 +263,63 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return self._send(400, json.dumps({"error": "invalid JSON"}))
         repo = _cfg.repo
+        if path == "/api/workspace/open":
+            import subprocess
+            target_repo = body.get("path", "").strip()
+            if not target_repo or not os.path.isdir(target_repo):
+                return self._send(400, json.dumps({"error": "Path is not an existing directory"}))
+
+            _cfg.repo = target_repo
+            os.environ["HARNESS_REPO"] = target_repo
+
+            ws_json_path = os.path.expanduser("~/.pmharness/workspace.json")
+            try:
+                os.makedirs(os.path.dirname(ws_json_path), exist_ok=True)
+                with open(ws_json_path, "w") as f:
+                    json.dump({"repo": target_repo}, f)
+                os.chmod(ws_json_path, 0o600)
+            except Exception:
+                pass
+
+            _rebuild_pilot_and_session()
+
+            is_git = False
+            branch = ""
+            try:
+                proc = subprocess.run(
+                    ["git", "-C", target_repo, "rev-parse", "--is-inside-work-tree"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if proc.returncode == 0:
+                    is_git = True
+                    proc_branch = subprocess.run(
+                        ["git", "-C", target_repo, "rev-parse", "--abbrev-ref", "HEAD"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if proc_branch.returncode == 0:
+                        branch = proc_branch.stdout.strip()
+            except Exception:
+                pass
+
+            has_codegraph = os.path.isdir(os.path.join(target_repo, ".codegraph"))
+            if not has_codegraph:
+                _index_codegraph_bg(target_repo)
+            else:
+                global _codegraph_status
+                try:
+                    import puppetmaster.codegraph as cg
+                    _codegraph_status = "ready"
+                except Exception:
+                    _codegraph_status = "unsupported"
+
+            return self._send(200, json.dumps({
+                "ok": True,
+                "repo": target_repo,
+                "branch": branch,
+                "is_git": is_git,
+                "codegraph": _get_codegraph_status(target_repo)
+            }))
+
         if path == "/api/workspaces/switch":
             return self._send(200, json.dumps(_ws.switch_workspace(repo, body.get("name",""),
                               allow_dirty=_parse_bool(body.get("allow_dirty")))))
@@ -618,6 +742,34 @@ class Handler(BaseHTTPRequestHandler):
                 {"slug": r.slug, "text": r.text, "scope": r.scope,
                  "state": r.state, "source": r.source}
                 for r in _rules.list()]))
+        if u.path == "/api/workspace":
+            repo = _cfg.repo
+            is_git = False
+            branch = ""
+            if repo and os.path.isdir(repo):
+                import subprocess
+                try:
+                    proc = subprocess.run(
+                        ["git", "-C", repo, "rev-parse", "--is-inside-work-tree"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if proc.returncode == 0:
+                        is_git = True
+                        proc_branch = subprocess.run(
+                            ["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if proc_branch.returncode == 0:
+                            branch = proc_branch.stdout.strip()
+                except Exception:
+                    pass
+            cg_status = _get_codegraph_status(repo) if repo else "unsupported"
+            return self._send(200, json.dumps({
+                "repo": repo,
+                "branch": branch,
+                "is_git": is_git,
+                "codegraph_status": cg_status
+            }))
         if u.path == "/api/config":
             return self._send(200, json.dumps({
                 "driver": _cfg.driver, "reach": _cfg.reach,

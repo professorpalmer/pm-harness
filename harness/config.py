@@ -40,13 +40,18 @@ class HarnessConfig:
                 return os.environ[env_key]
             return file_cfg.get(file_key, default)
 
+        repo_val = pick("HARNESS_REPO", "repo", "")
+        has_explicit_adapter = ("HARNESS_SWARM_ADAPTER" in os.environ) or ("swarm_adapter" in file_cfg)
+        default_adapter = "openai" if (repo_val and not has_explicit_adapter) else "demo"
+        swarm_adapter_val = pick("HARNESS_SWARM_ADAPTER", "swarm_adapter", default_adapter)
+
         return cls(
             driver=pick("HARNESS_DRIVER", "driver", "qwen3-coder-30b"),
             reach=pick("HARNESS_REACH", "reach", "openrouter"),
             budget=int(pick("HARNESS_BUDGET", "budget", 3)),
             state_dir=pick("HARNESS_STATE_DIR", "state_dir", ""),
-            repo=pick("HARNESS_REPO", "repo", ""),
-            swarm_adapter=pick("HARNESS_SWARM_ADAPTER", "swarm_adapter", "demo"),
+            repo=repo_val,
+            swarm_adapter=swarm_adapter_val,
             wiki_url=pick("HARNESS_WIKI_URL", "wiki_url", ""),
             wiki_auto=str(pick("HARNESS_WIKI_AUTO", "wiki_auto", "")).strip() in ("1","true","yes","True"),
         )

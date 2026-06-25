@@ -162,6 +162,9 @@ export const api = {
   pruneWorktrees: () => postJSON<{ ok: boolean }>("/api/worktrees/prune", {}),
   setWorktreeMax: (max: number) => postJSON<{ ok: boolean }>("/api/worktrees/max", { max }),
 
+  openWorkspace: (path: string) => postJSON<{ ok: boolean; repo: string; branch: string; is_git: boolean; codegraph: "indexing" | "ready" | "unsupported" }>("/api/workspace/open", { path }),
+  getWorkspace: () => getJSON<{ repo: string; branch: string; is_git: boolean; codegraph_status: string }>("/api/workspace"),
+
   getHooks: () => getJSON<{ hooks: Hook[]; events: string[] }>("/api/hooks"),
   addHook: (event: string, command: string) => postJSON<Hook>("/api/hooks/add", { event, command }),
   updateHook: (id: string, patch: { enabled?: boolean; command?: string }) => postJSON<Hook>("/api/hooks/update", { id, ...patch }),

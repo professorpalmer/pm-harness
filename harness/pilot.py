@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-VALID_ACTION_KINDS = {"run_swarm", "call_mcp"}
+VALID_ACTION_KINDS = {"run_swarm", "call_mcp", "read_file", "write_file", "run_command", "list_dir"}
 
 
 @dataclass
@@ -47,6 +47,9 @@ class PilotAction:
     roles: list = field(default_factory=list)
     tool: str = ""              # call_mcp: qualified MCP tool name (server.tool)
     arguments: dict = field(default_factory=dict)  # call_mcp: tool arguments
+    path: str = ""
+    content: str = ""
+    command: str = ""
 
     def validate(self) -> "PilotAction":
         if self.kind not in VALID_ACTION_KINDS:
@@ -55,6 +58,10 @@ class PilotAction:
             raise PilotError("run_swarm action requires a non-empty goal")
         if self.kind == "call_mcp" and not (self.tool or "").strip():
             raise PilotError("call_mcp action requires a 'tool' (server.tool)")
+        if self.kind in ("read_file", "write_file") and not (self.path or "").strip():
+            raise PilotError(f"{self.kind} action requires a 'path'")
+        if self.kind == "run_command" and not (self.command or "").strip():
+            raise PilotError("run_command action requires a 'command'")
         if self.roles and not isinstance(self.roles, list):
             raise PilotError("roles must be a list")
         return self
@@ -97,8 +104,12 @@ def _coerce_actions(raw_actions) -> list:
             roles = [roles]
         if not isinstance(arguments, dict):
             arguments = {}
+        path = a.get("path") or ""
+        content = a.get("content") or ""
+        command = a.get("command") or ""
         actions.append(PilotAction(kind=str(kind), goal=str(goal), roles=roles,
-                                   tool=str(tool), arguments=arguments).validate())
+                                   tool=str(tool), arguments=arguments,
+                                   path=str(path), content=str(content), command=str(command)).validate())
     return actions
 
 
@@ -187,29 +198,28 @@ def _prose_outside_json(text: str) -> str:
 
 
 PILOT_SYSTEM = """You are the pilot of a Puppetmaster-orchestrated coding harness.
-You talk directly with the user like a senior engineer pairing with them: explain
-your plan in plain prose, and when you need to investigate the codebase, fire an
-orchestration swarm.
+You talk directly with the user like a senior engineer pairing with them.
 
-You drive a fan-out engine. You do NOT read files yourself -- you dispatch swarms
-that read the real code (with CodeGraph) and return structured artifacts
-(findings/risks/decisions). Your job is to converse, decide WHEN to investigate,
-write a sharp swarm brief, and explain what comes back.
+You have direct access to a local CodeGraph-indexed workspace and can explore/edit it using these real actions:
+- `read_file`: read a file's contents from the workspace. Requires `path`.
+- `write_file`: write/create a file atomically. Requires `path` and `content`.
+- `run_command`: run a terminal shell command. Requires `command`.
+- `list_dir`: list the files and folders inside a directory. `path` is optional.
+- `run_swarm`: dispatch a parallel agent swarm for complex/broad investigations. Requires `goal`.
 
 Respond ONLY with a JSON object:
 
-  {"say": "<prose for the user>", "actions": [ {"kind":"run_swarm","goal":"<a
-  sharp, self-contained investigation brief>","roles":["explore"]} ]}
+  {
+    "say": "<prose for the user describing your reasoning and plan>",
+    "actions": [
+      {"kind": "read_file", "path": "src/main.py"}
+    ]
+  }
 
 Rules:
-- `say` is always present: talk to the user in natural prose.
-- Use actions ONLY when real codebase investigation is needed. For greetings,
-  trivia, or explaining prior findings, emit actions: [].
-- Each run_swarm goal is a DISTILLED brief: state exactly what to investigate and
-  what to report. The worker never sees this conversation, so make the goal
-  self-contained.
-- After a swarm returns artifacts, you'll be called again: explain the findings to
-  the user in `say`, and either fire a narrowed follow-up swarm or finish (no
-  actions) if the objective is met.
-- Be concise and concrete. Never invent file contents; rely on the artifacts.
+- `say` is always present: talk to the user in natural prose. Explain what you're doing.
+- Prefer your direct tools (read_file, write_file, run_command, list_dir) for precise actions and testing.
+- Use `run_swarm` when you need a team of workers to analyze a broad issue or scan the codebase.
+- Always verify your work by running tests via `run_command` after editing.
+- Be concise and concrete. Never invent file contents; read the files first.
 """

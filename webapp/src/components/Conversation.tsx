@@ -7,7 +7,8 @@ type Msg = { role: "user" | "assistant"; text: string };
 type Card = {
   id: string; goal: string; cwd?: string | null;
   running: boolean; open: boolean;
-  result?: { job_id: string; num: number; types: string[]; adapter: string;
+  kind?: string;
+  result?: { job_id?: string; num: number; types: string[]; adapter: string;
              artifacts: { type: string; headline: string }[]; error?: string };
 };
 type Item = { kind: "msg"; msg: Msg } | { kind: "card"; card: Card };
@@ -142,7 +143,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
       } else if (ev.kind === "action_start") {
         setStatus("executing");
         setItems((p) => [...p, { kind: "card", card: {
-          id: d.id, goal: d.goal, cwd: d.cwd, running: true, open: true } }]);
+          id: d.id, goal: d.goal, cwd: d.cwd, running: true, open: true, kind: d.kind } }]);
       } else if (ev.kind === "action_result") {
         setStatus("thinking");
         setCard(d.id, { running: false, open: false, result: d });
@@ -322,7 +323,7 @@ function ActionCard({ card, onToggle }: { card: Card; onToggle: () => void }) {
     <div className="border border-edge rounded-lg bg-panel2 overflow-hidden">
       <button onClick={onToggle} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-panel text-left">
         {card.running ? <Loader2 size={12} className="animate-spin text-accent" /> : <span className="w-2 h-2 rounded-full bg-good" />}
-        <span className="flex-1 text-[13px] truncate">Ran <b>swarm</b> &middot; {card.goal}</span>
+        <span className="flex-1 text-[13px] truncate">Ran <b>{card.kind || "swarm"}</b> &middot; {card.goal}</span>
         <ChevronRight size={13} className={`text-muted transition ${card.open ? "rotate-90" : ""}`} />
       </button>
       {card.open && (
@@ -332,7 +333,7 @@ function ActionCard({ card, onToggle }: { card: Card; onToggle: () => void }) {
           {card.result?.error && <div className="text-risk mt-1">error: {card.result.error}</div>}
           {card.result && !card.result.error && (
             <>
-              <KV k="job" v={card.result.job_id} />
+              {card.result.job_id && <KV k="job" v={card.result.job_id || ""} />}
               <KV k="found" v={`${card.result.num} artifacts · ${card.result.types.join(", ")}`} />
               {card.result.adapter === "demo" && <div className="text-warn text-[10px] mt-1">demo substrate -- not real codebase analysis</div>}
               {card.result.artifacts.map((a, i) => (

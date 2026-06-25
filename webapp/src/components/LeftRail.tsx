@@ -19,6 +19,14 @@ export default function LeftRail({ jobsRefresh, onSessionChange }: {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [archivedExpanded, setArchivedExpanded] = useState(false);
 
+  const [openPath, setOpenPath] = useState("");
+  const [opening, setOpening] = useState(false);
+  const [workspaceInfo, setWorkspaceInfo] = useState<any>(null);
+
+  const fetchWorkspace = () => {
+    api.getWorkspace().then(setWorkspaceInfo).catch(() => {});
+  };
+
   const loadWs = () => api.workspaces().then(setWorkspaces).catch(() => {});
   const loadSess = () => api.sessions().then((sess) => {
     setSessions(sess);
@@ -29,7 +37,28 @@ export default function LeftRail({ jobsRefresh, onSessionChange }: {
       onSessionChange?.("");
     }
   }).catch(() => {});
-  useEffect(() => { loadWs(); loadSess(); }, []);
+  useEffect(() => { loadWs(); loadSess(); fetchWorkspace(); }, []);
+
+  const handleOpenFolder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!openPath.trim()) return;
+    setOpening(true);
+    try {
+      const res = await api.openWorkspace(openPath);
+      if (res.ok) {
+        setOpenPath("");
+        fetchWorkspace();
+        await loadWs();
+        window.dispatchEvent(new Event("harness-config-changed"));
+      } else {
+        alert("Failed to open directory: " + (res as any).error);
+      }
+    } catch (err: any) {
+      alert("Error opening directory: " + (err?.error || err?.message || err));
+    } finally {
+      setOpening(false);
+    }
+  };
   useEffect(() => { api.jobs().then(setJobs).catch(() => {}); }, [jobsRefresh]);
 
   useEffect(() => {
@@ -95,6 +124,39 @@ export default function LeftRail({ jobsRefresh, onSessionChange }: {
         style={{ paddingTop: 34, paddingBottom: 12, WebkitAppRegion: "drag" } as React.CSSProperties}>
         <span className="bg-accent/15 text-accent font-bold px-1.5 py-0.5 rounded-md text-[11px] tracking-tight">PM</span>
         <span className="font-medium text-[13px] text-txt/90">Puppetmaster</span>
+      </div>
+
+      {/* OPEN WORKSPACE FOLDER */}
+      <div className="px-4 py-2.5 border-b border-edge bg-panel2/10">
+        <div className="text-[10px] uppercase tracking-wider text-faint font-semibold mb-1.5">Opened Folder</div>
+        {workspaceInfo?.repo ? (
+          <div className="text-[11px] font-mono break-all text-muted bg-bg p-2 rounded border border-edge/40 mb-2">
+            {workspaceInfo.repo}
+            {workspaceInfo.codegraph_status && (
+              <div className="text-[9px] mt-1 text-faint flex items-center gap-1">
+                CodeGraph: <span className={workspaceInfo.codegraph_status === "ready" ? "text-good font-semibold" : workspaceInfo.codegraph_status === "indexing" ? "text-warn animate-pulse font-semibold" : "text-faint font-semibold"}>{workspaceInfo.codegraph_status}</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-[11px] text-faint italic mb-2">No folder open</div>
+        )}
+        <form onSubmit={handleOpenFolder} className="flex gap-1.5">
+          <input
+            type="text"
+            placeholder="Absolute path to folder..."
+            value={openPath}
+            onChange={(e) => setOpenPath(e.target.value)}
+            className="flex-1 min-w-0 bg-bg border border-edge rounded px-1.5 py-1 text-[11px] text-txt focus:outline-none focus:border-accent"
+          />
+          <button
+            type="submit"
+            disabled={opening}
+            className="bg-accent/15 hover:bg-accent/25 text-accent text-[11px] font-semibold px-2 py-1 rounded transition disabled:opacity-50 shrink-0"
+          >
+            {opening ? "Opening..." : "Open"}
+          </button>
+        </form>
       </div>
 
       {/* WORKSPACES */}
