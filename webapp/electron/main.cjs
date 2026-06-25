@@ -152,7 +152,11 @@ function createWindow() {
   });
   // expose the backend port to the renderer for any direct needs
   win.webContents.on("did-finish-load", () => {
-    win.webContents.executeJavaScript(`window.__HARNESS_PORT__=${backendPort};`).catch(() => {});
+    let tok = "";
+    try { tok = fs.readFileSync(path.join(os.homedir(), ".pmharness", "token"), "utf8").trim(); } catch {}
+    win.webContents.executeJavaScript(
+      `window.__HARNESS_PORT__=${backendPort};window.__HARNESS_TOKEN__=${JSON.stringify(tok)};`
+    ).catch(() => {});
   });
   if (isDev) win.loadURL(process.env.PMHARNESS_DEV_SERVER);
   else win.loadFile(path.join(__dirname, "..", "dist", "index.html"));

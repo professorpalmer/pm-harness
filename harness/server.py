@@ -13,6 +13,7 @@ import os
 import threading
 import queue
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import secrets as _secrets
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 import cgi
@@ -56,15 +57,69 @@ _rules = RuleStore()
 _UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "harness-uploads")
 os.makedirs(_UPLOAD_DIR, exist_ok=True)
 
+# Per-process auth token (defense-in-depth). Written chmod-600 so the local
+# client (Electron main / served page) can read it; required on mutating
+# endpoints. Origin/Host validation below is the primary anti-RCE guard.
+_TOKEN = os.environ.get("HARNESS_TOKEN") or _secrets.token_hex(16)
+_TOKEN_FILE = os.path.join(os.path.expanduser("~/.pmharness"), "token")
+try:
+    os.makedirs(os.path.dirname(_TOKEN_FILE), exist_ok=True)
+    with open(_TOKEN_FILE, "w") as _tf2:
+        _tf2.write(_TOKEN)
+    os.chmod(_TOKEN_FILE, 0o600)
+except OSError:
+    pass
+
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def _host_ok(host_header: str) -> bool:
+    """Defeat DNS-rebinding: the Host must be a literal loopback name. A rebound
+    attacker domain (evil.com -> 127.0.0.1) shows its own name in Host."""
+    if not host_header:
+        return False
+    host = host_header.rsplit(":", 1)[0] if host_header.count(":") <= 1 else host_header.rsplit(":", 1)[0]
+    return host in _ALLOWED_HOSTS
+
+
+def _origin_ok(origin: str) -> bool:
+    """A malicious webpage sends its own Origin (https://evil.com) on cross-origin
+    requests -> reject. Same-origin requests omit Origin; Electron file:// sends
+    'null'. Both allowed."""
+    if not origin or origin == "null":
+        return True
+    try:
+        from urllib.parse import urlparse as _up
+        h = _up(origin).hostname
+        return h in _ALLOWED_HOSTS
+    except Exception:
+        return False
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # quiet
         pass
 
     def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # No wildcard. Reflect the Origin only when it is a loopback origin, so a
+        # cross-origin attacker page can never read responses.
+        origin = self.headers.get("Origin", "")
+        if origin and origin != "null" and _origin_ok(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Harness-Token")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+
+    def _guard(self) -> bool:
+        """Reject cross-origin / rebound / unauthenticated requests. Returns True
+        if the request should be BLOCKED (and sends the 403)."""
+        if not _host_ok(self.headers.get("Host", "")):
+            self._send(403, json.dumps({"error": "host not allowed"})); return True
+        if not _origin_ok(self.headers.get("Origin", "")):
+            self._send(403, json.dumps({"error": "origin not allowed"})); return True
+        return False
+
+    def _token_ok(self) -> bool:
+        return self.headers.get("X-Harness-Token", "") == _TOKEN
 
     def _send(self, code, body, ctype="application/json"):
         data = body.encode() if isinstance(body, str) else body
@@ -79,6 +134,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204); self._cors(); self.end_headers()
 
     def do_POST(self):
+        if self._guard():
+            return
+        if not self._token_ok():
+            return self._send(403, json.dumps({"error": "missing or bad token"}))
         u = urlparse(self.path)
         if u.path == "/api/upload":
             return self._handle_upload()
@@ -183,7 +242,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
-            return self._send(200, (_WEB / "index.html").read_text(), "text/html")
+            html = (_WEB / "index.html").read_text()
+            # inject the auth token so the same-origin page can call the API
+            meta = '<meta name="harness-token" content="%s">' % _TOKEN
+            html = html.replace("</head>", meta + "</head>", 1) if "</head>" in html else meta + html
+            return self._send(200, html, "text/html")
         if u.path == "/app.js":
             return self._send(200, (_WEB / "app.js").read_text(),
                               "application/javascript")
@@ -218,6 +281,14 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(u.query)
             jid = q.get("job_id", [""])[0]
             return self._send(200, json.dumps(_session.state().job_artifacts(jid)))
+        # action endpoints (SSE) mutate state / spend budget -> guard them.
+        if u.path in ("/api/run", "/api/chat", "/api/auto"):
+            if self._guard():
+                return
+            from urllib.parse import parse_qs as _pq
+            qtok = _pq(u.query).get("token", [""])[0]
+            if qtok != _TOKEN:
+                return self._send(403, json.dumps({"error": "missing or bad token"}))
         if u.path == "/api/run":
             q = parse_qs(u.query)
             imgs = [p for p in q.get("images", [""])[0].split("|") if p]

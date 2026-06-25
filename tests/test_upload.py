@@ -46,8 +46,11 @@ def test_upload_then_config_roundtrip():
         png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
                             "890000000a49444154789c6360000002000154a24f3f0000000049454e44ae426082")
         body, ctype = _multipart("file", "x.png", png)
+        import harness.server as _srv
         req = urllib.request.Request(base + "/api/upload", data=body,
-                                     headers={"Content-Type": ctype}, method="POST")
+                                     headers={"Content-Type": ctype,
+                                              "X-Harness-Token": _srv._TOKEN},
+                                     method="POST")
         res = json.load(urllib.request.urlopen(req, timeout=10))
         assert res["saved"] and res["saved"][0]["path"].endswith(".png")
         assert os.path.exists(res["saved"][0]["path"])

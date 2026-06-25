@@ -10,9 +10,26 @@ export type StreamEvent = { kind: string; data?: any };
 // Detect an Electron preload bridge if present (set in a future desktop build).
 const ipc: any = (typeof window !== "undefined" && (window as any).harnessIPC) || null;
 
+// Per-process auth token (defense-in-depth against unauthenticated localhost
+// access). Electron injects window.__HARNESS_TOKEN__; the served web page reads
+// it from a meta tag. Host/Origin validation server-side is the primary guard.
+function authToken(): string {
+  if (typeof window === "undefined") return "";
+  const w = window as any;
+  if (w.__HARNESS_TOKEN__) return w.__HARNESS_TOKEN__;
+  const meta = document.querySelector('meta[name="harness-token"]');
+  return (meta && meta.getAttribute("content")) || "";
+}
+
+function withToken(path: string): string {
+  const tok = authToken();
+  if (!tok) return path;
+  return path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(tok);
+}
+
 export async function getJSON<T = any>(path: string): Promise<T> {
   if (ipc?.getJSON) return ipc.getJSON(path);
-  const r = await fetch(path);
+  const r = await fetch(path, { headers: { "X-Harness-Token": authToken() } });
   if (!r.ok) throw new Error(`${path} -> ${r.status}`);
   return r.json();
 }
@@ -21,7 +38,7 @@ export async function postJSON<T = any>(path: string, body: any): Promise<T> {
   if (ipc?.postJSON) return ipc.postJSON(path, body);
   const r = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Harness-Token": authToken() },
     body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`${path} -> ${r.status}`);
@@ -37,7 +54,7 @@ export function stream(
   onError?: (e: any) => void
 ): () => void {
   if (ipc?.stream) return ipc.stream(path, onEvent, onDone, onError);
-  const es = new EventSource(path);
+  const es = new EventSource(withToken(path));
   es.onmessage = (m) => {
     let ev: StreamEvent;
     try { ev = JSON.parse(m.data); } catch { return; }
@@ -53,7 +70,7 @@ export async function uploadFile(file: File): Promise<{ path: string; name: stri
   if (ipc?.uploadFile) return ipc.uploadFile(file);
   const fd = new FormData();
   fd.append("file", file);
-  const r = await fetch("/api/upload", { method: "POST", body: fd });
+  const r = await fetch("/api/upload", { method: "POST", body: fd, headers: { "X-Harness-Token": authToken() } });
   const j = await r.json();
   return j.saved || [];
 }

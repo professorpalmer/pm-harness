@@ -105,7 +105,11 @@ class SkillStore:
             (self.root / st).mkdir(parents=True, exist_ok=True)
 
     def _path(self, state: str, slug: str) -> Path:
-        return self.root / state / f"{slug}.md"
+        # SECURITY: sanitize on the lookup path, not just on create. The server
+        # passes user-supplied slugs straight here; without this, "../../x" would
+        # escape the skills dir for read/write.
+        safe = _slug(slug)
+        return self.root / state / f"{safe}.md"
 
     def _find(self, slug: str) -> Optional[Path]:
         for st in STATES:

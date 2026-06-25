@@ -76,3 +76,20 @@ def test_verification_findings_excluded(tmp_path):
                 {"type": "finding", "headline": "real"}]
     r = distill_session(pilot, "obj", findings, s)
     assert r["status"] == "skipped"
+
+
+
+def test_skillstore_path_traversal_blocked(tmp_path):
+    """A malicious slug must not escape the skills root for read OR write."""
+    import os
+    from harness.skill_store import SkillStore
+    s = SkillStore(root=str(tmp_path / "skills"))
+    outside = tmp_path / "evil.md"
+    # attempt to write outside via set_state on a traversal slug -> must not create it
+    s.set_state("../../evil", "active")
+    assert not outside.exists(), "traversal slug escaped the skills dir"
+    # get with a traversal slug must not read an arbitrary file
+    (tmp_path / "secret.md").write_text("---\nname: secret\n---\nsensitive")
+    got = s.get("../secret")
+    # sanitized slug becomes 'secret' under the skills root, which does not exist
+    assert got is None
