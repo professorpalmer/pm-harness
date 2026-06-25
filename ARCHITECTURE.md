@@ -122,8 +122,11 @@ restarts for free.
   card + session jobs; center driver-loop conversation; right durable-state
   artifacts. Image upload (button + drag/drop), distinct error cards, inline
   vision events, history reload.
-- **CLI** (`harness/cli.py`): `harness "<task>"` with --driver/--budget/--image/
-  --json and exit codes (0 clean, 1 error, 2 forced). Same Session core.
+- **CLI** (`harness/cli.py`): one entrypoint with subcommands --
+  `harness "<task>"` (run), `harness gui` (UI), `harness eval` (the Stage 1-4
+  ladder), `harness doctor` (health check), `harness --version`. Run flags:
+  --driver/--budget/--image/--json; exit codes 0 clean / 1 error / 2 forced.
+  Same Session core; graceful missing-key handling (preflight) on every path.
 
 ## 8. The evaluation ladder (how the driver choice was justified)
 

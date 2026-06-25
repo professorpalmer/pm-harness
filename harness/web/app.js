@@ -33,6 +33,14 @@ function addTurn(action, headHtml, bodyHtml, isErr){
   return t;
 }
 
+function addThinking(label){
+  const t = el("turn thinking");
+  t.innerHTML = `<div class="turn-head"><span class="dots"><i></i><i></i><i></i></span>`+
+    `<span class="muted">${esc(label||"driver thinking...")}</span></div>`;
+  stream.appendChild(t); stream.scrollTop = stream.scrollHeight;
+  return t;
+}
+
 function addUser(text, bodyHtml){
   const t = el("turn user");
   const h = el("turn-head");
@@ -100,10 +108,14 @@ function run(prompt){
   pending=[]; renderChips();
   let url = "/api/run?prompt="+encodeURIComponent(prompt);
   if(imgs.length) url += "&images="+encodeURIComponent(imgs.join("|"));
+  let thinking = addThinking();
   const es = new EventSource(url); activeES = es;
   $("#send").hidden = true; $("#stop").hidden = false;
   es.onmessage = (m)=>{
     const ev = JSON.parse(m.data);
+    if(thinking){ thinking.remove(); thinking = null; }
+    // re-show thinking after a swarm's artifacts while the driver decides next
+    const reThink = (ev.kind==="artifacts");
     if(ev.kind==="done"){ es.close(); activeES=null; running=false;
       $("#send").disabled=false; $("#send").hidden=false; $("#stop").hidden=true;
       if(pill.textContent==="running") setStatus("done"); refreshJobs(); return; }
@@ -115,18 +127,21 @@ function run(prompt){
       else addTurn("executing", `vision · transcribing ${d.count||""} image(s)`, null);
     } else if(ev.kind==="intent"){
       const rep = d.repairs_used ? ` <span class="muted">(repaired x${d.repairs_used})</span>`:"";
+      setStatus("running");
       if(d.action==="run_swarm")
         addTurn("run_swarm", `turn ${ev.turn} · <span class="muted">${d.tokens_out} tok</span>${rep}`,
           `<div class="goal">${esc(d.goal)}</div><div class="rationale">${esc(d.rationale)}</div>`);
       else
         addTurn(d.action, `turn ${ev.turn}${rep}`, `<div class="rationale">${esc(d.rationale)}</div>`);
     } else if(ev.kind==="executing"){
+      setStatus("executing");
       addTurn("executing", `Puppetmaster running`, `<div class="goal">${esc(d.goal)}</div>`);
     } else if(ev.kind==="artifacts"){
       const body = (d.artifacts||[]).map(a=>
         `<div class="art"><span class="t">${esc(a.type)}</span>${esc(a.headline)}</div>`).join("");
       addTurn("run_swarm", `job ${esc(d.job_id)} · ${d.num} artifacts · ${esc((d.types||[]).join(", "))}`, body);
       pushArtifacts(d.artifacts);
+      thinking = addThinking("driver reviewing findings...");
     } else if(ev.kind==="final"){
       addTurn(d.action, d.forced?"final (forced)":"final", `<div class="rationale">${esc(d.rationale)}</div>`);
       setStatus(d.forced?"error":"done");

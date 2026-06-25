@@ -79,6 +79,9 @@ def main(argv=None) -> int:
     if raw and raw[0] == "eval":
         from .eval_cmd import run_eval
         return run_eval(raw[1:])
+    if raw and raw[0] == "doctor":
+        from .doctor import run_doctor
+        return run_doctor(raw[1:])
 
     ap = argparse.ArgumentParser(prog="harness",
         description="PM-native harness. Run a task, or `harness gui` for the UI.")

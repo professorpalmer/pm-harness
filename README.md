@@ -206,3 +206,16 @@ Config layering (env wins over file wins over defaults): set defaults in
 with `HARNESS_DRIVER=...`. Missing-key is handled gracefully -- the CLI and GUI
 surface a clear, actionable message (which env var to set, or use the stub
 driver) instead of a stack trace.
+
+
+## Health check
+
+```bash
+harness doctor          # verify seam, store, driver key, vision key -- one shot
+harness doctor --ping   # also make a live 1-token call to the driver
+```
+
+Reports ok / warn / fail per check with an actionable hint. The Puppetmaster
+seam and durable store are hard checks (fail -> exit 1); a missing driver or
+vision key is a warning (the harness still loads, stub drivers still work). Run
+this first on a new machine to see exactly what to set.
