@@ -1217,7 +1217,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._stream_run(q.get("prompt", [""])[0], imgs)
         if u.path == "/api/chat":
             q = parse_qs(u.query)
-            return self._stream_chat(q.get("message", [""])[0])
+            imgs = []
+            upload_dir_real = os.path.realpath(_UPLOAD_DIR)
+            for p in q.get("images", [""])[0].split("|"):
+                if not p:
+                    continue
+                real_p = os.path.realpath(p)
+                try:
+                    if os.path.commonpath([upload_dir_real, real_p]) == upload_dir_real:
+                        imgs.append(p)
+                    else:
+                        return self._send(400, json.dumps({"error": f"Invalid image path: {p}"}))
+                except ValueError:
+                    return self._send(400, json.dumps({"error": f"Invalid image path: {p}"}))
+            return self._stream_chat(q.get("message", [""])[0], imgs)
         if u.path == "/api/terminal/stream":
             q = parse_qs(u.query)
             return self._stream_terminal(q.get("id", [""])[0])
@@ -1435,7 +1448,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _stream_chat(self, message: str):
+    def _stream_chat(self, message: str, images=None):
         """Stream the conversational PILOT loop: prose messages + collapsible
         action cards (run_swarm) + assistant_done."""
         self.send_response(200)
@@ -1447,19 +1460,19 @@ class Handler(BaseHTTPRequestHandler):
         if _sessions.active and message:
             from .sessions import derive_title
             _sessions.set_title_if_default(_sessions.active, derive_title(message))
-
+ 
         pre = _pilot_preflight()
         if pre:
             self.wfile.write(f"data: {json.dumps({'kind':'error','data':{'error':pre}})}\n\n".encode())
             self.wfile.write(b"data: {\"kind\": \"done\"}\n\n")
             self.wfile.flush()
             return
-
+ 
         from .hooks import run_hooks
         ctx = {"session_id": _sessions.active or "", "message": message}
         run_hooks("preRun", ctx)
         try:
-            for ev in _pilot.send(message):
+            for ev in _pilot.send(message, images=images or None):
                 payload = json.dumps({"kind": ev.kind, "data": ev.data})
                 self.wfile.write(f"data: {payload}\n\n".encode())
                 self.wfile.flush()

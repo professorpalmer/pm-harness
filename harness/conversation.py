@@ -167,18 +167,37 @@ class ConversationalSession:
         """Signal any in-flight run_auto/send to stop at the next checkpoint."""
         self._cancel.set()
 
-    def send(self, user_message: str) -> Iterator[ConvEvent]:
+    def send(self, user_message: str, images: Optional[list] = None) -> Iterator[ConvEvent]:
         """Process one user message: drive the pilot loop until it yields back."""
         if not self._busy.acquire(blocking=False):
             yield ConvEvent("error", {"error": "session busy: another request is in flight"})
             return
         try:
-            yield from self._send_locked(user_message)
+            yield from self._send_locked(user_message, images=images)
         finally:
             self._busy.release()
 
-    def _send_locked(self, user_message: str) -> Iterator[ConvEvent]:
-        self._history.append({"role": "user", "content": user_message})
+    def _send_locked(self, user_message: str, images: Optional[list] = None) -> Iterator[ConvEvent]:
+        processed_message = user_message
+        if images:
+            from .vision import transcribe_images
+            yield ConvEvent("vision", {"count": len(images), "status": "transcribing"})
+            results = transcribe_images(images)
+            blocks = []
+            for path, r in zip(images, results):
+                if r.error:
+                    yield ConvEvent("vision", {"path": path, "error": r.error})
+                else:
+                    blocks.append(f"[Image: {path}]\n{r.text}")
+                    yield ConvEvent("vision", {"path": path,
+                        "chars": len(r.text), "model": r.model,
+                        "preview": r.text[:200]})
+            if blocks:
+                processed_message = ("The user attached image(s). Transcription(s) below "
+                                     "(you cannot see the image, only this text):\n\n"
+                                     + "\n\n".join(blocks) + "\n\n---\n" + user_message)
+
+        self._history.append({"role": "user", "content": processed_message})
         swarms = 0
         action_seq = 0
         demo_swarms = 0  # count swarms that returned the demo substrate
@@ -251,6 +270,12 @@ class ConversationalSession:
                     act_goal = act.command
                 elif act.kind == "call_mcp":
                     act_goal = act.tool
+                elif act.kind == "web_search":
+                    act_goal = act.query
+                elif act.kind == "web_fetch":
+                    act_goal = act.url
+                elif act.kind == "read_pdf":
+                    act_goal = act.path or act.url
 
                 yield ConvEvent("action_start", {
                     "id": aid, "kind": act.kind, "goal": act_goal or act.tool,
@@ -413,6 +438,67 @@ class ConversationalSession:
                     except Exception as e:
                         yield ConvEvent("action_result", {"id": aid, "error": str(e)})
                         self._history.append({"role": "user", "content": f"(list_dir {act.path or '/'} failed: {e})"})
+                    continue
+                # ---- web_search branch ----------------------------------------
+                if act.kind == "web_search":
+                    from .web_tools import web_search
+                    try:
+                        result_text = web_search(act.query)
+                        yield ConvEvent("action_result", {
+                            "id": aid, "num": 1, "types": ["web_search"], "adapter": "local", "mode": "tool",
+                            "artifacts": [{"type": "web_search", "headline": f"Searched for '{act.query}'"}],
+                        })
+                        self._history.append({"role": "user", "content": f"(web_search '{act.query}' returned)\n{result_text}"})
+                    except Exception as e:
+                        yield ConvEvent("action_result", {"id": aid, "error": str(e)})
+                        self._history.append({"role": "user", "content": f"(web_search '{act.query}' failed: {e})"})
+                    continue
+                # ---- web_fetch branch -----------------------------------------
+                if act.kind == "web_fetch":
+                    from .web_tools import web_fetch
+                    try:
+                        result_text = web_fetch(act.url)
+                        yield ConvEvent("action_result", {
+                            "id": aid, "num": 1, "types": ["web_fetch"], "adapter": "local", "mode": "tool",
+                            "artifacts": [{"type": "web_fetch", "headline": f"Fetched {act.url}"}],
+                        })
+                        self._history.append({"role": "user", "content": f"(web_fetch '{act.url}' returned)\n{result_text}"})
+                    except Exception as e:
+                        yield ConvEvent("action_result", {"id": aid, "error": str(e)})
+                        self._history.append({"role": "user", "content": f"(web_fetch '{act.url}' failed: {e})"})
+                    continue
+                # ---- read_pdf branch ------------------------------------------
+                if act.kind == "read_pdf":
+                    from .web_tools import read_pdf
+                    target = act.path or act.url
+                    is_remote = target.startswith(("http://", "https://"))
+                    
+                    if not is_remote:
+                        if not self.config.repo:
+                            error_msg = "No workspace directory (config.repo) is open."
+                            yield ConvEvent("action_result", {"id": aid, "error": error_msg})
+                            self._history.append({"role": "user", "content": f"(read_pdf {aid} failed: {error_msg})"})
+                            continue
+                        target_path = act.path
+                        if not os.path.isabs(target_path):
+                            target_path = os.path.join(self.config.repo, target_path)
+                        if not is_safe_path(target_path, self.config.repo):
+                            error_msg = f"Path traversal attempt rejected: {act.path}"
+                            yield ConvEvent("action_result", {"id": aid, "error": error_msg})
+                            self._history.append({"role": "user", "content": f"(read_pdf {aid} failed: {error_msg})"})
+                            continue
+                        target = target_path
+
+                    try:
+                        result_text = read_pdf(target)
+                        yield ConvEvent("action_result", {
+                            "id": aid, "num": 1, "types": ["read_pdf"], "adapter": "local", "mode": "tool",
+                            "artifacts": [{"type": "read_pdf", "headline": f"Read PDF from {act.path or act.url}"}],
+                        })
+                        self._history.append({"role": "user", "content": f"(read_pdf '{act.path or act.url}' returned)\n{result_text}"})
+                    except Exception as e:
+                        yield ConvEvent("action_result", {"id": aid, "error": str(e)})
+                        self._history.append({"role": "user", "content": f"(read_pdf '{act.path or act.url}' failed: {e})"})
                     continue
                 # ---- MCP tool call branch -------------------------------------
                 if act.kind == "call_mcp":

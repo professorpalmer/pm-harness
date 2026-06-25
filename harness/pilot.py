@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-VALID_ACTION_KINDS = {"run_swarm", "call_mcp", "read_file", "write_file", "run_command", "list_dir"}
+VALID_ACTION_KINDS = {"run_swarm", "call_mcp", "read_file", "write_file", "run_command", "list_dir", "web_search", "web_fetch", "read_pdf"}
 
 
 @dataclass
@@ -50,6 +50,8 @@ class PilotAction:
     path: str = ""
     content: str = ""
     command: str = ""
+    query: str = ""
+    url: str = ""
 
     def validate(self) -> "PilotAction":
         if self.kind not in VALID_ACTION_KINDS:
@@ -62,6 +64,12 @@ class PilotAction:
             raise PilotError(f"{self.kind} action requires a 'path'")
         if self.kind == "run_command" and not (self.command or "").strip():
             raise PilotError("run_command action requires a 'command'")
+        if self.kind == "web_search" and not (self.query or "").strip():
+            raise PilotError("web_search action requires a 'query'")
+        if self.kind == "web_fetch" and not (self.url or "").strip():
+            raise PilotError("web_fetch action requires a 'url'")
+        if self.kind == "read_pdf" and not (self.path or "").strip() and not (self.url or "").strip():
+            raise PilotError("read_pdf action requires a 'path' or 'url'")
         if self.roles and not isinstance(self.roles, list):
             raise PilotError("roles must be a list")
         return self
@@ -107,9 +115,12 @@ def _coerce_actions(raw_actions) -> list:
         path = a.get("path") or ""
         content = a.get("content") or ""
         command = a.get("command") or ""
+        query = a.get("query") or ""
+        url = a.get("url") or ""
         actions.append(PilotAction(kind=str(kind), goal=str(goal), roles=roles,
                                    tool=str(tool), arguments=arguments,
-                                   path=str(path), content=str(content), command=str(command)).validate())
+                                   path=str(path), content=str(content), command=str(command),
+                                   query=str(query), url=str(url)).validate())
     return actions
 
 
@@ -206,6 +217,9 @@ You have direct access to a local CodeGraph-indexed workspace and can explore/ed
 - `run_command`: run a terminal shell command. Requires `command`.
 - `list_dir`: list the files and folders inside a directory. `path` is optional.
 - `run_swarm`: dispatch a parallel agent swarm for complex/broad investigations. Requires `goal`.
+- `web_search`: search the internet and return top results. Requires `query`.
+- `web_fetch`: read a web page's text contents. Requires `url`.
+- `read_pdf`: extract plain text from a local PDF file or PDF URL. Requires `path` or `url`.
 
 Respond ONLY with a JSON object:
 
