@@ -26,6 +26,7 @@ import os
 import re
 import time
 import urllib.request
+import urllib.parse
 import urllib.error
 from dataclasses import dataclass
 from typing import Optional
@@ -42,8 +43,11 @@ class WikiResult:
 class WikiClient:
     def __init__(self, base_url: str = "", token: str = "",
                  subdir: str = "conversations", timeout: int = 20) -> None:
-        self.base_url = (base_url or os.environ.get("HARNESS_WIKI_URL", "")).rstrip("/")
-        self.token = token or os.environ.get("HARNESS_WIKI_TOKEN", "")
+        # Owner/gated surface (same as the portable-llm-wiki MCP uses): WIKI_API_BASE +
+        # WIKI_OWNER_TOKEN reach the tenant manifest/graph behind the share-tier gating.
+        # Fall back to the public HARNESS_WIKI_URL / HARNESS_WIKI_TOKEN.
+        self.base_url = (base_url or os.environ.get("WIKI_API_BASE", "") or os.environ.get("HARNESS_WIKI_URL", "")).rstrip("/")
+        self.token = token or os.environ.get("WIKI_OWNER_TOKEN", "") or os.environ.get("HARNESS_WIKI_TOKEN", "")
         self.subdir = subdir or os.environ.get("HARNESS_WIKI_SUBDIR", "conversations")
         self.timeout = timeout
 
@@ -85,43 +89,70 @@ class WikiClient:
             return WikiResult(False, error=repr(e))
 
     def graph(self) -> dict:
-        """Fetch the wiki graph by trying several endpoints defensively.
+        """Fetch the wiki graph via the gated owner surface the portable-llm-wiki
+        MCP uses: GET /wiki/manifest.json for nodes, then GET /wiki/graph/<slug>?hops=1
+        per node to collect [[wikilink]] edges. Authenticated with the owner token.
         Returns: {"nodes": [...], "edges": [...], "error": Optional[str]}
         """
         if not self.base_url:
             return {"nodes": [], "edges": [], "error": "Wiki base URL not set"}
 
-        endpoints = [
-            f"{self.base_url}/api/graph",
-            f"{self.base_url}/api/pages",
-            f"{self.base_url}/pages.json",
-        ]
-
-        errors = []
-        for url in endpoints:
-            headers = {}
+        def _get(path):
+            url = f"{self.base_url}{path}"
+            headers = {"Accept": "application/json"}
             if self.token:
                 headers["Authorization"] = f"Bearer {self.token}"
             req = urllib.request.Request(url, method="GET", headers=headers)
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                if r.status != 200:
+                    raise RuntimeError(f"{path} status {r.status}")
+                return json.loads(r.read().decode("utf-8", "replace"))
+
+        # 1. nodes from the manifest
+        try:
+            manifest = _get("/wiki/manifest.json")
+        except Exception as e:
+            return {"nodes": [], "edges": [], "error": f"manifest fetch failed: {repr(e)}"}
+
+        pages = manifest.get("pages", []) if isinstance(manifest, dict) else []
+        nodes = []
+        slugs = []
+        for p in pages:
+            if not isinstance(p, dict):
+                continue
+            slug = p.get("slug")
+            if not slug:
+                continue
+            slugs.append(slug)
+            nodes.append({
+                "id": slug,
+                "title": p.get("title") or slug,
+                "section": p.get("section"),
+                "tags": p.get("tags"),
+            })
+
+        # 2. edges via the per-slug graph neighborhood (1 hop), de-duplicated + undirected-deduped
+        edges = []
+        seen = set()
+        node_ids = set(slugs)
+        for slug in slugs:
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                    if r.status == 200:
-                        raw_data = r.read().decode("utf-8", "replace")
-                        data = json.loads(raw_data)
-                        parsed = parse_graph_from_response(data)
-                        parsed["error"] = None
-                        return parsed
-                    else:
-                        errors.append(f"{url} returned status {r.status}")
-            except Exception as e:
-                errors.append(f"{url} failed: {repr(e)}")
+                g = _get(f"/wiki/graph/{urllib.parse.quote(slug)}?hops=1")
+            except Exception:
+                continue
+            for e in (g.get("edges", []) if isinstance(g, dict) else []):
+                if not isinstance(e, dict):
+                    continue
+                src = e.get("source"); tgt = e.get("target")
+                if not src or not tgt or src not in node_ids or tgt not in node_ids:
+                    continue
+                key = tuple(sorted((src, tgt)))
+                if key in seen:
+                    continue
+                seen.add(key)
+                edges.append({"source": src, "target": tgt})
 
-        return {
-            "nodes": [],
-            "edges": [],
-            "error": f"All endpoints failed. Errors: {'; '.join(errors)}"
-        }
-
+        return {"nodes": nodes, "edges": edges, "error": None}
 
 def parse_graph_from_response(data) -> dict:
     # If it is already a dict with nodes and edges

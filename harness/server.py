@@ -968,7 +968,16 @@ class Handler(BaseHTTPRequestHandler):
             if qtok != _TOKEN and self.headers.get("X-Harness-Token", "") != _TOKEN:
                 return self._send(403, json.dumps({"error": "missing or bad token"}))
             
-            if not _cfg.wiki_url:
+            # WikiClient auto-detects the gated owner surface (WIKI_API_BASE +
+            # WIKI_OWNER_TOKEN, same as the portable-llm-wiki MCP) or the public
+            # HARNESS_WIKI_URL. config.wiki_url overrides base_url when set.
+            from .wiki import WikiClient
+            try:
+                client = WikiClient(base_url=_cfg.wiki_url or "", timeout=8)
+            except Exception as e:
+                client = None
+                _client_err = str(e)
+            if client is None or not client.base_url:
                 return self._send(200, json.dumps({
                     "configured": False,
                     "status": "not_configured",
@@ -976,14 +985,10 @@ class Handler(BaseHTTPRequestHandler):
                     "edges": [],
                     "base_url": ""
                 }))
-            
             try:
-                from .wiki import WikiClient
-                client = WikiClient(base_url=_cfg.wiki_url, token=os.environ.get("HARNESS_WIKI_TOKEN", ""), timeout=6)
                 res = client.graph()
             except Exception as e:
                 res = {"error": f"Unexpected error: {str(e)}", "nodes": [], "edges": []}
-            
             if res.get("error"):
                 return self._send(200, json.dumps({
                     "configured": True,
@@ -991,15 +996,14 @@ class Handler(BaseHTTPRequestHandler):
                     "nodes": [],
                     "edges": [],
                     "error": res["error"],
-                    "base_url": _cfg.wiki_url
+                    "base_url": client.base_url
                 }))
-            
             return self._send(200, json.dumps({
                 "configured": True,
                 "status": "ok",
                 "nodes": res.get("nodes") or [],
                 "edges": res.get("edges") or [],
-                "base_url": _cfg.wiki_url
+                "base_url": client.base_url
             }))
         if u.path == "/api/settings":
             return self._send(200, json.dumps(_get_settings_dict()))

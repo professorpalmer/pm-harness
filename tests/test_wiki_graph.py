@@ -103,24 +103,43 @@ def test_wiki_client_parse_manifest_pages():
 
 
 def test_wiki_client_graph_live_mocked(monkeypatch):
+    # The graph() method uses the gated owner surface the portable-llm-wiki MCP uses:
+    # GET /wiki/manifest.json for nodes, then GET /wiki/graph/<slug>?hops=1 for edges.
     class FakeResp:
-        status = 200
+        def __init__(self, payload):
+            self._payload = payload
+            self.status = 200
         def __enter__(self): return self
         def __exit__(self, *a): return False
         def read(self):
-            return json.dumps([
-                {"slug": "a", "title": "A", "links": ["b"]}
-            ]).encode()
+            return json.dumps(self._payload).encode()
+
+    manifest = {
+        "pages": [
+            {"slug": "a", "title": "A", "section": "root", "tags": []},
+            {"slug": "b", "title": "B", "section": "root", "tags": []},
+        ]
+    }
+    graph_a = {"edges": [{"source": "a", "target": "b"}]}
+    graph_b = {"edges": [{"source": "b", "target": "a"}]}  # reverse -> deduped undirected
 
     def fake_urlopen(req, timeout=0):
-        assert req.full_url == "http://mywiki/api/graph"
+        url = req.full_url
         assert req.headers.get("Authorization") == "Bearer mysecret"
-        return FakeResp()
+        if url.endswith("/wiki/manifest.json"):
+            return FakeResp(manifest)
+        if "/wiki/graph/a" in url:
+            return FakeResp(graph_a)
+        if "/wiki/graph/b" in url:
+            return FakeResp(graph_b)
+        raise AssertionError("unexpected url " + url)
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     client = WikiClient(base_url="http://mywiki", token="mysecret")
     res = client.graph()
     assert res["error"] is None
-    assert len(res["nodes"]) == 1
-    assert res["nodes"][0]["id"] == "a"
+    assert len(res["nodes"]) == 2
+    ids = {n["id"] for n in res["nodes"]}
+    assert ids == {"a", "b"}
+    # a<->b edge is collected once (undirected dedupe across both slugs' neighborhoods)
     assert res["edges"] == [{"source": "a", "target": "b"}]
