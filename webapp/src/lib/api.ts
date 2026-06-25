@@ -116,6 +116,15 @@ export type CodegraphStatus = {
   repo: string;
 };
 
+export type WikiGraphData = {
+  configured: boolean;
+  status: "ok" | "not_configured" | "error";
+  nodes: { id: string; title: string; section?: string; tags?: string[] }[];
+  edges: { source: string; target: string }[];
+  error?: string;
+  base_url?: string;
+};
+
 export const api = {
   providers: () => getJSON<ProviderInfo[]>("/api/providers"),
   probeProvider: (provider: string) => postJSON<ProbeResult>("/api/providers/probe", { provider }),
@@ -184,4 +193,5 @@ export const api = {
 
   getCodegraph: () => getJSON<CodegraphStatus>("/api/codegraph"),
   reindexCodegraph: () => postJSON<{ ok: boolean; status: string }>("/api/codegraph/reindex", {}),
+  getWikiGraph: () => getJSON<WikiGraphData>("/api/wiki/graph"),
 };

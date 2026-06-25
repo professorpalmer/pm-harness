@@ -943,6 +943,46 @@ class Handler(BaseHTTPRequestHandler):
                 "budget": _cfg.budget, "state_dir": _session.state_dir,
                 "models": _available_pilots(), "repo": _cfg.repo,
                 "preflight": _session.preflight()}))
+        if u.path == "/api/wiki/graph":
+            if self._guard():
+                return
+            qtok = parse_qs(u.query).get("token", [""])[0]
+            if qtok != _TOKEN and self.headers.get("X-Harness-Token", "") != _TOKEN:
+                return self._send(403, json.dumps({"error": "missing or bad token"}))
+            
+            if not _cfg.wiki_url:
+                return self._send(200, json.dumps({
+                    "configured": False,
+                    "status": "not_configured",
+                    "nodes": [],
+                    "edges": [],
+                    "base_url": ""
+                }))
+            
+            try:
+                from .wiki import WikiClient
+                client = WikiClient(base_url=_cfg.wiki_url, token=os.environ.get("HARNESS_WIKI_TOKEN", ""), timeout=6)
+                res = client.graph()
+            except Exception as e:
+                res = {"error": f"Unexpected error: {str(e)}", "nodes": [], "edges": []}
+            
+            if res.get("error"):
+                return self._send(200, json.dumps({
+                    "configured": True,
+                    "status": "error",
+                    "nodes": [],
+                    "edges": [],
+                    "error": res["error"],
+                    "base_url": _cfg.wiki_url
+                }))
+            
+            return self._send(200, json.dumps({
+                "configured": True,
+                "status": "ok",
+                "nodes": res.get("nodes") or [],
+                "edges": res.get("edges") or [],
+                "base_url": _cfg.wiki_url
+            }))
         if u.path == "/api/settings":
             return self._send(200, json.dumps(_get_settings_dict()))
         if u.path == "/api/jobs":

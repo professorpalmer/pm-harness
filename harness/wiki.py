@@ -84,6 +84,156 @@ class WikiClient:
         except Exception as e:
             return WikiResult(False, error=repr(e))
 
+    def graph(self) -> dict:
+        """Fetch the wiki graph by trying several endpoints defensively.
+        Returns: {"nodes": [...], "edges": [...], "error": Optional[str]}
+        """
+        if not self.base_url:
+            return {"nodes": [], "edges": [], "error": "Wiki base URL not set"}
+
+        endpoints = [
+            f"{self.base_url}/api/graph",
+            f"{self.base_url}/api/pages",
+            f"{self.base_url}/pages.json",
+        ]
+
+        errors = []
+        for url in endpoints:
+            headers = {}
+            if self.token:
+                headers["Authorization"] = f"Bearer {self.token}"
+            req = urllib.request.Request(url, method="GET", headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    if r.status == 200:
+                        raw_data = r.read().decode("utf-8", "replace")
+                        data = json.loads(raw_data)
+                        parsed = parse_graph_from_response(data)
+                        parsed["error"] = None
+                        return parsed
+                    else:
+                        errors.append(f"{url} returned status {r.status}")
+            except Exception as e:
+                errors.append(f"{url} failed: {repr(e)}")
+
+        return {
+            "nodes": [],
+            "edges": [],
+            "error": f"All endpoints failed. Errors: {'; '.join(errors)}"
+        }
+
+
+def parse_graph_from_response(data) -> dict:
+    # If it is already a dict with nodes and edges
+    if isinstance(data, dict) and "nodes" in data:
+        # It's already in a graph-like format!
+        raw_nodes = data.get("nodes") or []
+        raw_edges = data.get("edges") or []
+        nodes = []
+        edges = []
+        # Normalize nodes
+        if isinstance(raw_nodes, list):
+            for n in raw_nodes:
+                if not isinstance(n, dict):
+                    continue
+                node_id = n.get("id") or n.get("slug")
+                if not node_id:
+                    continue
+                nodes.append({
+                    "id": node_id,
+                    "title": n.get("title") or node_id,
+                    "section": n.get("section"),
+                    "tags": n.get("tags")
+                })
+        elif isinstance(raw_nodes, dict):
+            for node_id, n in raw_nodes.items():
+                if not isinstance(n, dict):
+                    n = {"title": str(n)}
+                nodes.append({
+                    "id": node_id,
+                    "title": n.get("title") or node_id,
+                    "section": n.get("section"),
+                    "tags": n.get("tags")
+                })
+        # Normalize edges
+        if isinstance(raw_edges, list):
+            for e in raw_edges:
+                if not isinstance(e, dict):
+                    continue
+                src = e.get("source") or e.get("from")
+                tgt = e.get("target") or e.get("to")
+                if src and tgt:
+                    edges.append({"source": src, "target": tgt})
+        return {"nodes": nodes, "edges": edges}
+
+    # If it is a list of pages (or a dict of pages)
+    pages = []
+    if isinstance(data, list):
+        pages = data
+    elif isinstance(data, dict):
+        if "pages" in data and isinstance(data["pages"], list):
+            pages = data["pages"]
+        elif "pages" in data and isinstance(data["pages"], dict):
+            # dict of pages
+            for k, v in data["pages"].items():
+                if isinstance(v, dict):
+                    if "slug" not in v and "id" not in v:
+                        v["slug"] = k
+                    pages.append(v)
+        else:
+            # Maybe the top-level dict is a dict of pages (slug -> page_data)
+            for k, v in data.items():
+                if isinstance(v, dict):
+                    if "slug" not in v and "id" not in v:
+                        v["slug"] = k
+                    pages.append(v)
+
+    nodes = []
+    edges = []
+    seen_edges = set()
+
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        page_id = page.get("slug") or page.get("id")
+        if not page_id:
+            continue
+        nodes.append({
+            "id": page_id,
+            "title": page.get("title") or page_id,
+            "section": page.get("section"),
+            "tags": page.get("tags")
+        })
+
+        # Look for explicit links/references
+        links = []
+        for key in ["links", "references", "targets", "wikilinks", "refs", "out_links", "outbound"]:
+            if key in page and isinstance(page[key], list):
+                for l in page[key]:
+                    if isinstance(l, str):
+                        links.append(l)
+                    elif isinstance(l, dict):
+                        target_id = l.get("slug") or l.get("id") or l.get("target")
+                        if target_id:
+                            links.append(target_id)
+                break
+
+        # Also look in content/body for [[wikilinks]] if present
+        content = page.get("content") or page.get("body") or ""
+        if isinstance(content, str) and content:
+            found = re.findall(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]", content)
+            for f in found:
+                links.append(f.strip())
+
+        for link in links:
+            link_slug = _safe_slug(link)
+            edge_key = (page_id, link_slug)
+            if edge_key not in seen_edges:
+                seen_edges.add(edge_key)
+                edges.append({"source": page_id, "target": link_slug})
+
+    return {"nodes": nodes, "edges": edges}
+
 
 def _safe_slug(s: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Database, Globe, FolderTree, GitBranch, GitFork, Plug, GraduationCap, Settings } from "lucide-react";
+import { Database, Globe, FolderTree, GitBranch, GitFork, Plug, GraduationCap, Settings, Network } from "lucide-react";
 import StatePane from "./StatePane";
 import BrowserPane from "./BrowserPane";
 import FileTree from "./FileTree";
@@ -8,8 +8,9 @@ import WorktreesPane from "./WorktreesPane";
 import McpPane from "./McpPane";
 import SkillsPane from "./SkillsPane";
 import SettingsPane from "./SettingsPane";
+import WikiGraphPane from "./WikiGraphPane";
 
-type Tab = "state" | "browser" | "files" | "git" | "worktrees" | "mcp" | "skills" | "settings";
+type Tab = "state" | "browser" | "files" | "git" | "worktrees" | "mcp" | "skills" | "wiki" | "settings";
 
 export default function RightPane({ artifacts, onOpenWizard }: {
   artifacts: { type: string; headline: string; confidence?: number }[];
@@ -46,6 +47,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
         <TabBtn active={tab === "worktrees"} onClick={() => setTab("worktrees")} icon={<GitFork size={12} />} label="Worktrees" showLabel={showLabel("worktrees")} />
         <TabBtn active={tab === "mcp"} onClick={() => setTab("mcp")} icon={<Plug size={12} />} label="MCP" showLabel={showLabel("mcp")} />
         <TabBtn active={tab === "skills"} onClick={() => setTab("skills")} icon={<GraduationCap size={12} />} label="Skills" showLabel={showLabel("skills")} />
+        <TabBtn active={tab === "wiki"} onClick={() => setTab("wiki")} icon={<Network size={12} />} label="Wiki" showLabel={showLabel("wiki")} />
         <TabBtn active={tab === "settings"} onClick={() => setTab("settings")} icon={<Settings size={12} />} label="Settings" showLabel={showLabel("settings")} />
       </div>
       <div className="flex-1 overflow-hidden">
@@ -56,6 +58,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
         {tab === "worktrees" && <WorktreesPane />}
         {tab === "mcp" && <McpPane />}
         {tab === "skills" && <SkillsPane />}
+        {tab === "wiki" && <WikiGraphPane />}
         {tab === "settings" && <SettingsPane onOpenWizard={onOpenWizard} />}
       </div>
     </aside>
