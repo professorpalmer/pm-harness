@@ -64,6 +64,9 @@ def build(name: str, *, reach: str = "openrouter") -> Driver:
     if name == "stub-oracle-mt":
         from .drivers.stub_multiturn import StubMultiTurnDriver
         return StubMultiTurnDriver()
+    if name == "stub-oracle-v2":
+        from .drivers.stub_v2 import StubV2Driver
+        return StubV2Driver()
 
     m = _entry(name)
 

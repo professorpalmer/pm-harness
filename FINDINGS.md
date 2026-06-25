@@ -109,3 +109,26 @@ CONFOUND (Stage 3.5): absolute scores are sensitive to harness feedback design
 (demo artifacts are thin, so careful models keep digging). The eval MECHANISM is
 proven; a definitive leaderboard needs a richer real-artifact substrate + an
 explicit turn/cost budget signal. Do not over-read the absolute ranking yet.
+
+
+## Stage 3.5 -- Budget-aware multi-turn (LIVE): the confound, confirmed
+
+Fixed Stage 3's three confounds: substantive findings substrate (gold-fixture,
+real PM still executes), explicit orchestration budget in the system prompt, and
+vague/explicit prompt variants; sharper scorer penalizes budget overrun AND
+premature stop. Table in results/STAGE3_5_RESULTS.md.
+
+RESULT: claude-opus-4-8 went 55% (Stage 3) -> 100% (Stage 3.5). The loop-burn
+vanished with a real findings digest + an explicit budget. Gemini 100% too. This
+CONFIRMS the Stage 3 confound: Claude was never a bad driver; the thin
+demo-artifact substrate was starving it, and a careful model correctly kept
+digging under a broken signal.
+
+LESSON (pro-thesis): driving quality is as much harness feedback design + budget
+signaling as model choice. A well-designed harness makes even frontier models
+behave economically -- the orchestration layer is a lever on cost/behavior,
+which argues FOR a purpose-built PM-native harness.
+
+LIMIT -> Stage 4: V2 battery now saturated for frontier models (100% across).
+It de-confounded but does not rank. Next: harder multi-swarm episodes (budget
+3+, min_swarms 2) and genuine stop-early-correct vs premature traps.

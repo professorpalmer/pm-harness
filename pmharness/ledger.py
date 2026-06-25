@@ -148,3 +148,59 @@ class TrajectoryLedger:
 
     def close(self):
         self.conn.close()
+
+
+V2_SCHEMA = """
+CREATE TABLE IF NOT EXISTS trajectories_v2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL, ts REAL NOT NULL, model TEXT NOT NULL,
+    episode_id TEXT NOT NULL, scenario TEXT, variant TEXT,
+    terminated INTEGER, correct_action INTEGER, within_budget INTEGER,
+    efficient INTEGER, premature INTEGER, grounded INTEGER, all_valid INTEGER,
+    swarms_run INTEGER, budget INTEGER, turns INTEGER, score REAL,
+    expect_terminal TEXT, got_terminal TEXT, tokens_out INTEGER,
+    latency_ms REAL, error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_v2_run ON trajectories_v2(run_id);
+"""
+
+
+class TrajectoryLedgerV2:
+    def __init__(self, path):
+        import sqlite3
+        from pathlib import Path
+        self.path=str(path); Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        self.conn=sqlite3.connect(self.path); self.conn.executescript(V2_SCHEMA); self.conn.commit()
+
+    def record(self, run_id, s):
+        import time
+        self.conn.execute(
+            "INSERT INTO trajectories_v2 (run_id,ts,model,episode_id,scenario,variant,"
+            "terminated,correct_action,within_budget,efficient,premature,grounded,"
+            "all_valid,swarms_run,budget,turns,score,expect_terminal,got_terminal,"
+            "tokens_out,latency_ms,error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (run_id, time.time(), s.model, s.episode_id, s.scenario, s.variant,
+             int(s.terminated), int(s.correct_action), int(s.within_budget),
+             int(s.efficient), int(s.premature),
+             None if s.grounded is None else int(s.grounded), int(s.all_valid),
+             s.swarms_run, s.budget, s.turns, s.score, s.expect_terminal,
+             s.got_terminal, s.total_tokens_out, s.total_latency_ms, s.error))
+        self.conn.commit()
+
+    def summary(self, run_id):
+        cur=self.conn.execute(
+            "SELECT model, COUNT(*) n, ROUND(AVG(terminated)*100,1) term, "
+            "ROUND(AVG(correct_action)*100,1) action, ROUND(AVG(within_budget)*100,1) budg, "
+            "ROUND(AVG(efficient)*100,1) eff, ROUND(AVG(score)*100,1) score, "
+            "SUM(tokens_out) tout, ROUND(AVG(latency_ms),0) lat "
+            "FROM trajectories_v2 WHERE run_id=? GROUP BY model ORDER BY score DESC",(run_id,))
+        cols=[c[0] for c in cur.description]
+        return [dict(zip(cols,row)) for row in cur.fetchall()]
+
+    def by_variant(self, run_id):
+        cur=self.conn.execute(
+            "SELECT model, variant, ROUND(AVG(score)*100,1) score FROM trajectories_v2 "
+            "WHERE run_id=? GROUP BY model, variant ORDER BY model, variant",(run_id,))
+        return cur.fetchall()
+
+    def close(self): self.conn.close()
