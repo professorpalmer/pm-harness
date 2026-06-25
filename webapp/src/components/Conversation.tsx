@@ -27,6 +27,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   const [distillNotice, setDistillNotice] = useState<string | null>(null);
   const cancelRef = useRef<null | (() => void)>(null);
   const feedRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
   const [msgQueue, setMsgQueue] = useState<{ text: string; auto: boolean }[]>([]);
 
   // Request notifications permission on mount
@@ -129,6 +130,12 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   const setCard = (id: string, patch: Partial<Card>) =>
     setItems((prev) => prev.map((it) =>
       it.kind === "card" && it.card.id === id ? { kind: "card", card: { ...it.card, ...patch } } : it));
+
+  useEffect(() => {
+    const onFocus = () => { taRef.current?.focus(); };
+    window.addEventListener("harness-focus-input", onFocus);
+    return () => window.removeEventListener("harness-focus-input", onFocus);
+  }, []);
 
   const executeSend = (msg: string, useAuto: boolean) => {
     setItems((p) => [...p, { kind: "msg", msg: { role: "user", text: msg } }]);
@@ -283,7 +290,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
           {/* compact composer: input + a single tidy control row */}
           <WorkspaceChip />
           <div className="bg-panel2/80 border border-edge rounded-xl focus-within:border-edge2 shadow-lg shadow-black/20 transition">
-            <textarea value={input} onChange={(e) => setInput(e.target.value)}
+            <textarea ref={taRef} value={input} onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
               rows={1} placeholder={auto ? "Give the pilot an objective..." : "Message the pilot..."}
               className="w-full bg-transparent px-3 pt-2 pb-0.5 text-[13px] resize-none focus:outline-none max-h-24 placeholder:text-faint" />

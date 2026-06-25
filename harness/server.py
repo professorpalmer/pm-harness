@@ -10,6 +10,7 @@ dependency-light and launchable anywhere.
 
 import json
 import os
+import time
 import threading
 import queue
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -60,6 +61,8 @@ _pilot = ConversationalSession(_cfg)
 import tempfile as _tf
 _sessions = SessionStore(os.path.join(_cfg.state_dir or _tf.gettempdir(), "harness_sessions.json"))
 _mcp = McpManager()
+from .pty_manager import PtyManager
+_pty = PtyManager()
 _pilot._mcp = _mcp
 
 def _rebuild_pilot_and_session():
@@ -276,7 +279,9 @@ class Handler(BaseHTTPRequestHandler):
                       "/api/worktrees/add", "/api/worktrees/remove",
                       "/api/worktrees/prune", "/api/worktrees/max",
                       "/api/hooks/add", "/api/hooks/update", "/api/hooks/remove",
-                      "/api/workspace/open", "/api/codegraph/reindex"):
+                      "/api/workspace/open", "/api/codegraph/reindex",
+                      "/api/terminal/create", "/api/terminal/write",
+                      "/api/terminal/resize", "/api/terminal/kill"):
             return self._handle_post_json(u.path)
         return self._send(404, json.dumps({"error": "not found"}))
 
@@ -506,6 +511,29 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps({"error": "missing title"}))
             ok = _sessions.rename(sid, title)
             return self._send(200, json.dumps({"ok": ok}))
+        if path == "/api/terminal/create":
+            try:
+                cwd = _cfg.repo or os.path.expanduser("~")
+                cols = int(body.get("cols", 80)); rows = int(body.get("rows", 24))
+                sess = _pty.create(cwd=cwd, cols=cols, rows=rows)
+                return self._send(200, json.dumps({"id": sess.id, "cwd": sess._cwd}))
+            except Exception as e:
+                return self._send(500, json.dumps({"error": str(e)}))
+        if path == "/api/terminal/write":
+            sess = _pty.get(body.get("id", ""))
+            if not sess:
+                return self._send(404, json.dumps({"error": "no such terminal"}))
+            sess.write(body.get("data", ""))
+            return self._send(200, json.dumps({"ok": True}))
+        if path == "/api/terminal/resize":
+            sess = _pty.get(body.get("id", ""))
+            if not sess:
+                return self._send(404, json.dumps({"error": "no such terminal"}))
+            sess.resize(int(body.get("rows", 24)), int(body.get("cols", 80)))
+            return self._send(200, json.dumps({"ok": True}))
+        if path == "/api/terminal/kill":
+            _pty.kill(body.get("id", ""))
+            return self._send(200, json.dumps({"ok": True}))
         if path == "/api/wiki/config":
             api_base = body.get("api_base")
             owner_token = body.get("owner_token")
@@ -1190,6 +1218,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/chat":
             q = parse_qs(u.query)
             return self._stream_chat(q.get("message", [""])[0])
+        if u.path == "/api/terminal/stream":
+            q = parse_qs(u.query)
+            return self._stream_terminal(q.get("id", [""])[0])
         if u.path == "/api/pilot":
             q = parse_qs(u.query)
             return self._swap_pilot(q.get("model", [""])[0])
@@ -1366,6 +1397,43 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"ok": True, "driver": model}))
         except Exception as e:
             return self._send(500, json.dumps({"error": str(e)}))
+
+    def _stream_terminal(self, sid: str):
+        """Stream PTY output over SSE. Client sends keystrokes via POST /api/terminal/write."""
+        sess = _pty.get(sid)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self._cors()
+        self.end_headers()
+        if not sess:
+            try:
+                self.wfile.write(b"data: {\"kind\": \"exit\"}\n\n")
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
+        offset = 0
+        try:
+            while sess.alive():
+                data, offset = sess.read_since(offset)
+                if data:
+                    import base64 as _b64
+                    payload = json.dumps({"kind": "data", "b64": _b64.b64encode(data).decode("ascii")})
+                    self.wfile.write(f"data: {payload}\n\n".encode())
+                    self.wfile.flush()
+                else:
+                    time.sleep(0.05)
+            # flush any final bytes after exit
+            data, offset = sess.read_since(offset)
+            if data:
+                import base64 as _b64
+                payload = json.dumps({"kind": "data", "b64": _b64.b64encode(data).decode("ascii")})
+                self.wfile.write(f"data: {payload}\n\n".encode())
+            self.wfile.write(b"data: {\"kind\": \"exit\"}\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _stream_chat(self, message: str):
         """Stream the conversational PILOT loop: prose messages + collapsible

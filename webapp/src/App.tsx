@@ -72,13 +72,29 @@ export default function App() {
   useEffect(() => { localStorage.setItem(LS.leftOpen, leftOpen ? "1" : "0"); }, [leftOpen]);
   useEffect(() => { localStorage.setItem(LS.rightOpen, rightOpen ? "1" : "0"); }, [rightOpen]);
 
-  // hotkeys: Cmd/Ctrl+B toggles left sessions panel; Cmd/Ctrl+J toggles right pane.
+  // hotkeys (Cursor-style, adapted for the harness). Most map to panels/sessions/nav;
+  // IDE-only ones (inline edit, autocomplete) do not apply to an orchestration harness.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
-      if (e.key.toLowerCase() === "b") { e.preventDefault(); setLeftOpen((v) => !v); }
-      else if (e.key.toLowerCase() === "j") { e.preventDefault(); setRightOpen((v) => !v); }
+      const k = e.key.toLowerCase();
+      // Cmd+` -> focus the Terminal tab (classic terminal toggle)
+      if (e.key === "`") { e.preventDefault(); setRightOpen(true); window.dispatchEvent(new CustomEvent("harness-focus-tab", { detail: "terminal" })); return; }
+      if (e.shiftKey) {
+        // Cmd+Shift+J -> Settings (Cursor: Cursor settings)
+        if (k === "j") { e.preventDefault(); setRightOpen(true); window.dispatchEvent(new CustomEvent("harness-focus-tab", { detail: "settings" })); }
+        return;
+      }
+      switch (k) {
+        case "b": e.preventDefault(); setLeftOpen((v) => !v); break;        // toggle sessions panel
+        case "j": e.preventDefault(); setRightOpen((v) => !v); break;       // toggle right pane
+        case "i":                                                          // focus chat input (Cursor: toggle sidepanel)
+        case "l": e.preventDefault(); window.dispatchEvent(new Event("harness-focus-input")); break;
+        case "n":                                                          // new session (Cursor: new chat)
+        case "r": e.preventDefault(); window.dispatchEvent(new Event("harness-new-session")); break;
+        default: break;
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

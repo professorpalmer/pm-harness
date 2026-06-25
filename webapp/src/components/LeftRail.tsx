@@ -126,6 +126,11 @@ export default function LeftRail({ jobsRefresh, onSessionChange }: {
     await loadSess();
   };
   const newSession = async () => { await api.createSession(); await loadSess(); };
+  useEffect(() => {
+    const onNew = () => { newSession(); };
+    window.addEventListener("harness-new-session", onNew);
+    return () => window.removeEventListener("harness-new-session", onNew);
+  }, []);
   const handleExport = (sid: string, format: "md" | "json") => {
     const url = api.exportUrl(sid, format);
     const a = document.createElement("a");

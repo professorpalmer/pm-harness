@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Database, Globe, FolderTree, GitBranch, GitFork, Plug, GraduationCap, Settings, Network } from "lucide-react";
+import { Database, Globe, FolderTree, GitBranch, GitFork, Plug, GraduationCap, Settings, Network, SquareTerminal } from "lucide-react";
 import StatePane from "./StatePane";
 import BrowserPane from "./BrowserPane";
 import FileTree from "./FileTree";
@@ -9,14 +9,21 @@ import McpPane from "./McpPane";
 import SkillsPane from "./SkillsPane";
 import SettingsPane from "./SettingsPane";
 import WikiGraphPane from "./WikiGraphPane";
+import TerminalPane from "./TerminalPane";
 
-type Tab = "state" | "browser" | "files" | "git" | "worktrees" | "mcp" | "skills" | "wiki" | "settings";
+type Tab = "state" | "browser" | "files" | "git" | "worktrees" | "terminal" | "mcp" | "skills" | "wiki" | "settings";
 
 export default function RightPane({ artifacts, onOpenWizard }: {
   artifacts: { type: string; headline: string; confidence?: number }[];
   onOpenWizard: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("state");
+
+  useEffect(() => {
+    const onFocusTab = (e: any) => { if (e?.detail) setTab(e.detail as Tab); };
+    window.addEventListener("harness-focus-tab", onFocusTab as EventListener);
+    return () => window.removeEventListener("harness-focus-tab", onFocusTab as EventListener);
+  }, []);
   const asideRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState<number>(600); // Sensible default for wide layout before measure
 
@@ -44,6 +51,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
         <TabBtn active={tab === "browser"} onClick={() => setTab("browser")} icon={<Globe size={12} />} label="Browser" showLabel={showLabel("browser")} />
         <TabBtn active={tab === "files"} onClick={() => setTab("files")} icon={<FolderTree size={12} />} label="Files" showLabel={showLabel("files")} />
         <TabBtn active={tab === "git"} onClick={() => setTab("git")} icon={<GitBranch size={12} />} label="Git" showLabel={showLabel("git")} />
+        <TabBtn active={tab === "terminal"} onClick={() => setTab("terminal")} icon={<SquareTerminal size={12} />} label="Terminal" showLabel={showLabel("terminal")} />
         <TabBtn active={tab === "worktrees"} onClick={() => setTab("worktrees")} icon={<GitFork size={12} />} label="Worktrees" showLabel={showLabel("worktrees")} />
         <TabBtn active={tab === "mcp"} onClick={() => setTab("mcp")} icon={<Plug size={12} />} label="MCP" showLabel={showLabel("mcp")} />
         <TabBtn active={tab === "skills"} onClick={() => setTab("skills")} icon={<GraduationCap size={12} />} label="Skills" showLabel={showLabel("skills")} />
@@ -55,6 +63,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
         {tab === "browser" && <BrowserPane />}
         {tab === "files" && <FileTree />}
         {tab === "git" && <SourceControl />}
+        {tab === "terminal" && <TerminalPane />}
         {tab === "worktrees" && <WorktreesPane />}
         {tab === "mcp" && <McpPane />}
         {tab === "skills" && <SkillsPane />}
