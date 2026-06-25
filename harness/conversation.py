@@ -25,6 +25,7 @@ Events yielded (for GUI/CLI):
 """
 
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Iterator, Optional
@@ -113,6 +114,14 @@ class ConversationalSession:
         self._first_objective: str = ""
         # token accounting for the autobudget governor (real metering, not a stub)
         self._tokens_used: int = 0
+        # concurrency: a single ConversationalSession is single-flight. Two
+        # concurrent send()/run_auto() calls would interleave self._history and
+        # corrupt the transcript, so we reject re-entrant streams rather than
+        # silently corrupting. (The harness is a local single-user tool.)
+        self._busy = threading.Lock()
+        # cooperative cancel: set by the server when the SSE client disconnects
+        # so run_auto halts promptly instead of burning budget for a gone client.
+        self._cancel = threading.Event()
         # auto-distill: when on, run_auto proposes PENDING skill/rule candidates on
         # completion (still human-gated for approval). Off by default.
         self._auto_distill = os.environ.get("HARNESS_AUTO_DISTILL", "").strip() in ("1", "true", "yes")
@@ -130,8 +139,21 @@ class ConversationalSession:
         lines.append("ASSISTANT:")
         return "\n\n".join(lines)
 
+    def cancel(self) -> None:
+        """Signal any in-flight run_auto/send to stop at the next checkpoint."""
+        self._cancel.set()
+
     def send(self, user_message: str) -> Iterator[ConvEvent]:
         """Process one user message: drive the pilot loop until it yields back."""
+        if not self._busy.acquire(blocking=False):
+            yield ConvEvent("error", {"error": "session busy: another request is in flight"})
+            return
+        try:
+            yield from self._send_locked(user_message)
+        finally:
+            self._busy.release()
+
+    def _send_locked(self, user_message: str) -> Iterator[ConvEvent]:
         self._history.append({"role": "user", "content": user_message})
         swarms = 0
         action_seq = 0
@@ -337,7 +359,12 @@ class ConversationalSession:
                    f"objective is genuinely met or no further progress is possible.)")
 
         cycle = 0
+        self._cancel.clear()
         while True:
+            if self._cancel.is_set():
+                yield ConvEvent("auto_halt", {"reason": "cancelled (client disconnect)",
+                                              "snapshot": budget.snapshot()})
+                return
             halt = budget.check()
             if halt:
                 yield ConvEvent("auto_halt", {"reason": halt, "snapshot": budget.snapshot()})
@@ -364,6 +391,9 @@ class ConversationalSession:
                 # CHECK THE CEILING MID-STREAM: a never-stopping pilot fires swarms
                 # inside one send() call; without this the governor only catches it
                 # between cycles and burns the whole inner budget first.
+                if self._cancel.is_set():
+                    tripped = "cancelled (client disconnect)"
+                    break
                 tripped = budget.check()
                 if tripped:
                     break

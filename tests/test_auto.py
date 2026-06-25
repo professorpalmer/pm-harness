@@ -143,6 +143,43 @@ def test_auto_no_distill_when_disabled(tmp_path, monkeypatch):
     assert not [e for e in events if e.kind == "distilled"]
 
 
+def test_auto_cancel_halts(tmp_path):
+    """A cancel signal raised mid-run makes run_auto halt promptly (client
+    disconnect). run_auto clears the flag at start, so we set it during the run."""
+    cfg = HarnessConfig(driver="stub-oracle-v2", state_dir=str(tmp_path))
+    s = ConversationalSession(cfg)
+
+    class _CancelOnFirstSwarm:
+        name = "c"
+        def __init__(self, sess): self.sess = sess; self.n = 0
+        def complete(self, prompt, *, system=None):
+            self.n += 1
+            if self.n == 1:
+                return DriverResponse(text='{"say":"x","actions":[{"kind":"run_swarm","goal":"g"}]}', tokens_out=5, latency_ms=1.0)
+            # cancel arrives (simulating client disconnect) before the next turn
+            self.sess.cancel()
+            return DriverResponse(text='{"say":"more","actions":[{"kind":"run_swarm","goal":"g2"}]}', tokens_out=5, latency_ms=1.0)
+
+    s.pilot = _CancelOnFirstSwarm(s)
+    events = list(s.run_auto("x", AutoBudget(max_swarms=999, max_tokens=10_000_000)))
+    halts = [e for e in events if e.kind == "auto_halt"]
+    assert halts and "cancel" in halts[-1].data["reason"].lower()
+
+
+def test_send_rejects_concurrent(tmp_path):
+    """A second send() while one is in flight is rejected, not interleaved."""
+    cfg = HarnessConfig(driver="stub-oracle-v2", state_dir=str(tmp_path))
+    s = ConversationalSession(cfg)
+    s.pilot = _DonePilot()
+    s._busy.acquire()  # simulate an in-flight request holding the lock
+    try:
+        events = list(s.send("hello"))
+        errs = [e for e in events if e.kind == "error" and "busy" in e.data.get("error", "")]
+        assert errs, "concurrent send should be rejected with a busy error"
+    finally:
+        s._busy.release()
+
+
 def test_auto_killswitch(tmp_path):
     ks = tmp_path / "STOP"; ks.write_text("x")  # pre-tripped
     cfg = HarnessConfig(driver="stub-oracle-v2", state_dir=tempfile.mkdtemp())

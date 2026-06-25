@@ -346,7 +346,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"data: {\"kind\": \"done\"}\n\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
-            pass
+            # client (browser tab) went away -> stop the governor loop promptly
+            # instead of burning budget for a gone client.
+            _pilot.cancel()
 
     def _swap_pilot(self, model: str):
         """Hot-swap the pilot model (the whole point: your key -> your pilot)."""
