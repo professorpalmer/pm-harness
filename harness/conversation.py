@@ -239,6 +239,7 @@ class ConversationalSession:
             findings_before = 0
             # one pilot turn (send() drives say->act->react until it yields back)
             turn_findings_count = 0
+            tripped = None
             for ev in self.send(message if cycle == 1 else
                                  "(continue toward the objective, or finish if met)"):
                 # meter the governor off the stream
@@ -248,6 +249,16 @@ class ConversationalSession:
                 yield ev
                 if ev.kind == "assistant_done":
                     break
+                # CHECK THE CEILING MID-STREAM: a never-stopping pilot fires swarms
+                # inside one send() call; without this the governor only catches it
+                # between cycles and burns the whole inner budget first.
+                tripped = budget.check()
+                if tripped:
+                    break
+            if tripped:
+                yield ConvEvent("auto_halt", {"reason": tripped, "snapshot": budget.snapshot()})
+                self._maybe_ingest(objective, [], [])
+                return
             # account for stall + emit a governor heartbeat
             budget.note_findings(turn_findings_count)
             # approximate token metering from history growth (drivers report tokens
