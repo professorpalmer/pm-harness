@@ -69,12 +69,19 @@ def run_doctor(argv) -> int:
         _line("fail", f"driver {cfg.driver}", f"build failed: {e}")
         hard_fail = True
 
-    # 4. Vision sidecar key (warn-only; vision is optional)
-    vkey = os.environ.get("GEMINI_API_KEY", "").strip()
-    if vkey:
-        _line("ok", "vision sidecar", "GEMINI_API_KEY present (default VLM)")
+    # 4. Vision sidecar key (warn-only; vision is optional). The backend depends
+    # on HARNESS_VLM_REACH: openrouter -> open VLM (OPENROUTER_API_KEY), else Gemini.
+    vlm_reach = os.environ.get("HARNESS_VLM_REACH", "").lower()
+    if vlm_reach == "openrouter":
+        if os.environ.get("OPENROUTER_API_KEY", "").strip():
+            _line("ok", "vision sidecar", "open VLM via OPENROUTER_API_KEY")
+        else:
+            _line("warn", "vision sidecar", "OPENROUTER_API_KEY not set -- open-VLM image input disabled")
     else:
-        _line("warn", "vision sidecar", "GEMINI_API_KEY not set -- image input disabled until set")
+        if os.environ.get("GEMINI_API_KEY", "").strip():
+            _line("ok", "vision sidecar", "Gemini VLM via GEMINI_API_KEY")
+        else:
+            _line("warn", "vision sidecar", "no VLM key -- set GEMINI_API_KEY or HARNESS_VLM_REACH=openrouter")
 
     # 5. Optional live ping
     if args.ping and not hard_fail:
