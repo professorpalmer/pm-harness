@@ -92,11 +92,66 @@ async function startBackend() {
 
   const _dbg = (msg) => { try { fs.appendFileSync(path.join(os.homedir(), ".pmharness", "electron.log"), `${new Date().toISOString()} ${msg}\n`); } catch {} };
 
+  const customEnv = { ...process.env, HARNESS_REPO: process.env.HARNESS_REPO || repoRoot };
+
+  try {
+    const shimDir = path.join(app.getPath("userData"), "bin");
+    fs.mkdirSync(shimDir, { recursive: true });
+
+    let codegraphJsPath = "";
+    if (app.isPackaged) {
+      codegraphJsPath = path.join(process.resourcesPath, "codegraph", "dist", "bin", "codegraph.js");
+    } else {
+      const devVendorPath = path.join(__dirname, "..", "codegraph-vendor", "dist", "bin", "codegraph.js");
+      if (fs.existsSync(devVendorPath)) {
+        codegraphJsPath = devVendorPath;
+      } else {
+        const paths = [
+          "/opt/homebrew/lib/node_modules/@colbymchenry/codegraph/dist/bin/codegraph.js",
+          "/usr/local/lib/node_modules/@colbymchenry/codegraph/dist/bin/codegraph.js",
+        ];
+        for (const p of paths) {
+          if (fs.existsSync(p)) {
+            codegraphJsPath = p;
+            break;
+          }
+        }
+      }
+    }
+
+    if (codegraphJsPath && fs.existsSync(codegraphJsPath)) {
+      const codegraphShimPath = path.join(shimDir, "codegraph");
+      const codegraphShimContent = `#!/bin/sh
+export ELECTRON_RUN_AS_NODE=1
+exec "${process.execPath}" -e "process.execArgv = []; process.argv.splice(1, 0, '${codegraphJsPath}'); delete process.versions.electron; require('${codegraphJsPath}')" -- "$@"
+`;
+      fs.writeFileSync(codegraphShimPath, codegraphShimContent, "utf8");
+      fs.chmodSync(codegraphShimPath, 0o755);
+
+      const nodeShimPath = path.join(shimDir, "node");
+      const nodeShimContent = `#!/bin/sh
+export ELECTRON_RUN_AS_NODE=1
+exec "${process.execPath}" "$@"
+`;
+      fs.writeFileSync(nodeShimPath, nodeShimContent, "utf8");
+      fs.chmodSync(nodeShimPath, 0o755);
+
+      _dbg(`Set up codegraph shim in ${shimDir} pointing to ${codegraphJsPath}`);
+
+      customEnv.PATH = shimDir + path.delimiter + (process.env.PATH || "");
+      customEnv.PUPPETMASTER_CODEGRAPH_NO_NPX = "1";
+    } else {
+      _dbg(`Could not locate codegraph.js (isPackaged=${app.isPackaged}). Skipping shim setup.`);
+    }
+  } catch (e) {
+    _dbg(`Failed to setup codegraph shim: ${e.message}`);
+  }
+
   if (binaryPath) {
     _dbg(`spawning bundled binary: ${binaryPath} cwd=${repoRoot} port=${backendPort} packaged=${app.isPackaged}`);
     backend = spawn(binaryPath, ["gui", "--port", String(backendPort)], {
       cwd: repoRoot,
-      env: { ...process.env, HARNESS_REPO: process.env.HARNESS_REPO || repoRoot },
+      env: customEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
   } else {
@@ -104,7 +159,7 @@ async function startBackend() {
     _dbg(`spawning python backend: ${py} cwd=${repoRoot} port=${backendPort} packaged=${app.isPackaged}`);
     backend = spawn(py, ["-m", "harness.cli", "gui", "--port", String(backendPort)], {
       cwd: repoRoot,
-      env: { ...process.env, HARNESS_REPO: process.env.HARNESS_REPO || repoRoot },
+      env: customEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
   }

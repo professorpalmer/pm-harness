@@ -8,11 +8,12 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
+    "vendor:codegraph": "node scripts/vendor-codegraph.cjs",
     "electron:dev": "concurrently -k \"vite --host 127.0.0.1 --port 5273\" \"wait-on http://127.0.0.1:5273 && cross-env PMHARNESS_DEV_SERVER=http://127.0.0.1:5273 electron .\"",
     "electron": "electron .",
     "electron:build": "npm run build && electron .",
-    "dist:mac": "npm run build && electron-builder --mac --dir",
-    "dist:dmg": "npm run build && electron-builder --mac dmg",
+    "dist:mac": "npm run vendor:codegraph && npm run build && electron-builder --mac --dir",
+    "dist:dmg": "npm run vendor:codegraph && npm run build && electron-builder --mac dmg",
     "dist:full": "bash ../scripts/build_backend.sh && npm run dist:dmg"
   },
   "dependencies": {
@@ -69,6 +70,10 @@
       {
         "from": "backend-dist/pmharness-backend",
         "to": "pmharness-backend"
+      },
+      {
+        "from": "codegraph-vendor",
+        "to": "codegraph"
       }
     ],
     "extraMetadata": {
