@@ -78,6 +78,7 @@ class PilotAction:
 @dataclass
 class PilotTurn:
     say: str = ""
+    thinking: str = ""
     actions: list = field(default_factory=list)  # list[PilotAction]
 
     @property
@@ -145,12 +146,13 @@ def parse_pilot_turn(text: str) -> PilotTurn:
         return PilotTurn(say=raw, actions=[])
 
     say = obj.get("say") or obj.get("message") or obj.get("text") or ""
+    thinking = obj.get("thinking") or obj.get("reasoning") or obj.get("thought") or ""
     actions = _coerce_actions(obj.get("actions") or obj.get("tool_calls"))
     # If there's prose outside the JSON and no `say`, keep the prose.
     if not say:
         outside = _prose_outside_json(raw)
         say = outside or ""
-    return PilotTurn(say=str(say).strip(), actions=actions)
+    return PilotTurn(say=str(say).strip(), thinking=str(thinking).strip(), actions=actions)
 
 
 def _extract_json_object(text: str):
@@ -225,13 +227,15 @@ You have direct access to a local CodeGraph-indexed workspace and can explore/ed
 Respond ONLY with a JSON object:
 
   {
-    "say": "<prose for the user describing your reasoning and plan>",
+    "thinking": "<optional private reasoning/scratchpad -- analysis, plan, what you are considering>",
+    "say": "<prose for the user describing your plan and concise explanations>",
     "actions": [
       {"kind": "read_file", "path": "src/main.py"}
     ]
   }
 
 Rules:
+- `thinking` (optional) is your private reasoning/scratchpad -- analysis, plan, what you're considering. It is shown to the user in a separate collapsible Thinking section, dimmed. Put your reasoning here, and keep "say" for the concise user-facing explanation. This SEPARATES reasoning (thinking) from the user-facing message (say) -- the model fills both in the SAME response, no extra calls.
 - `say` is always present: the `say` field is for natural-language explanation to the USER ONLY. It must NOT contain tool output, command results, tracebacks, file listings, or the literal text of tool-result messages. Never echo or quote the "(... completed with exit code ...)" tool-result envelopes -- those are shown to the user automatically in the action chips. Keep say concise: explain what you're doing and why, then act.
 - Prefer your direct tools (read_file, write_file, run_command, list_dir) for precise actions and testing.
 - Use `run_swarm` when you need a team of workers to analyze a broad issue or scan the codebase.

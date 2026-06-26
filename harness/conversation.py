@@ -16,6 +16,7 @@ Transcript model:
   transcript never enters a worker. Conversation and investigation are decoupled.
 
 Events yielded (for GUI/CLI):
+- ("thinking", {text})                         -> pilot reasoning (collapsible/dimmed)
 - ("message", {role:"assistant", text})        -> pilot prose (conversation)
 - ("action_start", {id, kind, goal, cwd})      -> a collapsible card opens
 - ("action_result", {id, job_id, num, types,   -> the card's body (artifacts)
@@ -286,6 +287,10 @@ class ConversationalSession:
                 continue
 
             # 2. Emit the pilot's prose to the user.
+            cleaned_thinking_text = clean_say(turn.thinking) if turn.thinking else ""
+            if cleaned_thinking_text:
+                yield ConvEvent("thinking", {"text": cleaned_thinking_text})
+
             cleaned_say_text = clean_say(turn.say) if turn.say else ""
             if cleaned_say_text:
                 yield ConvEvent("message", {"role": "assistant", "text": cleaned_say_text})

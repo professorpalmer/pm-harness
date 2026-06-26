@@ -12,7 +12,10 @@ type Card = {
   result?: { job_id?: string; num: number; types: string[]; adapter: string;
              artifacts: { type: string; headline: string }[]; error?: string };
 };
-type Item = { kind: "msg"; msg: Msg } | { kind: "card"; card: Card };
+type Item =
+  | { kind: "msg"; msg: Msg }
+  | { kind: "card"; card: Card }
+  | { kind: "thinking"; text: string };
 
 export default function Conversation({ config, activeSessionId, onArtifacts, onJobChange }: {
   config: Config | null;
@@ -128,8 +131,12 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   }, [activeSessionId]);
 
   const setCard = (id: string, patch: Partial<Card>) =>
-    setItems((prev) => prev.map((it) =>
-      it.kind === "card" && it.card.id === id ? { kind: "card", card: { ...it.card, ...patch } } : it));
+    setItems((prev) => prev.map((it) => {
+      if (it.kind === "card" && it.card.id === id) {
+        return { kind: "card", card: { ...it.card, ...patch } };
+      }
+      return it;
+    }));
 
   useEffect(() => {
     const onFocus = () => { taRef.current?.focus(); };
@@ -145,7 +152,10 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
       : (cb: any, done: any, err: any) => api.chat(msg, cb, done, err);
     cancelRef.current = streamer((ev: any) => {
       const d = ev.data || {};
-      if (ev.kind === "message") {
+      if (ev.kind === "thinking") {
+        setStatus("thinking");
+        setItems((p) => [...p, { kind: "thinking", text: d.text || "" }]);
+      } else if (ev.kind === "message") {
         setStatus("thinking");
         setItems((p) => [...p, { kind: "msg", msg: { role: "assistant", text: d.text || "" } }]);
       } else if (ev.kind === "action_start") {
@@ -239,9 +249,16 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
               Message the pilot. It plans, investigates via swarms, and explains.
             </div>
           )}
-          {items.map((it, i) => it.kind === "msg"
-            ? <Bubble key={i} msg={it.msg} />
-            : <ActionCard key={i} card={it.card} onToggle={() => setCard(it.card.id, { open: !it.card.open })} />)}
+          {items.map((it, i) => {
+            if (it.kind === "msg") {
+              return <Bubble key={i} msg={it.msg} />;
+            } else if (it.kind === "card") {
+              return <ActionCard key={i} card={it.card} onToggle={() => setCard(it.card.id, { open: !it.card.open })} />;
+            } else if (it.kind === "thinking") {
+              return <ThinkingBlock key={i} text={it.text} />;
+            }
+            return null;
+          })}
         </div>
       </div>
 
@@ -423,6 +440,36 @@ function cleanAssistantText(text: string): string {
   let result = cleaned.join("\n").trim();
   result = result.replace(/\n{3,}/g, "\n\n");
   return result || "Working...";
+}
+
+function ThinkingBlock({ text }: { text: string }) {
+  const [collapsed, setCollapsed] = useState(() => {
+    const pref = localStorage.getItem("pmharness.thinkingCollapsed");
+    return pref === "true";
+  });
+
+  const toggle = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    localStorage.setItem("pmharness.thinkingCollapsed", String(next));
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5 items-start my-1 text-[12px]">
+      <button
+        onClick={toggle}
+        className="flex items-center gap-1.5 text-faint hover:text-muted transition font-medium select-none"
+      >
+        {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+        <span>Thinking</span>
+      </button>
+      {!collapsed && (
+        <div className="pl-3.5 ml-1.5 border-l border-edge text-faint whitespace-pre-wrap leading-relaxed max-w-[85%]">
+          {text}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Bubble({ msg }: { msg: Msg }) {
