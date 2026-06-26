@@ -30,6 +30,7 @@ class OpenAICompatDriver:
         max_tokens: int = 1500,
         timeout: int = 90,
         extra_headers: dict | None = None,
+        enable_reasoning: bool = True,
     ) -> None:
         self.name = name
         self.model = model
@@ -39,6 +40,7 @@ class OpenAICompatDriver:
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.extra_headers = extra_headers or {}
+        self.enable_reasoning = enable_reasoning
 
     def _key(self) -> str:
         key = os.environ.get(self.api_key_env, "").strip()
@@ -112,6 +114,8 @@ class OpenAICompatDriver:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
+        if self.enable_reasoning:
+            body["reasoning"] = {"max_tokens": 1024}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"

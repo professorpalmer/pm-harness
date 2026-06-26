@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, GitBranch } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import "highlight.js/styles/github-dark.css";
 import { api, type Config } from "../lib/api";
 import PilotPicker from "./PilotPicker";
 import { pickFolder } from "../lib/transport";
@@ -363,7 +367,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
             }
 
             const grouped = groupAgentActivity(items);
-            return grouped.map((it, i) => {
+            const list = grouped.map((it, i) => {
               if (it.kind === "msg") {
                 let prevMsg: Msg | null = null;
                 for (let j = i - 1; j >= 0; j--) {
@@ -399,6 +403,19 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
               }
               return null;
             });
+
+            const isBusy = status === "thinking" || status === "executing";
+            return (
+              <>
+                {list}
+                {isBusy && (
+                  <div className="flex items-center gap-1.5 py-1 text-[12px] text-muted select-none mt-1 pl-0.5">
+                    <Loader2 size={12} className="animate-spin text-muted" />
+                    <span>{status === "thinking" ? "thinking..." : "running..."}</span>
+                  </div>
+                )}
+              </>
+            );
           })()}
         </div>
       </div>
@@ -645,6 +662,79 @@ function ThinkingBlock({ text }: { text: string }) {
   );
 }
 
+function Markdown({ text }: { text: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      rehypePlugins={[rehypeHighlight]}
+      components={{
+        h1: ({ children }: any) => <h1 className="text-sm font-semibold text-txt mt-2 mb-1 border-b border-edge pb-0.5">{children}</h1>,
+        h2: ({ children }: any) => <h2 className="text-[13px] font-semibold text-txt mt-2 mb-1">{children}</h2>,
+        h3: ({ children }: any) => <h3 className="text-[12px] font-semibold text-muted mt-1.5 mb-0.5">{children}</h3>,
+        strong: ({ children }: any) => <strong className="font-semibold text-txt">{children}</strong>,
+        em: ({ children }: any) => <em className="italic text-txt/90">{children}</em>,
+        ul: ({ children }: any) => <ul className="list-disc pl-4 my-1 space-y-0.5 text-txt/90">{children}</ul>,
+        ol: ({ children }: any) => <ol className="list-decimal pl-4 my-1 space-y-0.5 text-txt/90">{children}</ol>,
+        li: ({ children }: any) => <li className="text-[13px] leading-relaxed">{children}</li>,
+        blockquote: ({ children }: any) => (
+          <blockquote className="border-l-2 border-edge pl-2.5 my-1 text-muted italic bg-panel2/30 rounded-r-sm py-0.5">
+            {children}
+          </blockquote>
+        ),
+        a: ({ href, children }: any) => (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-accent underline hover:text-accent/80 transition"
+          >
+            {children}
+          </a>
+        ),
+        table: ({ children }: any) => (
+          <div className="overflow-x-auto my-1.5 border border-edge rounded bg-panel/40">
+            <table className="min-w-full text-left text-[11.5px] border-collapse">{children}</table>
+          </div>
+        ),
+        thead: ({ children }: any) => (
+          <thead className="bg-panel2/80 border-b border-edge font-semibold text-muted">{children}</thead>
+        ),
+        tbody: ({ children }: any) => (
+          <tbody className="divide-y divide-edge/40">{children}</tbody>
+        ),
+        tr: ({ children }: any) => (
+          <tr className="hover:bg-panel2/20 odd:bg-transparent even:bg-panel2/10">{children}</tr>
+        ),
+        th: ({ children }: any) => (
+          <th className="px-2 py-1 border-r border-edge/30 last:border-r-0 font-semibold">{children}</th>
+        ),
+        td: ({ children }: any) => (
+          <td className="px-2 py-1 border-r border-edge/30 last:border-r-0 text-txt/90">{children}</td>
+        ),
+        hr: () => <hr className="border-edge/60 my-2" />,
+        code: ({ className, children, ...props }: any) => {
+          const isInline = !className;
+          if (isInline) {
+            return (
+              <code className="bg-panel2 px-1 py-0.5 rounded text-accent font-mono text-[11.5px] border border-edge/20" {...props}>
+                {children}
+              </code>
+            );
+          }
+          return (
+            <code className={`${className || ""} block bg-panel border border-edge/40 rounded p-2 overflow-x-auto font-mono text-[11.5px] text-txt/95 my-1.5`} {...props}>
+              {children}
+            </code>
+          );
+        },
+        pre: ({ children }: any) => <div className="my-1">{children}</div>
+      }}
+    >
+      {text}
+    </ReactMarkdown>
+  );
+}
+
 function Bubble({ msg, showLabel, isIntermediate }: { msg: Msg; showLabel?: boolean; isIntermediate?: boolean }) {
   const isUser = msg.role === "user";
   const displayedText = isUser ? msg.text : cleanAssistantText(msg.text);
@@ -671,8 +761,8 @@ function Bubble({ msg, showLabel, isIntermediate }: { msg: Msg; showLabel?: bool
       {showLabel && (
         <span className="text-[10px] uppercase tracking-wider text-faint px-0.5 select-none font-semibold mt-1">pilot</span>
       )}
-      <div className="text-[13px] leading-relaxed whitespace-pre-wrap break-words max-w-[95%] text-txt/95 py-0.5">
-        {displayedText}
+      <div className="text-[13px] leading-relaxed break-words max-w-[95%] text-txt/95 py-0.5">
+        <Markdown text={displayedText} />
       </div>
     </div>
   );
