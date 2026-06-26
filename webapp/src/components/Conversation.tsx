@@ -517,7 +517,12 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     executeSend(msg, auto, plan);
   };
 
-  const stop = () => { cancelRef.current?.(); cancelRef.current = null; setStatus("idle"); };
+  const stop = () => {
+    cancelRef.current?.();
+    cancelRef.current = null;
+    setStatus("idle");
+    api.interruptSession().catch((e) => console.error("Failed to interrupt session on backend:", e));
+  };
 
   return (
     <main className="flex flex-col h-full min-w-0 bg-bg">

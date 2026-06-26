@@ -180,6 +180,7 @@ export const api = {
   sessions: () => getJSON<Session[]>("/api/sessions"),
   sessionTranscript: (session: string) => getJSON<{ history: any[] }>(withToken(`/api/sessions/transcript?session=${encodeURIComponent(session)}`)),
   getSessionState: () => getJSON<SessionState>(withToken("/api/session/state")),
+  interruptSession: () => postJSON<{ ok: boolean }>("/api/session/interrupt", {}),
   getSwarmResults: () => getJSON<SwarmResultsResponse>(withToken("/api/session/swarm-results")),
   createSession: (title?: string) => postJSON<Session>("/api/sessions/create", { title }),
   switchSession: (id: string) => postJSON("/api/sessions/switch", { id }),

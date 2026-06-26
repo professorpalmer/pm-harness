@@ -53,6 +53,60 @@ def is_safe_path(path: str, parent: str) -> bool:
         return False
 
 
+def load_workspace_rules(repo: Optional[str]) -> str:
+    if not repo or not os.path.isdir(repo):
+        return ""
+    try:
+        repo_abs = os.path.abspath(repo)
+    except Exception:
+        return ""
+    files_to_try = []
+    files_to_try.append(("AGENTS.md", os.path.join(repo_abs, "AGENTS.md")))
+    files_to_try.append(("CLAUDE.md", os.path.join(repo_abs, "CLAUDE.md")))
+    files_to_try.append((".cursorrules", os.path.join(repo_abs, ".cursorrules")))
+    cursor_rules_dir = os.path.join(repo_abs, ".cursor", "rules")
+    if os.path.isdir(cursor_rules_dir) and is_safe_path(cursor_rules_dir, repo_abs):
+        try:
+            cursor_files = []
+            for f in os.listdir(cursor_rules_dir):
+                if f.endswith(".md"):
+                    full_p = os.path.join(cursor_rules_dir, f)
+                    if os.path.isfile(full_p):
+                        cursor_files.append((f, full_p))
+            cursor_files.sort(key=lambda x: x[0])
+            for name, full_p in cursor_files:
+                files_to_try.append((f".cursor/rules/{name}", full_p))
+        except Exception:
+            pass
+    files_to_try.append((".github/copilot-instructions.md", os.path.join(repo_abs, ".github", "copilot-instructions.md")))
+    blocks = []
+    total_bytes_read = 0
+    max_file_size = 8 * 1024
+    max_total_size = 16 * 1024
+    for name, full_path in files_to_try:
+        if total_bytes_read >= max_total_size:
+            break
+        if not is_safe_path(full_path, repo_abs):
+            continue
+        if not os.path.isfile(full_path):
+            continue
+        try:
+            with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read(max_file_size)
+            if not content:
+                continue
+            available_bytes = max_total_size - total_bytes_read
+            if len(content) > available_bytes:
+                content = content[:available_bytes]
+            total_bytes_read += len(content)
+            blocks.append(f"# Workspace rules (from {name})\n{content}")
+        except Exception:
+            pass
+    if blocks:
+        return "\n\n" + "\n\n".join(blocks)
+    return ""
+
+
 from .skill_store import SkillStore
 from .skill_distiller import distill_session, distill_rules
 from .rule_store import RuleStore
@@ -152,6 +206,10 @@ class ConversationalSession:
         if active_rules:
             rules_block = "\n".join(f"- {r.text}" for r in active_rules)
             system = (system + "\n\n# Standing rules (ALWAYS honor)\n" + rules_block)
+        # workspace rules (auto-loaded from repository if available)
+        ws_rules = load_workspace_rules(config.repo)
+        if ws_rules:
+            system = system + ws_rules
         # the running transcript with the pilot (conversation memory)
         self._history: list[dict] = [{"role": "system", "content": system}]
         # optional durable-knowledge integration (portable-llm-wiki)
@@ -255,8 +313,13 @@ class ConversationalSession:
         # exit when they check self._cancel or finish subprocess await, and we won't start new swarm work.
         self._interrupted_swarms = True
 
+    def interrupt(self) -> None:
+        """Signal any in-flight run_auto/send to stop at the next checkpoint."""
+        self.cancel()
+
     def send(self, user_message: str, images: Optional[list] = None, plan: bool = False) -> Iterator[ConvEvent]:
         """Process one user message: drive the pilot loop until it yields back."""
+        self._cancel.clear()
         if not self._busy.acquire(blocking=False):
             yield ConvEvent("error", {"error": "session busy: another request is in flight"})
             return
@@ -317,6 +380,9 @@ class ConversationalSession:
         turn_prose: list = []      # accumulate pilot prose for the digest
 
         for step in range(HARD_PILOT_STEPS):
+            if self._cancel.is_set():
+                yield ConvEvent("interrupted", {"reason": "session interrupted"})
+                return
             # 1. Ask the pilot for its next conversational turn.
             base_sys = self._history[0]["content"]
             cg_section = ""
@@ -455,6 +521,9 @@ class ConversationalSession:
 
             # 4. Execute each action as a collapsible tool-call.
             for act in turn.actions:
+                if self._cancel.is_set():
+                    yield ConvEvent("interrupted", {"reason": "session interrupted"})
+                    return
                 action_seq += 1
                 aid = f"a{action_seq}"
                 act_goal = act.goal

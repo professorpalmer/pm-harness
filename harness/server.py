@@ -384,6 +384,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/api/workspaces/switch", "/api/workspaces/create",
                       "/api/sessions/create", "/api/sessions/switch",
                       "/api/sessions/delete", "/api/sessions/archive", "/api/sessions/rename",
+                      "/api/session/interrupt",
                       "/api/mcp/add", "/api/mcp/remove", "/api/mcp/start",
                       "/api/mcp/stop", "/api/mcp/call",
                       "/api/skills/distill", "/api/skills/approve",
@@ -636,6 +637,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps({"error": "missing title"}))
             ok = _sessions.rename(sid, title)
             return self._send(200, json.dumps({"ok": ok}))
+        if path == "/api/session/interrupt":
+            _pilot.interrupt()
+            return self._send(200, json.dumps({"ok": True}))
         if path == "/api/terminal/create":
             try:
                 cwd = _cfg.repo or os.path.expanduser("~")
