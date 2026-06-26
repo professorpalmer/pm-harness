@@ -28,6 +28,7 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
   
   // Platform Adapter states
   const [platformAdapters, setPlatformAdapters] = useState<PlatformAdapter[]>([]);
+  const [showAdvancedAdapters, setShowAdvancedAdapters] = useState(false);
   const [platformError, setPlatformError] = useState("");
 
   // Feature states
@@ -422,11 +423,20 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
           </div>
         </div>
 
-        {/* Platform Adapters Control */}
+        {/* Platform Adapters Control (ADVANCED -- optional) */}
         <div className="space-y-3 border-t border-edge pt-3">
-          <label className="block uppercase tracking-wider text-[10px] text-faint font-semibold">
-            Platform Adapters
-          </label>
+          <button
+            onClick={() => setShowAdvancedAdapters((v) => !v)}
+            className="flex items-center gap-1.5 w-full text-left"
+          >
+            <ChevronRight size={12} className={`text-faint transition-transform ${showAdvancedAdapters ? "rotate-90" : ""}`} />
+            <span className="uppercase tracking-wider text-[10px] text-faint font-semibold">External Worker Platforms</span>
+            <span className="text-[9px] text-muted normal-case tracking-normal">(advanced / optional)</span>
+          </button>
+          {showAdvancedAdapters && (<>
+          <p className="text-[10px] text-muted leading-normal pl-4">
+            By default, implement/parallel workers run on the built-in provider worker (your configured API key, in an isolated worktree) -- no external CLI needed. These adapters let you instead delegate worker runs to an external coding-agent CLI (Cursor, Claude Code, Codex) when it is installed. Optional.
+          </p>
           
           {platformError ? (
             <p className="text-[10px] text-muted italic">{platformError}</p>
@@ -471,17 +481,12 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
                 ))}
               </div>
 
-              {!platformAdapters.some((a) => a.implement_capable && a.enabled) && (
-                <div className="text-risk text-[10px] font-semibold bg-risk/10 border border-risk/30 rounded p-2">
-                  No implement-capable adapter enabled -- run_implement will fail
-                </div>
-              )}
-
               <p className="text-[10px] text-muted leading-normal">
-                The pilot dispatches implement/swarm workers to ENABLED adapters. Hermes (OpenRouter) is the default implement adapter.
+                With no external adapter enabled, implement/parallel workers run on the built-in provider worker (default). Enable an adapter above only to delegate to that external CLI instead.
               </p>
             </div>
           )}
+          </>)}
         </div>
 
         {/* Observability & Queue Prefs */}
