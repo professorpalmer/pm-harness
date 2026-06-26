@@ -244,6 +244,14 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     return () => window.removeEventListener("harness-focus-input", onFocus);
   }, []);
 
+  // Auto-grow textarea effect (Cursor-like dynamic expansion)
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
+  }, [input]);
+
   const executeSend = (msg: string, useAuto: boolean) => {
     setItems((p) => [...p, { kind: "msg", msg: { role: "user", text: msg } }]);
     setStatus("thinking");
@@ -464,19 +472,19 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
           )}
           {/* compact composer: input + a single tidy control row */}
           <WorkspaceChip />
-          <div className="bg-panel2/80 border border-edge rounded-xl focus-within:border-edge2 shadow-lg shadow-black/20 transition">
+          <div className="bg-panel2/80 border border-edge rounded-2xl focus-within:border-edge2 shadow-lg shadow-black/20 transition">
             <textarea ref={taRef} value={input} onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
               rows={1} placeholder={auto ? "Give the pilot an objective..." : "Message the pilot..."}
-              className="w-full bg-transparent px-3 pt-2 pb-0.5 text-[13px] resize-none focus:outline-none max-h-24 placeholder:text-faint" />
-            <div className="flex items-center gap-1.5 px-2 pb-1">
+              className="w-full bg-transparent px-3 pt-2.5 pb-1 text-[13px] resize-none focus:outline-none overflow-y-auto placeholder:text-faint" />
+            <div className="flex items-center gap-1.5 px-3 pb-2">
               <button onClick={() => setAuto((a) => !a)} title="Fully-Auto mode"
                 className={`px-1.5 h-[20px] rounded-md text-[10.5px] flex items-center gap-1 transition
                   ${auto ? "bg-warn/15 text-warn" : "text-faint hover:text-muted"}`}>
                 <Zap size={11} /> Auto
               </button>
-              <div className="flex-1" />
               <PilotPicker config={config} />
+              <div className="flex-1" />
               {status === "thinking" || status === "executing"
                 ? <button onClick={stop} className="px-2 h-[20px] rounded-md bg-risk/15 text-risk text-[10.5px] font-medium flex items-center gap-1"><Square size={9} />Stop</button>
                 : <button onClick={send} disabled={!input.trim()}
