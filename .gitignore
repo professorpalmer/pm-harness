@@ -23,3 +23,6 @@ build/pyinstaller-work/
 webapp/build/*.iconset/
 build/*.iconset/
 
+
+# Agent artifacts (plans, local agent state) -- never commit
+.hermes/
