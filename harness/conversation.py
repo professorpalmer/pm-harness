@@ -42,6 +42,7 @@ from pmharness.bridge import execute_intent, BridgeResult
 from .pilot import (parse_pilot_turn, PilotTurn, PilotError, PILOT_SYSTEM)
 from .wiki import WikiClient, session_digest
 from .text_clean import clean_say
+from .checkpoints import CheckpointStore
 
 
 def is_safe_path(path: str, parent: str) -> bool:
@@ -217,6 +218,7 @@ class ConversationalSession:
         self._wiki_auto = os.environ.get("HARNESS_WIKI_AUTO", "").strip() in ("1", "true", "yes")
         # optional MCP integration -- set by the server so the pilot can call MCP tools
         self._mcp = None
+        self._checkpoints = CheckpointStore(config.repo)
         # self-learning: accumulate this session's real findings for distillation
         self._session_findings: list = []
         self._first_objective: str = ""
@@ -759,6 +761,22 @@ class ConversationalSession:
                         self._append_action_result(act, aid, f"(write_file {aid} failed: {error_msg})", is_native)
                         continue
                     try:
+                        # Take checkpoint before write_file
+                        try:
+                            cp_id = self._checkpoints.snapshot(
+                                label=f"Before writing {act.path}",
+                                trigger="write_file"
+                            )
+                            if cp_id:
+                                yield ConvEvent("checkpoint", {
+                                    "id": cp_id,
+                                    "trigger": "write_file",
+                                    "label": f"Before writing {act.path}"
+                                })
+                        except Exception as cp_err:
+                            import sys
+                            print(f"Checkpoint error before write_file: {cp_err}", file=sys.stderr)
+
                         target_dir = os.path.dirname(target_path)
                         os.makedirs(target_dir, exist_ok=True)
                         import tempfile
@@ -1466,16 +1484,17 @@ class ConversationalSession:
         self._tokens_used += sum_in + sum_out
         return (sum_in, sum_out)
 
-    def _apply_worker_patch(self, artifacts: list) -> tuple[bool, list[str], str]:
+    def _apply_worker_patch(self, artifacts: list, job_id: str = "") -> tuple[bool, list[str], str]:
         """Finds the patch artifact (type=="patch"), extracts its unified_diff,
         and applies it cleanly/idempotently via git apply to self.config.repo.
-        Returns (applied_bool, files_changed, message).
+        Returns (applied_bool, files_changed, message). Checkpoint id (if any) is stashed on self._last_checkpoint_id.
         """
         import os
         import tempfile
         import subprocess
 
         if not self.config.repo or not os.path.exists(self.config.repo):
+            self._last_checkpoint_id = None
             return False, [], "no workspace directory (config.repo) is open"
 
         # Check if the directory is a git repo
@@ -1488,17 +1507,21 @@ class ConversationalSession:
                 text=True
             )
             if p_check.returncode != 0:
+                self._last_checkpoint_id = None
                 return False, [], f"not a git repository: {self.config.repo}"
         except Exception as e:
+            self._last_checkpoint_id = None
             return False, [], f"failed to check git repo: {e}"
 
         patch_art = next((a for a in artifacts if isinstance(a, dict) and a.get("type") == "patch"), None)
         if not patch_art:
+            self._last_checkpoint_id = None
             return False, [], "no patch to apply"
 
         payload = patch_art.get("payload") or {}
         diff_text = payload.get("unified_diff") or ""
         if not diff_text.strip():
+            self._last_checkpoint_id = None
             return False, [], "no patch to apply"
 
         files = payload.get("files") or []
@@ -1518,7 +1541,20 @@ class ConversationalSession:
                 text=True
             )
             if rev_p.returncode == 0:
+                self._last_checkpoint_id = None
                 return True, files, "already applied"
+
+            # Take checkpoint before applying patch
+            checkpoint_id = None
+            try:
+                label_suffix = f" {job_id}" if job_id else ""
+                checkpoint_id = self._checkpoints.snapshot(
+                    label=f"Before swarm patch{label_suffix}".strip(),
+                    trigger="swarm_patch"
+                )
+            except Exception as cp_err:
+                import sys
+                print(f"Checkpoint error during swarm patch: {cp_err}", file=sys.stderr)
 
             # b. Else git apply --check to verify it applies cleanly
             check_p = subprocess.run(
@@ -1538,9 +1574,11 @@ class ConversationalSession:
                     text=True
                 )
                 if apply_p.returncode == 0:
+                    self._last_checkpoint_id = checkpoint_id
                     return True, files, "applied cleanly"
                 else:
                     err_msg = apply_p.stderr.strip() or "git apply failed"
+                    self._last_checkpoint_id = checkpoint_id
                     return False, files, f"git apply failed: {err_msg}"
             else:
                 # c. If git apply --check fails (e.g. partial overlap), try git apply --3way
@@ -1552,11 +1590,14 @@ class ConversationalSession:
                     text=True
                 )
                 if three_way_p.returncode == 0:
+                    self._last_checkpoint_id = checkpoint_id
                     return True, files, "applied with 3way merge"
                 else:
                     err_msg = three_way_p.stderr.strip() or check_p.stderr.strip() or "patch did not apply cleanly"
+                    self._last_checkpoint_id = checkpoint_id
                     return False, files, f"patch did not apply cleanly: {err_msg}"
         except Exception as e:
+            self._last_checkpoint_id = None
             return False, files, f"error during patch application: {e}"
         finally:
             try:
@@ -1668,7 +1709,8 @@ class ConversationalSession:
         # so two concurrent backgrounded swarms cannot attempt to run git apply / git merge simultaneously,
         # which would cause repository index/state corruption.
         with self._apply_lock:
-            applied, applied_files, apply_msg = self._apply_worker_patch(artifacts)
+            applied, applied_files, apply_msg = self._apply_worker_patch(artifacts, job_id)
+            cp_id = getattr(self, "_last_checkpoint_id", None)
         has_patch_art = any(isinstance(a, dict) and a.get("type") == "patch" for a in artifacts)
         
         apply_summary = ""
@@ -1697,6 +1739,7 @@ class ConversationalSession:
             "num_artifacts": num_artifacts,
             "artifact_types": artifact_types,
             "ar_list": ar_list,
+            "checkpoint_id": cp_id,
         }
 
     def _run_swarm_background(self, job_id: str, objective: str, state_dir: Optional[str] = None) -> None:
@@ -1776,6 +1819,14 @@ class ConversationalSession:
                     "result": res_job,
                     "message": msg_content
                 })
+
+                checkpoint_id = res_job.get("checkpoint_id")
+                if checkpoint_id:
+                    yield ConvEvent("checkpoint", {
+                        "id": checkpoint_id,
+                        "trigger": "swarm_patch",
+                        "label": f"Before swarm patch {job_id[:8]}"
+                    })
                 
                 self._swarm_results.task_done()
         finally:

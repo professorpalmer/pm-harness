@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, ChevronUp, GripVertical, Trash2, GitBranch, ListChecks, Play, Copy, Check, Pencil, RefreshCw, FileText } from "lucide-react";
+import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, ChevronUp, GripVertical, Trash2, GitBranch, ListChecks, Play, Copy, Check, Pencil, RefreshCw, FileText, History } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -22,12 +22,14 @@ type Item =
   | { kind: "card"; card: Card }
   | { kind: "thinking"; text: string }
   | { kind: "swarm_pending"; job_ids: string[]; objective: string; resolved?: boolean }
-  | { kind: "swarm_result"; job_id: string; applied: boolean; files: string[]; summary: string; error: string | null; objective?: string };
+  | { kind: "swarm_result"; job_id: string; applied: boolean; files: string[]; summary: string; error: string | null; objective?: string }
+  | { kind: "checkpoint"; id: string; label: string; trigger: string };
 
 type GroupedItem =
   | { kind: "msg"; msg: Msg }
   | { kind: "swarm_pending"; job_ids: string[]; objective: string; resolved?: boolean }
   | { kind: "swarm_result"; job_id: string; applied: boolean; files: string[]; summary: string; error: string | null; objective?: string }
+  | { kind: "checkpoint"; id: string; label: string; trigger: string }
   | { kind: "activity_group"; items: ( { kind: "card"; card: Card } | { kind: "thinking"; text: string } )[] };
 
 function getSimilarity(s1: string, s2: string): number {
@@ -109,7 +111,7 @@ function groupAgentActivity(items: Item[]): GroupedItem[] {
         currentGroup = [];
       }
       grouped.push(item);
-    } else if (item.kind === "swarm_pending" || item.kind === "swarm_result") {
+    } else if (item.kind === "swarm_pending" || item.kind === "swarm_result" || item.kind === "checkpoint") {
       if (currentGroup.length > 0) {
         grouped.push({ kind: "activity_group", items: currentGroup });
         currentGroup = [];
@@ -657,6 +659,9 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
             resolved: false,
           },
         ]);
+      } else if (ev.kind === "checkpoint") {
+        setItems((p) => [...p, { kind: "checkpoint" as const, id: d.id, label: d.label, trigger: d.trigger }]);
+        window.dispatchEvent(new Event("harness-repo-mutated"));
       } else if (ev.kind === "swarm_result") {
         handleSwarmResult(d);
       } else if (ev.kind === "assistant_done") {
@@ -912,6 +917,13 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                         {it.summary && <div className="text-[10px] text-muted mt-1 leading-relaxed whitespace-pre-wrap">{it.summary}</div>}
                       </div>
                     )}
+                  </div>
+                );
+              } else if (it.kind === "checkpoint") {
+                return (
+                  <div key={i} className="flex items-center gap-1.5 py-1 px-3 rounded-full bg-panel2/15 border border-edge/20 text-[10px] text-faint w-fit my-1 select-none">
+                    <History size={11} className="text-accent" />
+                    <span>restore point created: {it.label} ({it.id.slice(0, 8)})</span>
                   </div>
                 );
               } else if (it.kind === "activity_group") {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Database, Globe, FolderTree, GitBranch, GitFork, Plug, Settings, SquareTerminal, Columns, Rows, Split, X } from "lucide-react";
+import { Database, Globe, FolderTree, GitBranch, GitFork, Plug, Settings, SquareTerminal, Columns, Rows, Split, X, History } from "lucide-react";
 import StatePane from "./StatePane";
 import BrowserPane from "./BrowserPane";
 import FileTree from "./FileTree";
@@ -8,8 +8,9 @@ import WorktreesPane from "./WorktreesPane";
 import McpPane from "./McpPane";
 import SettingsPane from "./SettingsPane";
 import TerminalPane from "./TerminalPane";
+import CheckpointsPane from "./CheckpointsPane";
 
-type Tab = "state" | "files" | "git" | "worktrees" | "terminal" | "browser" | "mcp" | "settings";
+type Tab = "state" | "files" | "git" | "worktrees" | "terminal" | "browser" | "mcp" | "settings" | "checkpoints";
 
 const TAB_CONFIG: Record<Tab, { label: string; icon: React.ReactNode }> = {
   state: { label: "State", icon: <Database size={12} /> },
@@ -20,6 +21,7 @@ const TAB_CONFIG: Record<Tab, { label: string; icon: React.ReactNode }> = {
   browser: { label: "Browser", icon: <Globe size={12} /> },
   mcp: { label: "MCP", icon: <Plug size={12} /> },
   settings: { label: "Settings", icon: <Settings size={12} /> },
+  checkpoints: { label: "History", icon: <History size={12} /> },
 };
 
 interface SplitState {
@@ -44,7 +46,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as Tab[];
-        const validTabs: Tab[] = ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings"];
+        const validTabs: Tab[] = ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings", "checkpoints"];
         const filtered = parsed.filter(t => validTabs.includes(t));
         const missing = validTabs.filter(t => !filtered.includes(t));
         return [...filtered, ...missing];
@@ -52,7 +54,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
         // fallback
       }
     }
-    return ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings"];
+    return ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings", "checkpoints"];
   });
 
   const saveTabOrder = (newOrder: Tab[]) => {
@@ -92,7 +94,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        const validTabs: Tab[] = ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings"];
+        const validTabs: Tab[] = ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings", "checkpoints"];
         const primaryTab = validTabs.includes(parsed.primaryTab) ? parsed.primaryTab : "state";
         const secondaryTab = validTabs.includes(parsed.secondaryTab) ? parsed.secondaryTab : "terminal";
         return {
@@ -210,6 +212,8 @@ export default function RightPane({ artifacts, onOpenWizard }: {
         return <McpPane />;
       case "settings":
         return <SettingsPane onOpenWizard={onOpenWizard} />;
+      case "checkpoints":
+        return <CheckpointsPane />;
       default:
         return null;
     }

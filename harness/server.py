@@ -397,6 +397,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/api/worktrees/prune", "/api/worktrees/max",
                       "/api/hooks/add", "/api/hooks/update", "/api/hooks/remove",
                       "/api/workspace/open", "/api/codegraph/reindex",
+                      "/api/checkpoints/restore", "/api/checkpoints/snapshot",
                       "/api/terminal/create", "/api/terminal/write",
                       "/api/terminal/resize", "/api/terminal/kill"):
             return self._handle_post_json(u.path)
@@ -436,6 +437,32 @@ class Handler(BaseHTTPRequestHandler):
                 "before_tokens": before,
                 "after_tokens": after
             }))
+        if path == "/api/checkpoints/restore":
+            if not repo or not os.path.exists(repo):
+                return self._send(400, json.dumps({"error": "No open workspace"}))
+            checkpoint_id = body.get("id", "").strip()
+            if not checkpoint_id:
+                return self._send(400, json.dumps({"error": "Missing checkpoint id"}))
+            from .checkpoints import CheckpointStore
+            store = CheckpointStore(repo)
+            result = store.restore(checkpoint_id)
+            if result.get("ok"):
+                return self._send(200, json.dumps(result))
+            else:
+                return self._send(400, json.dumps({"error": result.get("error", "Restore failed")}))
+
+        if path == "/api/checkpoints/snapshot":
+            if not repo or not os.path.exists(repo):
+                return self._send(400, json.dumps({"error": "No open workspace"}))
+            label = body.get("label", "").strip() or "Manual checkpoint"
+            from .checkpoints import CheckpointStore
+            store = CheckpointStore(repo)
+            checkpoint_id = store.snapshot(label=label, trigger="manual")
+            if checkpoint_id:
+                return self._send(200, json.dumps({"ok": True, "id": checkpoint_id}))
+            else:
+                return self._send(400, json.dumps({"error": "Failed to create checkpoint snapshot"}))
+
         if path == "/api/codegraph/reindex":
             if not repo or not os.path.isdir(repo):
                 return self._send(400, json.dumps({"error": "No open workspace"}))
@@ -1040,6 +1067,18 @@ class Handler(BaseHTTPRequestHandler):
             for ev in _pilot.drain_swarm_results():
                 results.append({"kind": ev.kind, "data": ev.data})
             return self._send(200, json.dumps({"results": results}))
+        if u.path == "/api/checkpoints":
+            if self._guard():
+                return
+            qtok = parse_qs(u.query).get("token", [""])[0]
+            if qtok != _TOKEN and self.headers.get("X-Harness-Token", "") != _TOKEN:
+                return self._send(403, json.dumps({"error": "missing or bad token"}))
+            repo = _cfg.repo
+            if not repo or not os.path.exists(repo):
+                return self._send(200, json.dumps([]))
+            from .checkpoints import CheckpointStore
+            store = CheckpointStore(repo)
+            return self._send(200, json.dumps(store.list()))
         if u.path == "/api/mcp":
             return self._send(200, json.dumps({"servers": _mcp.status(),
                 "tools": [{"server": t.server, "name": t.name, "qualified": t.qualified,
