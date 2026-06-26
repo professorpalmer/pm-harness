@@ -346,6 +346,22 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
             </div>
           )}
           {(() => {
+            const intermediateItems = new Set<Item>();
+            let hasSeenCardOrAssistantMsgInTurn = false;
+            for (let j = items.length - 1; j >= 0; j--) {
+              const item = items[j];
+              if (item.kind === "msg" && item.msg.role === "user") {
+                hasSeenCardOrAssistantMsgInTurn = false;
+              } else if (item.kind === "msg" && item.msg.role === "assistant") {
+                if (hasSeenCardOrAssistantMsgInTurn) {
+                  intermediateItems.add(item);
+                }
+                hasSeenCardOrAssistantMsgInTurn = true;
+              } else if (item.kind === "card") {
+                hasSeenCardOrAssistantMsgInTurn = true;
+              }
+            }
+
             const grouped = groupAgentActivity(items);
             return grouped.map((it, i) => {
               if (it.kind === "msg") {
@@ -358,7 +374,15 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                   }
                 }
                 const isFirstInRun = !prevMsg || prevMsg.role !== "assistant";
-                return <Bubble key={i} msg={it.msg} showLabel={it.msg.role === "assistant" ? isFirstInRun : false} />;
+                const isIntermediate = intermediateItems.has(it as Item);
+                return (
+                  <Bubble
+                    key={i}
+                    msg={it.msg}
+                    showLabel={it.msg.role === "assistant" ? isFirstInRun : false}
+                    isIntermediate={isIntermediate}
+                  />
+                );
               } else if (it.kind === "activity_group") {
                 return (
                   <div key={i} className="flex flex-col gap-0.5 pl-3 border-l-2 border-edge/40 my-1 w-full">
@@ -621,7 +645,7 @@ function ThinkingBlock({ text }: { text: string }) {
   );
 }
 
-function Bubble({ msg, showLabel }: { msg: Msg; showLabel?: boolean }) {
+function Bubble({ msg, showLabel, isIntermediate }: { msg: Msg; showLabel?: boolean; isIntermediate?: boolean }) {
   const isUser = msg.role === "user";
   const displayedText = isUser ? msg.text : cleanAssistantText(msg.text);
 
@@ -632,6 +656,16 @@ function Bubble({ msg, showLabel }: { msg: Msg; showLabel?: boolean }) {
           <span className="text-[10px] uppercase tracking-wider text-faint px-1 select-none font-semibold mt-1">you</span>
         )}
         <div className="rounded-xl px-3 py-1 text-[13px] leading-relaxed whitespace-pre-wrap break-words max-w-[85%] bg-accent2 text-txt border border-edge/30">
+          {displayedText}
+        </div>
+      </div>
+    );
+  }
+
+  if (isIntermediate) {
+    return (
+      <div className="flex flex-col items-start my-0.5 w-full pl-3">
+        <div className="text-[12px] leading-tight text-muted whitespace-pre-wrap break-words max-w-[95%] py-0.5 font-normal">
           {displayedText}
         </div>
       </div>
