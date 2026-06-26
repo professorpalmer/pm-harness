@@ -40,7 +40,11 @@ export default function PilotPicker({ config }: {
   const swap = async (m: string) => {
     setCurrent(m);
     setIsOpen(false);
-    try { await api.swapPilot(m); } catch {}
+    try {
+      await api.swapPilot(m);
+      // notify the rest of the app (StatusBar, etc.) so config-derived UI refreshes
+      window.dispatchEvent(new Event("harness-config-changed"));
+    } catch {}
   };
 
   if (!config) return null;
