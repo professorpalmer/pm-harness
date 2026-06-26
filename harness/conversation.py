@@ -848,6 +848,8 @@ class ConversationalSession:
                             except Exception:
                                 artifacts = []
 
+                            self._add_worker_tokens_from_artifacts(artifacts)
+
                             num_artifacts = len(artifacts)
                             artifact_types = sorted({str(a.get("type", "finding")) for a in artifacts})
                             
@@ -1027,6 +1029,8 @@ class ConversationalSession:
                                 artifacts = json.loads(art_out)
                             except Exception:
                                 artifacts = []
+
+                            self._add_worker_tokens_from_artifacts(artifacts)
                             
                             num_art = len(artifacts)
                             aggregate_num_artifacts += num_art
@@ -1149,6 +1153,77 @@ class ConversationalSession:
         yield ConvEvent("message", {"role": "assistant",
             "text": "(Reached the investigation step limit for this message.)"})
         yield ConvEvent("assistant_done", {"turns": HARD_PILOT_STEPS, "swarms": swarms})
+
+    def _add_worker_tokens_from_artifacts(self, artifacts_json: Any) -> tuple[int, int]:
+        """Extracts token counts from worker job artifacts defensively, summing tokens_in/out
+        while deduping across the same task_id to avoid double-counting.
+        """
+        if isinstance(artifacts_json, str):
+            try:
+                import json
+                artifacts = json.loads(artifacts_json)
+            except Exception:
+                return (0, 0)
+        elif isinstance(artifacts_json, list):
+            artifacts = artifacts_json
+        else:
+            return (0, 0)
+
+        task_map = {}
+        no_task_seen = set()
+
+        for art in artifacts:
+            if not isinstance(art, dict):
+                continue
+            payload = art.get("payload")
+            if not isinstance(payload, dict):
+                payload = {}
+
+            task_id = art.get("task_id") or payload.get("task_id")
+
+            tokens_in = art.get("tokens_in")
+            if tokens_in is None:
+                tokens_in = payload.get("tokens_in")
+            tokens_out = art.get("tokens_out")
+            if tokens_out is None:
+                tokens_out = payload.get("tokens_out")
+
+            t_in = 0
+            if tokens_in is not None:
+                try:
+                    t_in = int(tokens_in)
+                except (ValueError, TypeError):
+                    t_in = 0
+            t_out = 0
+            if tokens_out is not None:
+                try:
+                    t_out = int(tokens_out)
+                except (ValueError, TypeError):
+                    t_out = 0
+
+            if t_in == 0 and t_out == 0:
+                continue
+
+            if task_id:
+                if task_id in task_map:
+                    old_in, old_out = task_map[task_id]
+                    task_map[task_id] = (max(old_in, t_in), max(old_out, t_out))
+                else:
+                    task_map[task_id] = (t_in, t_out)
+            else:
+                no_task_seen.add((t_in, t_out))
+
+        sum_in = 0
+        sum_out = 0
+        for t_in, t_out in task_map.values():
+            sum_in += t_in
+            sum_out += t_out
+        for t_in, t_out in no_task_seen:
+            sum_in += t_in
+            sum_out += t_out
+
+        self._tokens_used += sum_in + sum_out
+        return (sum_in, sum_out)
 
     def _detect_default_implement_adapter(self) -> str:
         try:
