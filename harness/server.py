@@ -436,7 +436,6 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:
                         recents = []
                 # never persist temp dirs (test/ephemeral state_dirs leak otherwise)
-                import tempfile as _tf
                 _tmproot = os.path.realpath(_tf.gettempdir())
                 def _persistable(_pth):
                     if not _pth:
@@ -1041,7 +1040,6 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 recents = []
             # filter temp/dead dirs so ephemeral test state_dirs never show as recents
-            import tempfile as _tf
             _tmproot = os.path.realpath(_tf.gettempdir())
             recents = [
                 r for r in recents
