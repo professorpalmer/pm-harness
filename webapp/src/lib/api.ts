@@ -77,6 +77,28 @@ export type PlatformAdapter = {
   note: string;
 };
 
+export type GitStatus = {
+  gh_available: boolean;
+  gh_user: string | null;
+  wiki_repo: string | null;
+  connected: boolean;
+  html_url: string | null;
+};
+
+export type GitConnectResponse = GitStatus & {
+  device_code?: string;
+  user_code?: string;
+  verification_uri?: string;
+  interval?: number;
+  expires_in?: number;
+  error?: string;
+};
+
+export type GitPollResponse = GitStatus & {
+  status?: string;
+  error?: string;
+};
+
 export type Worktree = {
   path: string;
   branch: string;
@@ -316,6 +338,11 @@ export const api = {
 
   getPlatform: () => getJSON<{ adapters: PlatformAdapter[] }>("/api/platform"),
   togglePlatform: (name: string, enabled: boolean) => postJSON<{ adapters: PlatformAdapter[] }>("/api/platform", { name, enabled }),
+
+  getGitStatus: () => getJSON<GitStatus>(withToken("/api/git/status")),
+  connectGit: (method: "gh" | "device") => postJSON<GitConnectResponse>("/api/git/connect", { method }),
+  pollGitDevice: (device_code: string) => postJSON<GitPollResponse>("/api/git/device/poll", { device_code }),
+  disconnectGit: () => postJSON<GitStatus>("/api/git/disconnect", {}),
 
   getReviews: () => getJSON<PendingReview[]>(withToken("/api/reviews")),
   applyReview: (id: string, decisions: Record<string, "accept" | "reject">) =>

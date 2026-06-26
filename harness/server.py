@@ -398,6 +398,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/api/hooks/add", "/api/hooks/update", "/api/hooks/remove",
                       "/api/workspace/open", "/api/codegraph/reindex",
                       "/api/file/write",
+                      "/api/git/connect", "/api/git/device/poll", "/api/git/disconnect",
                       "/api/checkpoints/restore", "/api/checkpoints/snapshot",
                       "/api/terminal/create", "/api/terminal/write",
                       "/api/terminal/resize", "/api/terminal/kill"):
@@ -775,6 +776,54 @@ class Handler(BaseHTTPRequestHandler):
                 owner_token=owner_token if owner_token is not None else None,
             )
             return self._send(200, json.dumps(res))
+        if path == "/api/git/connect":
+            method = body.get("method")
+            if method not in ("gh", "device"):
+                return self._send(400, json.dumps({"error": f"Invalid method: {method}"}))
+            from .git_provision import GitProvisioner, save_connection, get_status
+            prov = GitProvisioner()
+            if method == "gh":
+                info = prov.detect_gh()
+                if not info["available"]:
+                    return self._send(400, json.dumps({"error": "GitHub CLI not authenticated or not installed"}))
+                token = prov.github_token()
+                if not token:
+                    return self._send(400, json.dumps({"error": "Could not retrieve GitHub CLI token"}))
+                res = prov.provision_wiki_repo(token)
+                if not res.get("ok"):
+                    return self._send(500, json.dumps({"error": res.get("error", "Failed to provision repository")}))
+                save_connection("gh", res["repo_full_name"], res["html_url"])
+                return self._send(200, json.dumps(get_status()))
+            elif method == "device":
+                res = prov.device_flow_start()
+                if "error" in res:
+                    return self._send(500, json.dumps({"error": res["error"]}))
+                return self._send(200, json.dumps(res))
+        if path == "/api/git/device/poll":
+            device_code = body.get("device_code")
+            if not device_code:
+                return self._send(400, json.dumps({"error": "Missing device_code"}))
+            from .git_provision import GitProvisioner, save_connection, save_device_token, get_status
+            prov = GitProvisioner()
+            res = prov.device_flow_poll(None, device_code)
+            if res.get("status") == "authorized":
+                token = res.get("token")
+                if not token:
+                    return self._send(500, json.dumps({"error": "No token in authorized response"}))
+                repo_res = prov.provision_wiki_repo(token)
+                if not repo_res.get("ok"):
+                    return self._send(500, json.dumps({"error": repo_res.get("error", "Failed to provision repository")}))
+                save_device_token(token)
+                save_connection("device", repo_res["repo_full_name"], repo_res["html_url"])
+                return self._send(200, json.dumps(get_status()))
+            elif res.get("status") == "pending":
+                return self._send(200, json.dumps({"status": "pending"}))
+            else:
+                return self._send(400, json.dumps({"error": res.get("error", "Verification failed")}))
+        if path == "/api/git/disconnect":
+            from .git_provision import delete_connection, get_status
+            delete_connection()
+            return self._send(200, json.dumps(get_status()))
         if path == "/api/platform":
             name = body.get("name")
             enabled = body.get("enabled")
@@ -1112,6 +1161,14 @@ class Handler(BaseHTTPRequestHandler):
                               "application/javascript")
         if u.path == "/app.css":
             return self._send(200, (_WEB / "app.css").read_text(), "text/css")
+        if u.path == "/api/git/status":
+            if self._guard():
+                return
+            qtok = parse_qs(u.query).get("token", [""])[0]
+            if qtok != _TOKEN and self.headers.get("X-Harness-Token", "") != _TOKEN:
+                return self._send(403, json.dumps({"error": "missing or bad token"}))
+            from .git_provision import get_status
+            return self._send(200, json.dumps(get_status()))
         if u.path == "/api/session/state":
             if self._guard():
                 return

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Settings as SettingsIcon, ChevronRight, ChevronDown, Plus, Trash2 } from "lucide-react";
-import { api, type Settings, type UsageData, type PlatformAdapter } from "../lib/api";
+import { api, type Settings, type UsageData, type PlatformAdapter, type GitStatus } from "../lib/api";
 import SkillsPane from "./SkillsPane";
 
 export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => void }) {
@@ -14,6 +14,17 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
   const [wikiBase, setWikiBase] = useState("");
   const [wikiToken, setWikiToken] = useState("");
   const [wikiSaving, setWikiSaving] = useState(false);
+  
+  // Git Provision states
+  const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
+  const [gitConnecting, setGitConnecting] = useState(false);
+  const [gitError, setGitError] = useState("");
+  const [deviceFlow, setDeviceFlow] = useState<{
+    user_code: string;
+    verification_uri: string;
+    device_code: string;
+  } | null>(null);
+  const [gitPolling, setGitPolling] = useState(false);
   
   // Platform Adapter states
   const [platformAdapters, setPlatformAdapters] = useState<PlatformAdapter[]>([]);
@@ -99,8 +110,98 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
         console.error("Failed to load platform adapters", err);
       });
 
+    api.getGitStatus()
+      .then(setGitStatus)
+      .catch((err) => {
+        console.error("Failed to load Git status", err);
+      });
+
     loadHooks();
   }, []);
+
+  useEffect(() => {
+    let timer: any = null;
+    if (deviceFlow && gitPolling) {
+      timer = setInterval(async () => {
+        try {
+          const res = await api.pollGitDevice(deviceFlow.device_code);
+          if (res.connected) {
+            setGitStatus(res);
+            setDeviceFlow(null);
+            setGitPolling(false);
+          } else if (res.status !== "pending") {
+            setGitPolling(false);
+            if (res.error) {
+              setGitError(res.error);
+            }
+          }
+        } catch (err) {
+          console.error("Polling error", err);
+          setGitPolling(false);
+          setGitError("Device authorization failed");
+        }
+      }, 5000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [deviceFlow, gitPolling]);
+
+  const handleConnectGH = async () => {
+    setGitConnecting(true);
+    setGitError("");
+    setDeviceFlow(null);
+    try {
+      const res = await api.connectGit("gh");
+      if ("error" in res && res.error) {
+        setGitError(res.error);
+      } else {
+        setGitStatus(res as GitStatus);
+      }
+    } catch (err: any) {
+      setGitError(err?.message || "Failed to connect via GitHub CLI");
+    } finally {
+      setGitConnecting(false);
+    }
+  };
+
+  const handleStartDeviceFlow = async () => {
+    setGitConnecting(true);
+    setGitError("");
+    setDeviceFlow(null);
+    try {
+      const res = await api.connectGit("device");
+      if ("error" in res && res.error) {
+        setGitError(res.error);
+      } else if (res.device_code) {
+        setDeviceFlow({
+          user_code: res.user_code || "",
+          verification_uri: res.verification_uri || "",
+          device_code: res.device_code
+        });
+        setGitPolling(true);
+      }
+    } catch (err: any) {
+      setGitError(err?.message || "Failed to start device flow");
+    } finally {
+      setGitConnecting(false);
+    }
+  };
+
+  const handleDisconnectGit = async () => {
+    setGitConnecting(true);
+    setGitError("");
+    try {
+      const res = await api.disconnectGit();
+      setGitStatus(res);
+      setDeviceFlow(null);
+      setGitPolling(false);
+    } catch (err: any) {
+      setGitError(err?.message || "Failed to disconnect");
+    } finally {
+      setGitConnecting(false);
+    }
+  };
 
   const handleTogglePlatform = async (name: string, enabled: boolean) => {
     try {
@@ -688,6 +789,125 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
             </div>
           </div>
         </div>
+
+        {/* GitHub & Wiki Repo Provisioning */}
+        <div className="border-t border-edge pt-3 space-y-2">
+          <div className="uppercase tracking-wider text-[10px] text-faint font-semibold">
+            GitHub / Wiki Repo
+          </div>
+          {gitError && (
+            <div className="text-risk text-[10px] font-semibold bg-risk/10 border border-risk/30 rounded p-2">
+              {gitError}
+            </div>
+          )}
+
+          {gitStatus?.connected ? (
+            <div className="space-y-2 bg-panel rounded border border-edge/40 p-2.5">
+              <div className="text-[11px] leading-relaxed text-muted">
+                Connected to GitHub. Wiki repository is provisioned and active.
+              </div>
+              <div className="flex items-center justify-between gap-2 border-t border-edge/30 pt-2 mt-1">
+                <div className="space-y-0.5">
+                  <div className="text-[10px] text-faint uppercase font-bold tracking-wider">Wiki Repository</div>
+                  {gitStatus.html_url ? (
+                    <a
+                      href={gitStatus.html_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-mono text-[11px] text-accent hover:underline break-all"
+                    >
+                      {gitStatus.wiki_repo}
+                    </a>
+                  ) : (
+                    <span className="font-mono text-[11px] text-txt">{gitStatus.wiki_repo}</span>
+                  )}
+                </div>
+                <button
+                  disabled={gitConnecting}
+                  onClick={handleDisconnectGit}
+                  className="bg-risk/10 border border-risk/20 hover:bg-risk/20 text-risk text-[10px] uppercase font-bold tracking-wider px-2.5 py-1 rounded transition disabled:opacity-50"
+                >
+                  Disconnect
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              <div className="text-[10px] text-muted leading-relaxed">
+                Connect your GitHub account to automatically provision a private "my-portable-llm-wiki" repository as your durable cross-LLM memory.
+              </div>
+
+              {gitConnecting && (
+                <div className="text-[10px] text-muted italic flex items-center gap-1.5">
+                  <span className="animate-pulse">Provisioning repository...</span>
+                </div>
+              )}
+
+              {!gitConnecting && !deviceFlow && (
+                <div className="flex flex-col gap-2">
+                  {gitStatus?.gh_available ? (
+                    <button
+                      onClick={handleConnectGH}
+                      className="w-full bg-accent hover:bg-accent/90 text-accent-txt text-[11px] font-bold px-3 py-1.5 rounded transition shadow-sm text-center"
+                    >
+                      Connect with GitHub CLI ({gitStatus.gh_user})
+                    </button>
+                  ) : (
+                    <div className="text-[10px] text-muted italic bg-panel rounded border border-edge/30 p-2 leading-normal">
+                      GitHub CLI (gh) not detected or not authenticated. Install or authenticate to enable one-click connection.
+                    </div>
+                  )}
+
+                  <button
+                    onClick={handleStartDeviceFlow}
+                    className="w-full bg-panel hover:bg-panel2 border border-edge text-txt text-[11px] font-semibold px-3 py-1.5 rounded transition text-center"
+                  >
+                    Connect via Device Code instead
+                  </button>
+                </div>
+              )}
+
+              {deviceFlow && (
+                <div className="bg-panel rounded border border-edge/40 p-2.5 space-y-2">
+                  <div className="text-[11px] font-medium text-txt">
+                    Verification Code:
+                  </div>
+                  <div className="font-mono text-center text-lg tracking-widest font-bold bg-bg border border-edge/60 rounded py-1.5 text-accent select-all">
+                    {deviceFlow.user_code}
+                  </div>
+                  <div className="text-[10px] text-muted leading-normal">
+                    Go to{" "}
+                    <a
+                      href={deviceFlow.verification_uri}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-accent underline hover:text-accent-hover"
+                    >
+                      {deviceFlow.verification_uri.replace(/^https?:\/\//, "")}
+                    </a>{" "}
+                    and enter the code above to authorize.
+                  </div>
+                  {gitPolling && (
+                    <div className="text-[10px] text-accent/90 italic flex items-center gap-1.5">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-ping" />
+                      Waiting for authorization...
+                    </div>
+                  )}
+                  <button
+                    onClick={() => {
+                      setDeviceFlow(null);
+                      setGitPolling(false);
+                    }}
+                    className="w-full text-muted hover:text-txt text-[10px] font-semibold uppercase tracking-wider text-center pt-1"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* WIKI GRAPH (portable-llm-wiki gated owner surface) */}
         <div className="border-t border-edge pt-3 space-y-2">
           <div className="uppercase tracking-wider text-[10px] text-faint font-semibold">
