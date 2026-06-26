@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, ChevronUp, GripVertical, Trash2, GitBranch, ListChecks, Play, Copy, Check, Pencil, RefreshCw, FileText, History, Gauge, X } from "lucide-react";
+import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, ChevronUp, GripVertical, Trash2, GitBranch, ListChecks, Play, Copy, Check, Pencil, RefreshCw, FileText, History, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -1593,15 +1593,6 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                 <ListChecks size={11} /> Plan
               </button>
               <PilotPicker config={config} />
-              {contextUsage && contextUsage.limit > 0 && (
-                <button
-                  onClick={() => setShowContextPanel((v) => !v)}
-                  title="Context usage breakdown"
-                  className={`px-1.5 h-[20px] rounded-md text-[10.5px] flex items-center gap-1 transition ${showContextPanel ? "bg-panel2 text-txt" : "text-faint hover:text-muted"}`}>
-                  <Gauge size={11} />
-                  {Math.round((contextUsage.total / contextUsage.limit) * 100)}%
-                </button>
-              )}
               <button
                 onClick={() => {
                   setShowContextPanel(!showContextPanel);
