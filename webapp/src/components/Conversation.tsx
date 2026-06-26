@@ -14,6 +14,7 @@ type Msg = {
   text: string;
   isPlan?: boolean;
   images?: { path: string; name: string; previewUrl: string }[];
+  streaming?: boolean;
 };
 type Card = {
   id: string; goal: string; cwd?: string | null;
@@ -196,7 +197,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     };
   }, []);
   const [input, setInput] = useState("");
-  const [status, setStatus] = useState<"idle"|"thinking"|"executing"|"done"|"error">("idle");
+  const [status, setStatus] = useState<"idle"|"thinking"|"executing"|"done"|"error"|"streaming">("idle");
   const [auto, setAuto] = useState(false);
   const [plan, setPlan] = useState(false);
   const [distillNotice, setDistillNotice] = useState<string | null>(null);
@@ -775,10 +776,51 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
         setCompactingStatus(null);
         setStatus("thinking");
         setItems((p) => [...p, { kind: "thinking", text: d.text || "" }]);
+      } else if (ev.kind === "message_delta") {
+        setCompactingStatus(null);
+        setStatus("streaming");
+        setItems((p) => {
+          const lastIdx = p.length - 1;
+          if (lastIdx >= 0 && p[lastIdx].kind === "msg") {
+            const lastMsg = p[lastIdx] as { kind: "msg"; msg: Msg };
+            if (lastMsg.msg.role === "assistant" && lastMsg.msg.streaming) {
+              const updatedMsg = {
+                ...lastMsg.msg,
+                text: lastMsg.msg.text + (d.text || "")
+              };
+              const updatedItems = [...p];
+              updatedItems[lastIdx] = { kind: "msg", msg: updatedMsg };
+              return updatedItems;
+            }
+          }
+          return [...p, { kind: "msg", msg: { role: "assistant", text: d.text || "", streaming: true, isPlan: planTurnRef.current } }];
+        });
       } else if (ev.kind === "message") {
         setCompactingStatus(null);
         setStatus("thinking");
-        setItems((p) => deduplicateConsecutiveAssistantMessages([...p, { kind: "msg", msg: { role: "assistant", text: d.text || "", isPlan: planTurnRef.current } }]));
+        setItems((p) => {
+          const lastIdx = p.length - 1;
+          if (lastIdx >= 0 && p[lastIdx].kind === "msg") {
+            const lastMsg = p[lastIdx] as { kind: "msg"; msg: Msg };
+            if (lastMsg.msg.role === "assistant" && lastMsg.msg.streaming) {
+              if (!d.text) {
+                return p.slice(0, lastIdx);
+              }
+              const updatedMsg = {
+                ...lastMsg.msg,
+                text: d.text,
+                streaming: false
+              };
+              const updatedItems = [...p];
+              updatedItems[lastIdx] = { kind: "msg", msg: updatedMsg };
+              return deduplicateConsecutiveAssistantMessages(updatedItems);
+            }
+          }
+          if (!d.text) {
+            return p;
+          }
+          return deduplicateConsecutiveAssistantMessages([...p, { kind: "msg", msg: { role: "assistant", text: d.text || "", isPlan: planTurnRef.current } }]);
+        });
       } else if (ev.kind === "action_start") {
         setCompactingStatus(null);
         setStatus("executing");
@@ -938,7 +980,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
 
     const queuePrefVal = localStorage.getItem("pmharness.queueMessages");
     const isQueueEnabled = queuePrefVal !== null ? queuePrefVal === "true" : true;
-    const isBusy = status === "thinking" || status === "executing";
+    const isBusy = status === "thinking" || status === "executing" || status === "streaming";
 
     if (isBusy) {
       if (isQueueEnabled) {
@@ -1181,7 +1223,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
               return null;
             });
 
-            const isBusy = status === "thinking" || status === "executing";
+            const isBusy = status === "thinking" || status === "executing" || status === "streaming";
             return (
               <>
                 {list}
@@ -1194,7 +1236,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                 {isBusy && !compactingStatus && (
                   <div className="flex items-center gap-1.5 py-1 text-[12px] text-muted select-none mt-1 pl-0.5">
                     <Loader2 size={12} className="animate-spin text-muted" />
-                    <span>{status === "thinking" ? "thinking..." : "running..."}</span>
+                    <span>{status === "thinking" ? "thinking..." : status === "streaming" ? "streaming..." : "running..."}</span>
                   </div>
                 )}
               </>
@@ -1590,7 +1632,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                 </span>
               </button>
               <div className="flex-1" />
-              {status === "thinking" || status === "executing"
+              {status === "thinking" || status === "executing" || status === "streaming"
                 ? <button onClick={stop} className="px-2 h-[20px] rounded-md bg-risk/15 text-risk text-[10.5px] font-medium flex items-center gap-1"><Square size={9} />Stop</button>
                 : <button onClick={send} disabled={!input.trim() && attachedImages.length === 0}
                     className="px-2.5 h-[20px] rounded-md bg-accent text-black/90 text-[10.5px] font-semibold flex items-center gap-1 hover:brightness-110 disabled:opacity-40 disabled:cursor-default transition">

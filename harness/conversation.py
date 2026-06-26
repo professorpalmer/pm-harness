@@ -922,7 +922,46 @@ class ConversationalSession:
                     from .pilot import build_tools_schema
                     mcp_tools = self._mcp.discovered_tools() if self._mcp else None
                     tools_schema = build_tools_schema(mcp_tools, no_delegation=getattr(self.config, "no_delegation", False))
-                    resp = self.pilot.chat(self._history[1:], tools=tools_schema, system=sys_prompt)
+                    
+                    is_interactive = not getattr(self.config, "no_delegation", False)
+                    # Gate on an EXPLICIT capability flag (is True) + a callable chat_stream.
+                    # Using `is True` avoids MagicMock test pilots (which fabricate any attr as a
+                    # truthy Mock) wrongly entering the streaming branch.
+                    _can_stream = (
+                        getattr(self.pilot, "supports_streaming", False) is True
+                        and callable(getattr(self.pilot, "chat_stream", None))
+                    )
+                    if is_interactive and _can_stream:
+                        import queue
+                        import threading
+                        q = queue.Queue()
+                        
+                        def run_stream():
+                            try:
+                                r = self.pilot.chat_stream(
+                                    self._history[1:],
+                                    tools=tools_schema,
+                                    system=sys_prompt,
+                                    on_delta=lambda delta: q.put(("delta", delta))
+                                )
+                                q.put(("done", r))
+                            except Exception as ex:
+                                q.put(("error", ex))
+                        
+                        t = threading.Thread(target=run_stream, daemon=True)
+                        t.start()
+                        
+                        while True:
+                            kind, val = q.get()
+                            if kind == "delta":
+                                yield ConvEvent("message_delta", {"text": val})
+                            elif kind == "done":
+                                resp = val
+                                break
+                            elif kind == "error":
+                                raise val
+                    else:
+                        resp = self.pilot.chat(self._history[1:], tools=tools_schema, system=sys_prompt)
                 else:
                     resp = self.pilot.complete(prompt, system=sys_prompt)
             except Exception as e:
