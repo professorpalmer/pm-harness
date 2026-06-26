@@ -194,10 +194,34 @@ export default function RightPane({ artifacts, onOpenWizard }: {
   const primaryWidth = splitState.isSplit && splitState.direction === "vertical" ? width * (splitState.percent / 100) : width;
   const secondaryWidth = splitState.isSplit && splitState.direction === "vertical" ? width * ((100 - splitState.percent) / 100) : width;
 
-  const showLabel = (tabName: Tab, paneWidth: number, activeTab: Tab) => {
-    if (paneWidth >= 580) return true;
-    if (paneWidth >= 380) return activeTab === tabName;
-    return false;
+  const getLabelsMode = (paneWidth: number, activeTab: Tab, isSplit: boolean) => {
+    const controlsWidth = isSplit ? 80 : 40;
+    const availableTabsWidth = paneWidth - controlsWidth;
+    
+    let sumAllLabels = 0;
+    let sumActiveOnly = 0;
+    const iconWidth = 32; // estimation for icon-only tab width: icon + padding
+    
+    tabOrder.forEach((t) => {
+      const labelText = TAB_CONFIG[t].label;
+      // Tab width if labelled: icon(12px) + gap(4px) + characters(length * 6.5px) + padding(16px)
+      const labelledWidth = 12 + 4 + labelText.length * 6.5 + 16;
+      sumAllLabels += labelledWidth;
+      
+      if (t === activeTab) {
+        sumActiveOnly += labelledWidth;
+      } else {
+        sumActiveOnly += iconWidth;
+      }
+    });
+    
+    if (availableTabsWidth >= sumAllLabels) {
+      return "all";
+    } else if (availableTabsWidth >= sumActiveOnly) {
+      return "active-only";
+    } else {
+      return "icon-only";
+    }
   };
 
   const renderTabContent = (tabName: Tab) => {
@@ -235,6 +259,8 @@ export default function RightPane({ artifacts, onOpenWizard }: {
           <div className="flex flex-nowrap border-b border-edge overflow-x-auto scrollbar-none select-none">
             {tabOrder.map((tabName) => {
               const config = TAB_CONFIG[tabName];
+              const mode = getLabelsMode(primaryWidth, splitState.primaryTab, splitState.isSplit);
+              const show = mode === "all" || (mode === "active-only" && splitState.primaryTab === tabName);
               return (
                 <TabBtn
                   key={tabName}
@@ -242,7 +268,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
                   onClick={() => updateSplitState({ primaryTab: tabName })}
                   icon={config.icon}
                   label={config.label}
-                  showLabel={showLabel(tabName, primaryWidth, splitState.primaryTab)}
+                  showLabel={show}
                   draggable
                   onDragStart={(e) => handleDragStart(e, tabName)}
                   onDragOver={(e) => handleDragOver(e, tabName)}
@@ -256,7 +282,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
             <div className="flex items-center px-1 border-l border-edge bg-panel2/35 gap-0.5 shrink-0 select-none">
               {!splitState.isSplit ? (
                 <button
-                  onClick={() => updateSplitState({ isSplit: true, secondaryTab: splitState.primaryTab === "terminal" ? "browser" : "terminal" })}
+                  onClick={() => updateSplitState({ isSplit: true, secondaryTab: splitState.primaryTab })}
                   title="Split Pane"
                   className="p-1.5 text-faint hover:text-txt hover:bg-edge/40 rounded transition-colors"
                 >
@@ -311,6 +337,8 @@ export default function RightPane({ artifacts, onOpenWizard }: {
             <div className="flex flex-nowrap border-b border-edge overflow-x-auto scrollbar-none select-none">
               {tabOrder.map((tabName) => {
                 const config = TAB_CONFIG[tabName];
+                const mode = getLabelsMode(secondaryWidth, splitState.secondaryTab, splitState.isSplit);
+                const show = mode === "all" || (mode === "active-only" && splitState.secondaryTab === tabName);
                 return (
                   <TabBtn
                     key={tabName}
@@ -318,7 +346,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
                     onClick={() => updateSplitState({ secondaryTab: tabName })}
                     icon={config.icon}
                     label={config.label}
-                    showLabel={showLabel(tabName, secondaryWidth, splitState.secondaryTab)}
+                    showLabel={show}
                     draggable
                     onDragStart={(e) => handleDragStart(e, tabName)}
                     onDragOver={(e) => handleDragOver(e, tabName)}
@@ -387,7 +415,7 @@ function TabBtn({ active, onClick, icon, label, showLabel, draggable, onDragStar
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDragEnd={onDragEnd}
-      className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-2 px-1 text-[10px] uppercase tracking-wider font-medium transition whitespace-nowrap
+      className={`flex-1 min-w-0 overflow-hidden flex items-center justify-center gap-1 py-2 px-1 text-[10px] uppercase tracking-wider font-medium transition whitespace-nowrap
         ${active ? "text-txt border-b-[1.5px] border-accent bg-panel2/10" : "text-faint hover:text-muted hover:bg-panel2/5"} ${className || ""}`}
     >
       <span className="flex-shrink-0 flex items-center justify-center">{icon}</span>
