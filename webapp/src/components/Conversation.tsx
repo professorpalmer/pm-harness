@@ -17,6 +17,27 @@ type Item =
   | { kind: "card"; card: Card }
   | { kind: "thinking"; text: string };
 
+function deduplicateConsecutiveAssistantMessages(items: Item[]): Item[] {
+  const result: Item[] = [];
+  for (const item of items) {
+    if (item.kind === "msg" && item.msg.role === "assistant") {
+      const last = result[result.length - 1];
+      if (last && last.kind === "msg" && last.msg.role === "assistant") {
+        const lastText = last.msg.text.trim();
+        const newText = item.msg.text.trim();
+        const normLast = lastText.toLowerCase().replace(/[^a-z0-9]/g, "").substring(0, 60);
+        const normNew = newText.toLowerCase().replace(/[^a-z0-9]/g, "").substring(0, 60);
+        if (normLast && normNew && (normLast.startsWith(normNew) || normNew.startsWith(normLast) || normLast === normNew)) {
+          result[result.length - 1] = item;
+          continue;
+        }
+      }
+    }
+    result.push(item);
+  }
+  return result;
+}
+
 export default function Conversation({ config, activeSessionId, onArtifacts, onJobChange }: {
   config: Config | null;
   activeSessionId: string | null;
@@ -120,7 +141,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                 text: m.content || ""
               }
             }));
-          setItems(loadedItems);
+          setItems(deduplicateConsecutiveAssistantMessages(loadedItems));
         })
         .catch(() => {
           setItems([]);
@@ -157,7 +178,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
         setItems((p) => [...p, { kind: "thinking", text: d.text || "" }]);
       } else if (ev.kind === "message") {
         setStatus("thinking");
-        setItems((p) => [...p, { kind: "msg", msg: { role: "assistant", text: d.text || "" } }]);
+        setItems((p) => deduplicateConsecutiveAssistantMessages([...p, { kind: "msg", msg: { role: "assistant", text: d.text || "" } }]));
       } else if (ev.kind === "action_start") {
         setStatus("executing");
         setItems((p) => [...p, { kind: "card", card: {
@@ -243,7 +264,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
       </header>
 
       <div ref={feedRef} className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-6 py-6 flex flex-col gap-4">
+        <div className="max-w-3xl mx-auto px-6 py-6 flex flex-col gap-1.5">
           {items.length === 0 && (
             <div className="text-muted text-[13px] mt-32 text-center leading-relaxed">
               Message the pilot. It plans, investigates via swarms, and explains.
@@ -251,7 +272,16 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
           )}
           {items.map((it, i) => {
             if (it.kind === "msg") {
-              return <Bubble key={i} msg={it.msg} />;
+              let prevMsg: Msg | null = null;
+              for (let j = i - 1; j >= 0; j--) {
+                const prevItem = items[j];
+                if (prevItem.kind === "msg") {
+                  prevMsg = prevItem.msg;
+                  break;
+                }
+              }
+              const isFirstInRun = !prevMsg || prevMsg.role !== "assistant";
+              return <Bubble key={i} msg={it.msg} showLabel={it.msg.role === "assistant" ? isFirstInRun : false} />;
             } else if (it.kind === "card") {
               return <ActionCard key={i} card={it.card} onToggle={() => setCard(it.card.id, { open: !it.card.open })} />;
             } else if (it.kind === "thinking") {
@@ -455,16 +485,16 @@ function ThinkingBlock({ text }: { text: string }) {
   };
 
   return (
-    <div className="flex flex-col gap-1.5 items-start my-1 text-[12px]">
+    <div className="flex flex-col gap-1 items-start my-0.5 text-[11px] ml-4">
       <button
         onClick={toggle}
-        className="flex items-center gap-1.5 text-faint hover:text-muted transition font-medium select-none"
+        className="flex items-center gap-1 text-faint hover:text-muted transition select-none font-mono"
       >
-        {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-        <span>Thinking</span>
+        {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+        <span>thinking</span>
       </button>
       {!collapsed && (
-        <div className="pl-3.5 ml-1.5 border-l border-edge text-faint whitespace-pre-wrap leading-relaxed max-w-[85%]">
+        <div className="pl-3 ml-1.5 border-l border-edge text-faint whitespace-pre-wrap leading-relaxed max-w-[90%] text-[11px]">
           {text}
         </div>
       )}
@@ -472,40 +502,77 @@ function ThinkingBlock({ text }: { text: string }) {
   );
 }
 
-function Bubble({ msg }: { msg: Msg }) {
+function Bubble({ msg, showLabel }: { msg: Msg; showLabel?: boolean }) {
   const isUser = msg.role === "user";
   const displayedText = isUser ? msg.text : cleanAssistantText(msg.text);
+
+  if (isUser) {
+    return (
+      <div className="flex flex-col items-end gap-0.5 my-1 w-full">
+        {showLabel && (
+          <span className="text-[10px] uppercase tracking-wider text-faint px-1 select-none font-semibold mt-1">you</span>
+        )}
+        <div className="rounded-xl px-3 py-1.5 text-[13px] leading-relaxed whitespace-pre-wrap break-words max-w-[85%] bg-accent2 text-txt border border-edge/30">
+          {displayedText}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
-      <span className="text-[10px] uppercase tracking-wider text-faint px-1">{isUser ? "you" : "pilot"}</span>
-      <div className={`rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap break-words max-w-[85%]
-        ${isUser ? "bg-accent2 text-txt" : "bg-panel border border-edge text-txt/90"}`}>{displayedText}</div>
+    <div className="flex flex-col items-start gap-0.5 my-1 w-full">
+      {showLabel && (
+        <span className="text-[10px] uppercase tracking-wider text-faint px-0.5 select-none font-semibold mt-1">pilot</span>
+      )}
+      <div className="text-[13px] leading-relaxed whitespace-pre-wrap break-words max-w-[95%] text-txt/95 py-0.5">
+        {displayedText}
+      </div>
     </div>
   );
 }
 
 function ActionCard({ card, onToggle }: { card: Card; onToggle: () => void }) {
+  const toolName = card.kind || "swarm";
   return (
-    <div className="border border-edge rounded-lg bg-panel2 overflow-hidden">
-      <button onClick={onToggle} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-panel text-left">
-        {card.running ? <Loader2 size={12} className="animate-spin text-accent" /> : <span className="w-2 h-2 rounded-full bg-good" />}
-        <span className="flex-1 text-[13px] truncate">Ran <b>{card.kind || "swarm"}</b> &middot; {card.goal}</span>
-        <ChevronRight size={13} className={`text-muted transition ${card.open ? "rotate-90" : ""}`} />
+    <div className="flex flex-col items-start select-none w-fit max-w-full ml-4 my-0.5">
+      <button
+        onClick={onToggle}
+        className="flex items-center gap-2 py-0.5 px-2 rounded hover:bg-panel2/60 border-l-2 border-transparent hover:border-accent text-left text-[12px] font-mono group"
+      >
+        <div className="flex items-center justify-center w-3 h-3 shrink-0">
+          {card.running ? (
+            <Loader2 size={11} className="animate-spin text-accent" />
+          ) : (
+            <span className="w-1.5 h-1.5 rounded-full bg-good/80" />
+          )}
+        </div>
+        <span className="text-accent font-semibold shrink-0">
+          {toolName}
+        </span>
+        <span className="text-muted truncate max-w-[300px] sm:max-w-[450px]">
+          {card.goal}
+        </span>
+        <ChevronRight
+          size={11}
+          className={`text-faint group-hover:text-muted transition shrink-0 ${
+            card.open ? "rotate-90" : ""
+          }`}
+        />
       </button>
       {card.open && (
-        <div className="border-t border-edge px-3 py-2 bg-bg text-[12px]">
+        <div className="ml-5 pl-3 border-l border-edge py-1.5 pr-3 bg-panel2/40 rounded-r-md text-[11px] max-w-xl text-txt/90 space-y-1">
           <KV k="goal" v={card.goal} />
           {card.cwd && <KV k="cwd" v={card.cwd} />}
-          {card.result?.error && <div className="text-risk mt-1">error: {card.result.error}</div>}
+          {card.result?.error && <div className="text-risk mt-1 font-sans">error: {card.result.error}</div>}
           {card.result && !card.result.error && (
             <>
               {card.result.job_id && <KV k="job" v={card.result.job_id || ""} />}
               <KV k="found" v={`${card.result.num} artifacts · ${card.result.types.join(", ")}`} />
-              {card.result.adapter === "demo" && <div className="text-warn text-[10px] mt-1">demo substrate -- not real codebase analysis</div>}
+              {card.result.adapter === "demo" && <div className="text-warn text-[10px] mt-1 font-sans">demo substrate -- not real codebase analysis</div>}
               {card.result.artifacts.map((a, i) => (
-                <div key={i} className="flex gap-2 py-1 border-t border-edge/50 mt-1">
-                  <span className="text-[9px] uppercase px-1.5 rounded bg-accent2 text-accent h-fit">{a.type}</span>
-                  <span>{a.headline}</span>
+                <div key={i} className="flex gap-2 py-0.5 border-t border-edge/30 mt-1 items-center font-sans">
+                  <span className="text-[9px] uppercase px-1.5 rounded bg-accent2 text-accent h-fit leading-none py-0.5">{a.type}</span>
+                  <span className="text-txt/80 truncate">{a.headline}</span>
                 </div>
               ))}
             </>
