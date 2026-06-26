@@ -51,6 +51,9 @@ def is_pollution_line(line: str) -> bool:
         return True
     if s.startswith("USER: (") or "completed with exit code" in s:
         return True
+    # driver/debug log lines leaking into prose (stub-oracle, [INFO] Driver intent: ..., etc.)
+    if re.match(r"^\[(INFO|DEBUG|WARN|WARNING|ERROR)\]", s):
+        return True
     if re.match(r"^\s*Traceback\s*\(most\s+recent\s+call\s+last\):", s):
         return True
     if s.startswith("File \"") and ", line " in s:
@@ -85,8 +88,9 @@ def clean_say(text: str) -> str:
         line = lines[i]
         stripped_line = line.strip()
         
-        # 1. Remove tool-echo patterns
-        if stripped_line.startswith("USER: (") or "completed with exit code" in stripped_line:
+        # 1. Remove tool-echo patterns + driver/debug log lines ([INFO] Driver intent:, etc.)
+        if (stripped_line.startswith("USER: (") or "completed with exit code" in stripped_line
+                or re.match(r"^\[(INFO|DEBUG|WARN|WARNING|ERROR)\]", stripped_line)):
             i += 1
             while i < len(lines) and lines[i].strip() == "":
                 i += 1
