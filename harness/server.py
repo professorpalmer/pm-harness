@@ -397,6 +397,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/api/worktrees/prune", "/api/worktrees/max",
                       "/api/hooks/add", "/api/hooks/update", "/api/hooks/remove",
                       "/api/workspace/open", "/api/codegraph/reindex",
+                      "/api/file/write",
                       "/api/checkpoints/restore", "/api/checkpoints/snapshot",
                       "/api/terminal/create", "/api/terminal/write",
                       "/api/terminal/resize", "/api/terminal/kill"):
@@ -483,6 +484,51 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps({"error": "No open workspace"}))
             _reindex_codegraph_bg(repo)
             return self._send(200, json.dumps({"ok": True, "status": "indexing"}))
+        if path == "/api/file/write":
+            if not repo or not os.path.exists(repo):
+                return self._send(400, json.dumps({"error": "No open workspace"}))
+            rel_path = body.get("path", "").strip()
+            content = body.get("content", "")
+            if not rel_path:
+                return self._send(400, json.dumps({"error": "Missing path parameter"}))
+            target_path = os.path.abspath(os.path.join(repo, rel_path))
+            from .conversation import is_safe_path
+            if not is_safe_path(target_path, repo):
+                return self._send(403, json.dumps({"error": f"Path traversal attempt rejected: {rel_path}"}))
+            parts = rel_path.split(os.sep)
+            if ".git" in parts or any(p.startswith(".git") for p in parts):
+                return self._send(403, json.dumps({"error": "Access denied: .git files are restricted"}))
+            try:
+                try:
+                    from .checkpoints import CheckpointStore
+                    store = CheckpointStore(repo)
+                    store.snapshot(
+                        label=f"before manual edit {rel_path}",
+                        trigger="manual_edit"
+                    )
+                except Exception as cp_err:
+                    import sys
+                    print(f"Checkpoint error before write: {cp_err}", file=sys.stderr)
+                
+                target_dir = os.path.dirname(target_path)
+                os.makedirs(target_dir, exist_ok=True)
+                import tempfile
+                fd, temp_path = tempfile.mkstemp(dir=target_dir, prefix=".tmp-")
+                try:
+                    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    os.replace(temp_path, target_path)
+                except Exception as e:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    raise e
+                bytes_written = len(content.encode('utf-8'))
+                return self._send(200, json.dumps({
+                    "ok": True,
+                    "bytes": bytes_written
+                }))
+            except Exception as e:
+                return self._send(500, json.dumps({"error": f"Failed to write file: {e}"}))
         if path == "/api/workspace/open":
             import subprocess
             target_repo = body.get("path", "").strip()
@@ -1134,6 +1180,54 @@ class Handler(BaseHTTPRequestHandler):
                 {"slug": r.slug, "text": r.text, "scope": r.scope,
                  "state": r.state, "source": r.source}
                 for r in _rules.list()]))
+        if u.path == "/api/file/read":
+            if self._guard():
+                return
+            qtok = parse_qs(u.query).get("token", [""])[0]
+            if qtok != _TOKEN and self.headers.get("X-Harness-Token", "") != _TOKEN:
+                return self._send(403, json.dumps({"error": "missing or bad token"}))
+            repo = _cfg.repo
+            if not repo or not os.path.exists(repo):
+                return self._send(400, json.dumps({"error": "No open workspace"}))
+            rel_path = parse_qs(u.query).get("path", [""])[0].strip()
+            if not rel_path:
+                return self._send(400, json.dumps({"error": "Missing path parameter"}))
+            full_path = os.path.abspath(os.path.join(repo, rel_path))
+            from .conversation import is_safe_path
+            if not is_safe_path(full_path, repo):
+                return self._send(403, json.dumps({"error": "Access denied: path escapes workspace"}))
+            parts = rel_path.split(os.sep)
+            if ".git" in parts or any(p.startswith(".git") for p in parts):
+                return self._send(403, json.dumps({"error": "Access denied: .git files are restricted"}))
+            if not os.path.isfile(full_path):
+                return self._send(404, json.dumps({"error": "File not found"}))
+            try:
+                with open(full_path, "rb") as f:
+                    chunk = f.read(1024)
+                    if b"\x00" in chunk:
+                        return self._send(200, json.dumps({"ok": False, "error": "Cannot read binary files", "binary": True}))
+            except Exception as e:
+                return self._send(500, json.dumps({"error": f"Failed to check file type: {e}"}))
+            try:
+                file_size = os.path.getsize(full_path)
+                truncated = False
+                max_bytes = 1024 * 1024
+                if file_size > max_bytes:
+                    truncated = True
+                    with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read(max_bytes)
+                else:
+                    with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                return self._send(200, json.dumps({
+                    "ok": True,
+                    "path": rel_path,
+                    "content": content,
+                    "truncated": truncated
+                }))
+            except Exception as e:
+                return self._send(500, json.dumps({"error": f"Failed to read file: {e}"}))
+
         if u.path == "/api/workspace/files":
             if self._guard():
                 return

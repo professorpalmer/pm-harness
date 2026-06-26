@@ -292,6 +292,8 @@ export const api = {
   openWorkspace: (path: string) => postJSON<{ ok: boolean; repo: string; branch: string; is_git: boolean; codegraph: "indexing" | "ready" | "unsupported" }>("/api/workspace/open", { path }),
   getWorkspace: () => getJSON<{ repo: string; branch: string; is_git: boolean; codegraph_status: string; recents?: string[] }>("/api/workspace"),
   getWorkspaceFiles: () => getJSON<{ files: string[] }>(withToken("/api/workspace/files")),
+  readFile: (path: string) => getJSON<{ ok: boolean; path: string; content: string; truncated: boolean; error?: string; binary?: boolean }>("/api/file/read?path=" + encodeURIComponent(path)),
+  writeFile: (path: string, content: string) => postJSON<{ ok: boolean; bytes?: number; error?: string }>("/api/file/write", { path, content }),
   compactSession: () => postJSON<{ ok: boolean; before_tokens: number; after_tokens: number }>("/api/session/compact", {}),
   getContextUsage: () => getJSON<ContextUsageResponse>(withToken("/api/context/usage")),
 

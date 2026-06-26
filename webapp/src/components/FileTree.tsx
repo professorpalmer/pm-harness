@@ -1,91 +1,62 @@
 import { useState, useEffect } from "react";
-import { ChevronRight, ChevronDown, File, X } from "lucide-react";
-import { nativeFs, isDesktop } from "../lib/transport";
+import { ChevronRight, ChevronDown, File, RefreshCw } from "lucide-react";
 import { api } from "../lib/api";
 
-interface TreeNodeProps {
+interface FileNode {
   name: string;
   path: string;
   isDir: boolean;
+  children?: FileNode[];
+}
+
+interface TreeNodeProps {
+  node: FileNode;
   onFileSelect: (path: string) => void;
   selectedPath: string | null;
 }
 
-function TreeNode({ name, path, isDir, onFileSelect, selectedPath }: TreeNodeProps) {
+function TreeNode({ node, onFileSelect, selectedPath }: TreeNodeProps) {
   const [expanded, setExpanded] = useState(false);
-  const [children, setChildren] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const toggleExpand = async () => {
-    if (!isDir) {
-      onFileSelect(path);
+  const toggleExpand = () => {
+    if (!node.isDir) {
+      onFileSelect(node.path);
       return;
     }
-
-    const nextExpanded = !expanded;
-    setExpanded(nextExpanded);
-
-    if (nextExpanded && children.length === 0) {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await nativeFs.readDir(path);
-        if (res.ok && res.nodes) {
-          const sorted = [...res.nodes].sort((a, b) => {
-            if (a.dir !== b.dir) return a.dir ? -1 : 1;
-            return a.name.localeCompare(b.name);
-          });
-          setChildren(sorted);
-        } else {
-          setError(res.error || "Failed to load directory");
-        }
-      } catch (err: any) {
-        setError(err.message || "Error reading folder");
-      } finally {
-        setLoading(false);
-      }
-    }
+    setExpanded(!expanded);
   };
 
   return (
-    <div className="select-none">
+    <div className="select-none font-sans">
       <div
         onClick={toggleExpand}
         className={`flex items-center gap-1.5 py-1 px-1.5 rounded cursor-pointer text-[12px] hover:bg-panel2/80 transition ${
-          selectedPath === path ? "bg-panel2 text-accent" : "text-txt"
+          selectedPath === node.path ? "bg-panel2 text-accent" : "text-txt"
         }`}
       >
-        {isDir ? (
+        {node.isDir ? (
           <>
             {expanded ? (
               <ChevronDown size={14} className="text-muted shrink-0" />
             ) : (
               <ChevronRight size={14} className="text-muted shrink-0" />
             )}
-            <span className="truncate font-medium">{name}</span>
+            <span className="truncate font-medium">{node.name}</span>
           </>
         ) : (
           <>
             <File size={14} className="text-muted shrink-0 ml-[14px]" />
-            <span className="truncate">{name}</span>
+            <span className="truncate">{node.name}</span>
           </>
         )}
       </div>
 
-      {isDir && expanded && (
+      {node.isDir && expanded && node.children && (
         <div className="pl-3 border-l border-edge/40 ml-2.5 mt-0.5 mb-1 flex flex-col gap-0.5">
-          {loading && <div className="text-[11px] text-muted pl-2 py-0.5">Loading...</div>}
-          {error && <div className="text-[11px] text-risk pl-2 py-0.5">{error}</div>}
-          {!loading && !error && children.length === 0 && (
-            <div className="text-[11px] text-muted italic pl-2 py-0.5">Empty directory</div>
-          )}
-          {children.map((child) => (
+          {node.children.map((child) => (
             <TreeNode
               key={child.path}
-              name={child.name}
-              path={child.path}
-              isDir={child.dir}
+              node={child}
               onFileSelect={onFileSelect}
               selectedPath={selectedPath}
             />
@@ -96,148 +67,139 @@ function TreeNode({ name, path, isDir, onFileSelect, selectedPath }: TreeNodePro
   );
 }
 
-export default function FileTree() {
-  const [repoPath, setRepoPath] = useState<string>(".");
-  const [rootNodes, setRootNodes] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+function buildTree(paths: string[]): FileNode[] {
+  const root: FileNode[] = [];
+  const map: Record<string, FileNode> = {};
 
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [fileContent, setFileContent] = useState<string | null>(null);
-  const [fileLoading, setFileLoading] = useState(false);
-  const [fileError, setFileError] = useState<string | null>(null);
+  for (const path of paths) {
+    const parts = path.split("/");
+    let currentPath = "";
+    let parentChildren = root;
 
-  useEffect(() => {
-    if (!isDesktop) return;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      const isLast = i === parts.length - 1;
 
-    let active = true;
-    async function init() {
-      setLoading(true);
-      setError(null);
-      try {
-        const cfg = await api.config();
-        const path = cfg.repo || ".";
-        if (!active) return;
-        setRepoPath(path);
+      if (!map[currentPath]) {
+        const node: FileNode = {
+          name: part,
+          path: currentPath,
+          isDir: !isLast,
+          children: isLast ? undefined : []
+        };
+        map[currentPath] = node;
+        parentChildren.push(node);
+      }
 
-        const res = await nativeFs.readDir(path);
-        if (!active) return;
-        if (res.ok && res.nodes) {
-          const sorted = [...res.nodes].sort((a, b) => {
-            if (a.dir !== b.dir) return a.dir ? -1 : 1;
-            return a.name.localeCompare(b.name);
-          });
-          setRootNodes(sorted);
-        } else {
-          setError(res.error || "Failed to load directory");
-        }
-      } catch (err: any) {
-        if (active) setError(err.message || "Error starting file tree");
-      } finally {
-        if (active) setLoading(false);
+      const node = map[currentPath];
+      if (node.isDir && node.children) {
+        parentChildren = node.children;
       }
     }
-    init();
+  }
+
+  const sortTree = (nodes: FileNode[]) => {
+    nodes.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    for (const node of nodes) {
+      if (node.children) {
+        sortTree(node.children);
+      }
+    }
+  };
+  sortTree(root);
+
+  return root;
+}
+
+export default function FileTree() {
+  const [repoName, setRepoName] = useState<string>("");
+  const [rootNodes, setRootNodes] = useState<FileNode[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+
+  const loadFiles = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const cfg = await api.config();
+      const workspacePath = cfg.repo || "";
+      const repoNameFromPath = workspacePath.split(/[/\\]/).pop() || "workspace";
+      setRepoName(repoNameFromPath);
+
+      const res = await api.getWorkspaceFiles();
+      if (res && res.files) {
+        const tree = buildTree(res.files);
+        setRootNodes(tree);
+      } else {
+        setError("Failed to get workspace files");
+      }
+    } catch (err: any) {
+      setError(err.message || "Error loading workspace files");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadFiles();
+
+    // Listen to changes that might require refreshing files
+    const handleRefresh = () => {
+      loadFiles();
+    };
+
+    window.addEventListener("harness-config-changed", handleRefresh);
+    window.addEventListener("harness-file-saved", handleRefresh);
+    window.addEventListener("harness-file-edited", handleRefresh);
+
     return () => {
-      active = false;
+      window.removeEventListener("harness-config-changed", handleRefresh);
+      window.removeEventListener("harness-file-saved", handleRefresh);
+      window.removeEventListener("harness-file-edited", handleRefresh);
     };
   }, []);
 
-  const handleFileSelect = async (path: string) => {
+  const handleFileSelect = (path: string) => {
     setSelectedPath(path);
-    setFileLoading(true);
-    setFileError(null);
-    setFileContent(null);
-    try {
-      const res = await nativeFs.readFile(path);
-      if (res.ok && res.content !== undefined) {
-        setFileContent(res.content);
-      } else {
-        setFileError(res.error || "Failed to read file");
-      }
-    } catch (err: any) {
-      setFileError(err.message || "Error reading file");
-    } finally {
-      setFileLoading(false);
-    }
+    // Dispatch custom event to let CenterPane/Conversation know we want to open this file
+    window.dispatchEvent(new CustomEvent("harness-open-file", { detail: { path } }));
   };
-
-  const getFileName = (pathStr: string) => {
-    const parts = pathStr.split(/[/\\]/);
-    return parts[parts.length - 1] || pathStr;
-  };
-
-  if (!isDesktop) {
-    return (
-      <div className="flex items-center justify-center h-full p-4 text-center bg-panel">
-        <div className="text-[11px] text-muted uppercase tracking-wider">
-          File explorer requires the desktop app
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-panel">
-      <div className="text-[10px] text-muted px-3 pt-2 uppercase tracking-wider flex items-center justify-between shrink-0">
-        <span>Files ({getFileName(repoPath)})</span>
+      <div className="text-[10px] text-muted px-3 py-2 uppercase tracking-wider flex items-center justify-between shrink-0 border-b border-edge/30">
+        <span>Files ({repoName || "unknown"})</span>
+        <button
+          onClick={loadFiles}
+          className="p-1 hover:bg-panel2 rounded transition text-muted hover:text-txt"
+          title="Refresh file tree"
+          disabled={loading}
+        >
+          <RefreshCw size={11} className={loading ? "animate-spin" : ""} />
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 py-2 flex flex-col gap-0.5">
-        {loading && <div className="text-[11px] text-muted p-2">Loading workspace...</div>}
+        {loading && rootNodes.length === 0 && (
+          <div className="text-[11px] text-muted p-2">Loading workspace...</div>
+        )}
         {error && <div className="text-[11px] text-risk p-2">{error}</div>}
         {!loading && !error && rootNodes.length === 0 && (
           <div className="text-[11px] text-muted italic p-2">No files found</div>
         )}
-        {!loading &&
-          !error &&
-          rootNodes.map((node) => (
-            <TreeNode
-              key={node.path}
-              name={node.name}
-              path={node.path}
-              isDir={node.dir}
-              onFileSelect={handleFileSelect}
-              selectedPath={selectedPath}
-            />
-          ))}
-      </div>
-
-      <div className="h-1/2 border-t border-edge flex flex-col overflow-hidden bg-panel2 shrink-0">
-        <div className="flex items-center justify-between px-3 py-1.5 border-b border-edge bg-panel select-none shrink-0">
-          <span className="text-[10px] text-muted uppercase tracking-wider truncate max-w-[80%]">
-            {selectedPath ? getFileName(selectedPath) : "No file selected"}
-          </span>
-          {selectedPath && (
-            <button
-              onClick={() => {
-                setSelectedPath(null);
-                setFileContent(null);
-                setFileError(null);
-              }}
-              className="text-muted hover:text-txt transition"
-              title="Clear viewer"
-            >
-              <X size={12} />
-            </button>
-          )}
-        </div>
-        <div className="flex-1 overflow-auto bg-bg">
-          {fileLoading && (
-            <div className="text-[11px] text-muted p-3">Loading file contents...</div>
-          )}
-          {fileError && <div className="text-[11px] text-risk p-3">{fileError}</div>}
-          {!fileLoading && !fileError && fileContent !== null && (
-            <pre className="p-3 font-mono text-[12px] text-txt whitespace-pre leading-relaxed select-text">
-              {fileContent}
-            </pre>
-          )}
-          {!fileLoading && !fileError && fileContent === null && (
-            <div className="text-[11px] text-muted italic p-3">
-              Select a file above to view its contents
-            </div>
-          )}
-        </div>
+        {rootNodes.map((node) => (
+          <TreeNode
+            key={node.path}
+            node={node}
+            onFileSelect={handleFileSelect}
+            selectedPath={selectedPath}
+          />
+        ))}
       </div>
     </div>
   );

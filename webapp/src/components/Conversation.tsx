@@ -7,6 +7,7 @@ import "highlight.js/styles/github-dark.css";
 import { api, type Config } from "../lib/api";
 import PilotPicker from "./PilotPicker";
 import { pickFolder } from "../lib/transport";
+import FileEditorPane from "./FileEditorPane";
 
 type Msg = {
   role: "user" | "assistant";
@@ -160,6 +161,45 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   onJobChange: () => void;
 }) {
   const [items, setItems] = useState<Item[]>([]);
+
+  const [openTabs, setOpenTabs] = useState<{ path: string; isDirty: boolean }[]>([]);
+  const [activeTab, setActiveTab] = useState<string>("chat");
+
+  const handleCloseTab = (path: string) => {
+    const tab = openTabs.find((t) => t.path === path);
+    if (tab?.isDirty) {
+      if (!window.confirm(`Discard unsaved changes for ${path}?`)) {
+        return;
+      }
+    }
+    const nextTabs = openTabs.filter((t) => t.path !== path);
+    setOpenTabs(nextTabs);
+    if (activeTab === path) {
+      setActiveTab("chat");
+    }
+  };
+
+  const handleTabDirtyChange = (path: string, isDirty: boolean) => {
+    setOpenTabs((prev) =>
+      prev.map((t) => (t.path === path ? { ...t, isDirty } : t))
+    );
+  };
+
+  useEffect(() => {
+    const handleOpenFile = (e: CustomEvent<{ path: string }>) => {
+      const filePath = e.detail.path;
+      setOpenTabs((prev) => {
+        const exists = prev.some((t) => t.path === filePath);
+        if (exists) return prev;
+        return [...prev, { path: filePath, isDirty: false }];
+      });
+      setActiveTab(filePath);
+    };
+    window.addEventListener("harness-open-file", handleOpenFile as EventListener);
+    return () => {
+      window.removeEventListener("harness-open-file", handleOpenFile as EventListener);
+    };
+  }, []);
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<"idle"|"thinking"|"executing"|"done"|"error">("idle");
   const [auto, setAuto] = useState(false);
@@ -929,12 +969,63 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   return (
     <main className="flex flex-col h-full min-w-0 bg-bg">
       <header className="flex items-center justify-between px-6 border-b border-edge"
-        style={{ paddingTop: 12, paddingBottom: 10, WebkitAppRegion: "drag" } as React.CSSProperties}>
+         style={{ paddingTop: 12, paddingBottom: 10, WebkitAppRegion: "drag" } as React.CSSProperties}>
         <span className="font-medium text-[13px] text-txt/90" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>Puppetmaster</span>
         <div style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}><StatusPill status={status} /></div>
       </header>
 
-      <div ref={feedRef} className="flex-1 overflow-y-auto">
+      {openTabs.length > 0 && (
+        <div className="flex items-center gap-1 px-4 bg-panel border-b border-edge h-9 shrink-0 overflow-x-auto scrollbar-none select-none">
+          <button
+            onClick={() => setActiveTab("chat")}
+            className={`flex items-center h-full px-3 text-[12px] font-medium transition-colors border-b-2 ${
+              activeTab === "chat"
+                ? "border-accent text-accent bg-bg/50"
+                : "border-transparent text-muted hover:text-txt"
+            }`}
+          >
+            Chat
+          </button>
+          {openTabs.map((t) => {
+            const filename = t.path.split(/[/\\]/).pop() || t.path;
+            const isSelected = activeTab === t.path;
+            return (
+              <div
+                key={t.path}
+                className={`flex items-center h-full px-2 text-[12px] font-medium transition-colors border-b-2 group relative ${
+                  isSelected
+                    ? "border-accent text-accent bg-bg/50"
+                    : "border-transparent text-muted hover:text-txt"
+                }`}
+              >
+                <button
+                  onClick={() => setActiveTab(t.path)}
+                  className="flex items-center gap-1.5 h-full max-w-[150px]"
+                  title={t.path}
+                >
+                  {t.isDirty && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-warn shrink-0" />
+                  )}
+                  <span className="truncate">{filename}</span>
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleCloseTab(t.path);
+                  }}
+                  className="ml-2 p-0.5 rounded hover:bg-panel2 text-muted hover:text-txt opacity-60 group-hover:opacity-100 transition-opacity"
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {activeTab === "chat" ? (
+        <>
+          <div ref={feedRef} className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-6 py-6 flex flex-col gap-1">
           {items.length === 0 && (
             <div className="text-muted text-[13px] mt-32 text-center leading-relaxed">
@@ -1539,6 +1630,14 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
           </div>
         </div>
       </div>
+    </>
+  ) : (
+    <FileEditorPane
+      path={activeTab}
+      onClose={() => handleCloseTab(activeTab)}
+      onDirtyChange={(dirty) => handleTabDirtyChange(activeTab, dirty)}
+    />
+  )}
 
       {lightboxUrl && (
         <div
