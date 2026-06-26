@@ -897,6 +897,15 @@ class ConversationalSession:
                     return
                 action_seq += 1
                 aid = f"a{action_seq}"
+                # Malformed/truncated tool call: do NOT silently drop it. Surface the error
+                # back to the model so it re-issues the call with all required arguments, and
+                # count it as activity so the autonomous loop does not mistake it for "done".
+                if act.kind == "__invalid__":
+                    err = act.content or f"invalid tool call '{act.tool}'"
+                    yield ConvEvent("action_result", {"id": aid, "error": err})
+                    self._append_action_result(act, aid, err, is_native)
+                    turn_had_invalid = True
+                    continue
                 act_goal = act.goal
                 if act.kind in ("read_file", "write_file", "list_dir"):
                     act_goal = act.path or "(workspace root)"
@@ -2488,6 +2497,7 @@ class ConversationalSession:
             tokens_at_cycle_start = self._tokens_used
             # one pilot turn (send() drives say->act->react until it yields back)
             turn_findings_count = 0
+            turn_had_retryable_error = False
             tripped = None
             for ev in self.send(message if cycle == 1 else
                                  "(continue toward the objective, or finish if met)"):
@@ -2495,6 +2505,13 @@ class ConversationalSession:
                 if ev.kind == "action_result" and not ev.data.get("error"):
                     budget.add_swarm()
                     turn_findings_count += int(ev.data.get("num", 0) or 0)
+                elif ev.kind == "action_result" and ev.data.get("error"):
+                    # a tool error (e.g. malformed write_file) is recoverable -- the model
+                    # gets the error in history and should retry; do NOT let this turn count
+                    # as idle and trip a premature "objective met" halt.
+                    _err_txt = str(ev.data.get("error") or "").upper()
+                    if "INVALID TOOL CALL" in _err_txt or "REQUIRES A" in _err_txt:
+                        turn_had_retryable_error = True
                 yield ev
                 if ev.kind == "assistant_done":
                     break
@@ -2524,7 +2541,7 @@ class ConversationalSession:
             yield ConvEvent("auto_status", {"cycle": cycle, "snapshot": budget.snapshot()})
             # if the pilot finished a turn with no swarms at all, it considers the
             # objective met -> stop the autonomous loop.
-            if turn_findings_count == 0 and budget.idle_steps >= 1:
+            if turn_findings_count == 0 and budget.idle_steps >= 1 and not turn_had_retryable_error:
                 yield ConvEvent("auto_halt", {"reason": "pilot reports objective met "
                     "(no further investigation)", "snapshot": budget.snapshot()})
                 d = self._maybe_auto_distill()

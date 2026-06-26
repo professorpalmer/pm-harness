@@ -419,9 +419,14 @@ def _tool_name_to_action(name: str, args: dict, tool_call_id: str = "") -> Pilot
         ).validate()
     elif name in VALID_ACTION_KINDS:
         kind = name
-        path = args.get("path") or ""
-        content = args.get("content") or ""
-        command = args.get("command") or ""
+        # Tolerant arg extraction: some models emit aliases (file_path/filename/file,
+        # text/code/file_contents) instead of the schema names. Accept the common ones
+        # so a slightly-off tool call still does the right thing instead of erroring.
+        path = (args.get("path") or args.get("file_path") or args.get("filename")
+                or args.get("file") or args.get("filepath") or "")
+        content = (args.get("content") or args.get("text") or args.get("code")
+                   or args.get("file_contents") or args.get("contents") or "")
+        command = (args.get("command") or args.get("cmd") or args.get("shell") or "")
         query = args.get("query") or ""
         url = args.get("url") or ""
         goal = args.get("goal") or ""
@@ -574,9 +579,18 @@ def parse_tool_calls(tool_calls: list) -> list[PilotAction]:
             action = _tool_name_to_action(name, args, tool_call_id=tc_id)
             actions.append(action)
         except Exception as e:
-            if isinstance(e, PilotError):
-                raise
-            raise PilotError(str(e))
+            # A single malformed tool call (e.g. a truncated/streamed write_file missing
+            # its path) must NOT abort the whole turn and discard the other valid actions.
+            # Record it as a failed action carrying the error so the loop can feed the
+            # message back to the model and let it retry, instead of silently halting.
+            actions.append(PilotAction(
+                kind="__invalid__",
+                tool=name,
+                arguments=args,
+                tool_call_id=tc_id,
+                content=(f"INVALID TOOL CALL '{name}': {e}. Re-issue the tool call with ALL required "
+                         f"arguments (write_file needs both 'path' and 'content')."),
+            ))
 
     return actions
 
