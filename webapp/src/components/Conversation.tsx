@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, ChevronUp, GripVertical, Trash2, GitBranch, ListChecks, Play } from "lucide-react";
+import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, ChevronUp, GripVertical, Trash2, GitBranch, ListChecks, Play, Copy, Check, Pencil, RefreshCw, FileText } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -129,6 +129,14 @@ function groupAgentActivity(items: Item[]): GroupedItem[] {
   return grouped;
 }
 
+const SLASH_COMMANDS = [
+  { cmd: "/clear", desc: "Clear visible transcript" },
+  { cmd: "/new", desc: "Clear visible transcript (new session)" },
+  { cmd: "/compact", desc: "Trigger manual context compaction" },
+  { cmd: "/model", desc: "Focus model picker to switch models" },
+  { cmd: "/help", desc: "Render a small help note" }
+];
+
 export default function Conversation({ config, activeSessionId, onArtifacts, onJobChange }: {
   config: Config | null;
   activeSessionId: string | null;
@@ -152,6 +160,18 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   const [pendingJobIds, setPendingJobIds] = useState<string[]>([]);
   const processedSwarmJobIdsRef = useRef<string[]>([]);
   const [backendPendingSwarms, setBackendPendingSwarms] = useState(false);
+
+  // Ergonomics states
+  const [allFiles, setAllFiles] = useState<string[]>([]);
+  const [mentionSearch, setMentionSearch] = useState<string | null>(null);
+  const [mentionIndex, setMentionIndex] = useState<number>(-1);
+  const [filteredFiles, setFilteredFiles] = useState<string[]>([]);
+  const [selectedFileIndex, setSelectedFileIndex] = useState<number>(0);
+
+  const [slashSearch, setSlashSearch] = useState<string | null>(null);
+  const [selectedSlashIndex, setSelectedSlashIndex] = useState<number>(0);
+
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
   const moveQueueItem = (index: number, direction: "up" | "down") => {
     if (direction === "up" && index === 0) return;
@@ -337,6 +357,159 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
   }, [input]);
 
+  // Load workspace files for @-mention dropdown
+  useEffect(() => {
+    api.getWorkspaceFiles()
+      .then((res) => {
+        if (res && res.files) {
+          setAllFiles(res.files);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load workspace files:", err);
+      });
+  }, [activeSessionId]);
+
+  // Filter files based on @-mention search text
+  useEffect(() => {
+    if (mentionSearch !== null) {
+      const query = mentionSearch.toLowerCase();
+      const filtered = allFiles.filter(f => f.toLowerCase().includes(query)).slice(0, 10);
+      setFilteredFiles(filtered);
+      setSelectedFileIndex(0);
+    } else {
+      setFilteredFiles([]);
+    }
+  }, [mentionSearch, allFiles]);
+
+  const insertMention = (fileName: string) => {
+    if (mentionIndex === -1) return;
+    const before = input.slice(0, mentionIndex);
+    const after = input.slice(taRef.current?.selectionStart || mentionIndex);
+    const completed = before + "@" + fileName + " " + after;
+    setInput(completed);
+    setMentionSearch(null);
+    setMentionIndex(-1);
+    
+    setTimeout(() => {
+      if (taRef.current) {
+        taRef.current.focus();
+        const cursorPosition = mentionIndex + fileName.length + 2; // +1 for @, +1 for space
+        taRef.current.setSelectionRange(cursorPosition, cursorPosition);
+      }
+    }, 10);
+  };
+
+  const insertSlashCommand = (cmd: string) => {
+    setInput(cmd + " ");
+    setSlashSearch(null);
+    
+    setTimeout(() => {
+      if (taRef.current) {
+        taRef.current.focus();
+        taRef.current.setSelectionRange(cmd.length + 1, cmd.length + 1);
+      }
+    }, 10);
+  };
+
+  const handleInputChange = (val: string, cursorPosition: number) => {
+    setInput(val);
+    
+    // Detect Slash Command trigger: input starts with '/' and cursor is within the command
+    if (val.startsWith("/") && !val.includes("\n") && cursorPosition <= val.length) {
+      const spaceIdx = val.indexOf(" ");
+      if (spaceIdx === -1 || cursorPosition <= spaceIdx) {
+        setSlashSearch(val.slice(1));
+        setMentionSearch(null);
+        setMentionIndex(-1);
+        return;
+      }
+    }
+    setSlashSearch(null);
+
+    // Detect Mention trigger
+    const lastAt = val.lastIndexOf("@", cursorPosition - 1);
+    if (lastAt !== -1) {
+      const prefix = lastAt === 0 ? "" : val[lastAt - 1];
+      if (prefix === "" || /\s/.test(prefix)) {
+        const textAfterAt = val.slice(lastAt + 1, cursorPosition);
+        if (!/\s/.test(textAfterAt)) {
+          setMentionSearch(textAfterAt);
+          setMentionIndex(lastAt);
+          return;
+        }
+      }
+    }
+    setMentionSearch(null);
+    setMentionIndex(-1);
+  };
+
+  const handleEditMessage = (idx: number, originalText: string) => {
+    setEditingIndex(idx);
+    setInput(originalText);
+    setTimeout(() => {
+      if (taRef.current) {
+        taRef.current.focus();
+      }
+    }, 10);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Escape") {
+      if (mentionSearch !== null || slashSearch !== null) {
+        setMentionSearch(null);
+        setMentionIndex(-1);
+        setSlashSearch(null);
+        e.preventDefault();
+        return;
+      }
+    }
+
+    if (mentionSearch !== null && filteredFiles.length > 0) {
+      if (e.key === "ArrowDown") {
+        setSelectedFileIndex((prev) => (prev + 1) % filteredFiles.length);
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        setSelectedFileIndex((prev) => (prev - 1 + filteredFiles.length) % filteredFiles.length);
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "Enter") {
+        insertMention(filteredFiles[selectedFileIndex]);
+        e.preventDefault();
+        return;
+      }
+    }
+
+    if (slashSearch !== null) {
+      const matchingSlash = SLASH_COMMANDS.filter(s => s.cmd.toLowerCase().startsWith("/" + slashSearch.toLowerCase()));
+      if (matchingSlash.length > 0) {
+        if (e.key === "ArrowDown") {
+          setSelectedSlashIndex((prev) => (prev + 1) % matchingSlash.length);
+          e.preventDefault();
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          setSelectedSlashIndex((prev) => (prev - 1 + matchingSlash.length) % matchingSlash.length);
+          e.preventDefault();
+          return;
+        }
+        if (e.key === "Enter") {
+          insertSlashCommand(matchingSlash[selectedSlashIndex].cmd);
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  };
+
   const handleSwarmResult = (d: any) => {
     const job_id = d.job_id;
     if (!job_id) return;
@@ -499,6 +672,85 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   const send = () => {
     const msg = input.trim(); if (!msg) return;
 
+    // Intercept slash commands locally
+    if (msg.startsWith("/")) {
+      const parts = msg.split(/\s+/);
+      const cmd = parts[0];
+      
+      if (cmd === "/clear" || cmd === "/new") {
+        setInput("");
+        setEditingIndex(null);
+        window.dispatchEvent(new Event("harness-new-session"));
+        return;
+      }
+      
+      if (cmd === "/compact") {
+        setInput("");
+        setEditingIndex(null);
+        setStatus("thinking");
+        setItems((p) => [...p, { kind: "thinking", text: "Compacting session context on backend..." }]);
+        api.compactSession()
+          .then((res) => {
+            setStatus("done");
+            setItems((p) => [
+              ...p,
+              {
+                kind: "msg",
+                msg: {
+                  role: "assistant",
+                  text: "System Note: Manual context compaction complete (" + res.before_tokens + " -> " + res.after_tokens + " tokens)."
+                }
+              }
+            ]);
+          })
+          .catch((err) => {
+            setStatus("error");
+            setItems((p) => [
+              ...p,
+              {
+                kind: "msg",
+                msg: {
+                  role: "assistant",
+                  text: "[error] Compaction failed: " + (err.message || err)
+                }
+              }
+            ]);
+          });
+        return;
+      }
+      
+      if (cmd === "/model") {
+        setInput("");
+        setEditingIndex(null);
+        window.dispatchEvent(new Event("harness-open-model-picker"));
+        return;
+      }
+      
+      if (cmd === "/help") {
+        setInput("");
+        setEditingIndex(null);
+        const helpText = "Available Slash Commands:\n\n" +
+          SLASH_COMMANDS.map(s => `* \`${s.cmd}\` - ${s.desc}`).join("\n") +
+          "\n\nType @ to list and mention files in your message context.";
+        setItems((p) => [
+          ...p,
+          {
+            kind: "msg",
+            msg: {
+              role: "assistant",
+              text: helpText
+            }
+          }
+        ]);
+        return;
+      }
+    }
+
+    // ERGONOMICS CHOICE: Loaded edit back into composer. On send, we send as a new turn
+    // (appending as a fresh turn) to prevent corrupting the backend session history
+    // while providing a seamless correction/resubmission flow.
+    setEditingIndex(null);
+
     const queuePrefVal = localStorage.getItem("pmharness.queueMessages");
     const isQueueEnabled = queuePrefVal !== null ? queuePrefVal === "true" : true;
     const isBusy = status === "thinking" || status === "executing";
@@ -557,8 +809,37 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
             }
 
             const grouped = groupAgentActivity(items);
+            
+            // Find the last assistant message inside the original items array
+            let lastAssistantRawIdx = -1;
+            for (let idx = items.length - 1; idx >= 0; idx--) {
+              const itm = items[idx];
+              if (itm.kind === "msg") {
+                const msgItm = itm as { kind: "msg"; msg: Msg };
+                if (msgItm.msg.role === "assistant") {
+                  lastAssistantRawIdx = idx;
+                  break;
+                }
+              }
+            }
+
+            // Find the last user message text
+            let lastUserText = "";
+            for (let idx = items.length - 1; idx >= 0; idx--) {
+              const itm = items[idx];
+              if (itm.kind === "msg") {
+                const msgItm = itm as { kind: "msg"; msg: Msg };
+                if (msgItm.msg.role === "user") {
+                  lastUserText = msgItm.msg.text;
+                  break;
+                }
+              }
+            }
+
             const list = grouped.map((it, i) => {
               if (it.kind === "msg") {
+                const rawIdx = items.findIndex(raw => raw.kind === "msg" && (raw as { kind: "msg"; msg: Msg }).msg === it.msg);
+                
                 let prevMsg: Msg | null = null;
                 for (let j = i - 1; j >= 0; j--) {
                   const prevItem = grouped[j];
@@ -569,6 +850,16 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                 }
                 const isFirstInRun = !prevMsg || prevMsg.role !== "assistant";
                 const isIntermediate = intermediateItems.has(it as Item);
+                
+                const onEdit = it.msg.role === "user" ? () => handleEditMessage(rawIdx, it.msg.text) : undefined;
+                const isEditing = editingIndex === rawIdx;
+                
+                const isLastAssistant = rawIdx === lastAssistantRawIdx;
+                const isNotBusy = status === "idle" || status === "done" || status === "error";
+                const onRegenerate = (isLastAssistant && isNotBusy && lastUserText)
+                  ? () => { executeSend(lastUserText, auto, plan); }
+                  : undefined;
+
                 return (
                   <Bubble
                     key={i}
@@ -580,6 +871,9 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                       setPlan(false);
                       executeSend("Execute the following approved plan. Implement it fully, using run_implement/run_parallel as needed:\n\n" + planText, true, false);
                     }}
+                    onEdit={onEdit}
+                    isEditing={isEditing}
+                    onRegenerate={onRegenerate}
                   />
                 );
               } else if (it.kind === "swarm_pending") {
@@ -769,9 +1063,85 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
           )}
           {/* compact composer: input + a single tidy control row */}
           <WorkspaceChip />
-          <div className="bg-panel2/80 border border-edge rounded-2xl focus-within:border-edge2 shadow-lg shadow-black/20 transition">
-            <textarea ref={taRef} value={input} onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+          <div className="relative bg-panel2/80 border border-edge rounded-2xl focus-within:border-edge2 shadow-lg shadow-black/20 transition">
+            {/* Editing indicator */}
+            {editingIndex !== null && (
+              <div className="flex items-center justify-between px-3.5 py-1.5 bg-panel border-b border-edge text-[11.5px] text-accent select-none rounded-t-2xl">
+                <span className="flex items-center gap-1.5">
+                  <Pencil size={11} />
+                  <span>Editing message #{editingIndex + 1}</span>
+                </span>
+                <button
+                  onClick={() => {
+                    setEditingIndex(null);
+                    setInput("");
+                  }}
+                  className="text-faint hover:text-muted transition font-medium text-[10px] px-1.5 py-0.5 rounded border border-edge bg-panel2/50 hover:bg-panel2"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
+            {/* Mention autocomplete dropdown */}
+            {mentionSearch !== null && filteredFiles.length > 0 && (
+              <div className="absolute left-2 bottom-full mb-1.5 z-50 max-h-[220px] w-[320px] overflow-y-auto bg-panel border border-edge rounded-xl shadow-2xl py-1">
+                <div className="px-2.5 py-1 text-[10px] uppercase font-bold tracking-wider text-faint border-b border-edge/30 select-none">
+                  Files
+                </div>
+                {filteredFiles.map((file, idx) => {
+                  const isSelected = idx === selectedFileIndex;
+                  return (
+                    <div
+                      key={file}
+                      onClick={() => insertMention(file)}
+                      onMouseEnter={() => setSelectedFileIndex(idx)}
+                      className={`flex items-center gap-2 px-3 py-1.5 text-[11.5px] cursor-pointer transition select-none ${
+                        isSelected ? "bg-panel2 text-accent font-medium" : "text-txt/90 hover:bg-panel2/50"
+                      }`}
+                    >
+                      <FileText size={11.5} className="shrink-0 opacity-60" />
+                      <span className="truncate flex-1 font-mono">{file}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Slash commands autocomplete dropdown */}
+            {slashSearch !== null && (() => {
+              const matchingSlash = SLASH_COMMANDS.filter(s => s.cmd.toLowerCase().startsWith("/" + slashSearch.toLowerCase()));
+              if (matchingSlash.length === 0) return null;
+              return (
+                <div className="absolute left-2 bottom-full mb-1.5 z-50 max-h-[220px] w-[320px] overflow-y-auto bg-panel border border-edge rounded-xl shadow-2xl py-1">
+                  <div className="px-2.5 py-1 text-[10px] uppercase font-bold tracking-wider text-faint border-b border-edge/30 select-none">
+                    Commands
+                  </div>
+                  {matchingSlash.map((s, idx) => {
+                    const isSelected = idx === selectedSlashIndex;
+                    return (
+                      <div
+                        key={s.cmd}
+                        onClick={() => insertSlashCommand(s.cmd)}
+                        onMouseEnter={() => setSelectedSlashIndex(idx)}
+                        className={`flex flex-col px-3 py-1.5 cursor-pointer transition select-none ${
+                          isSelected ? "bg-panel2 text-accent font-medium" : "text-txt/90 hover:bg-panel2/50"
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 text-[11.5px] font-mono font-semibold">
+                          <span>{s.cmd}</span>
+                        </div>
+                        <span className="text-[10px] text-muted leading-tight">{s.desc}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
+            <textarea ref={taRef} value={input} 
+              onChange={(e) => handleInputChange(e.target.value, e.target.selectionStart)}
+              onKeyDown={handleKeyDown}
               rows={1} placeholder={auto ? "Give the pilot an objective..." : "Message the pilot..."}
               className="w-full bg-transparent px-3 pt-2.5 pb-1 text-[13px] resize-none focus:outline-none overflow-y-auto placeholder:text-faint" />
             <div className="flex items-center gap-1.5 px-3 pb-2">
@@ -984,6 +1354,32 @@ function ThinkingBlock({ text }: { text: string }) {
   );
 }
 
+function FencedCodeBlock({ className, children, ...props }: any) {
+  const [copied, setCopied] = useState(false);
+  const codeText = String(children).replace(/\n$/, "");
+  
+  const handleCopy = () => {
+    navigator.clipboard.writeText(codeText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+  
+  return (
+    <div className="relative group/code my-1.5">
+      <code className={`${className || ""} block bg-panel border border-edge/40 rounded p-3 pr-10 overflow-x-auto font-mono text-[11.5px] text-txt/95`} {...props}>
+        {children}
+      </code>
+      <button
+        onClick={handleCopy}
+        className="absolute right-2 top-2 p-1 rounded bg-panel2/80 hover:bg-panel2 text-faint hover:text-muted border border-edge opacity-0 group-hover/code:opacity-100 transition-opacity"
+        title="Copy code"
+      >
+        {copied ? <Check size={12} className="text-good" /> : <Copy size={12} />}
+      </button>
+    </div>
+  );
+}
+
 function Markdown({ text }: { text: string }) {
   return (
     <ReactMarkdown
@@ -1044,9 +1440,9 @@ function Markdown({ text }: { text: string }) {
             );
           }
           return (
-            <code className={`${className || ""} block bg-panel border border-edge/40 rounded p-2 overflow-x-auto font-mono text-[11.5px] text-txt/95 my-1.5`} {...props}>
+            <FencedCodeBlock className={className} {...props}>
               {children}
-            </code>
+            </FencedCodeBlock>
           );
         },
         pre: ({ children }: any) => <div className="my-1">{children}</div>
@@ -1061,25 +1457,53 @@ function Bubble({
   msg,
   showLabel,
   isIntermediate,
-  onExecutePlan
+  onExecutePlan,
+  onEdit,
+  isEditing,
+  onRegenerate
 }: {
   msg: Msg;
   showLabel?: boolean;
   isIntermediate?: boolean;
   onExecutePlan?: (text: string) => void;
+  onEdit?: () => void;
+  isEditing?: boolean;
+  onRegenerate?: () => void;
 }) {
   const [executed, setExecuted] = useState(false);
+  const [copied, setCopied] = useState(false);
   const isUser = msg.role === "user";
   const displayedText = isUser ? msg.text : cleanAssistantText(msg.text);
 
+  const handleCopy = () => {
+    navigator.clipboard.writeText(displayedText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+
   if (isUser) {
     return (
-      <div className="flex flex-col items-end gap-0.5 my-1 w-full">
+      <div className="flex flex-col items-end gap-0.5 my-1 w-full group relative">
         {showLabel && (
           <span className="text-[10px] uppercase tracking-wider text-faint px-1 select-none font-semibold mt-1">you</span>
         )}
-        <div className="rounded-xl px-3 py-1 text-[13px] leading-relaxed whitespace-pre-wrap break-words max-w-[85%] bg-accent2 text-txt border border-edge/30">
-          {displayedText}
+        <div className="flex items-center gap-1.5 max-w-[85%] relative pr-1">
+          {onEdit && (
+            <button
+              onClick={onEdit}
+              className="p-1 rounded hover:bg-panel2 text-faint hover:text-muted opacity-0 group-hover:opacity-100 transition-opacity border border-transparent hover:border-edge absolute left-[-26px] top-1/2 -translate-y-1/2"
+              title="Edit message"
+            >
+              <Pencil size={12} />
+            </button>
+          )}
+          <div className={`rounded-xl px-3 py-1 text-[13px] leading-relaxed whitespace-pre-wrap break-words border transition-all ${
+            isEditing
+              ? "bg-accent/10 text-txt border-accent"
+              : "bg-accent2 text-txt border-edge/30"
+          }`}>
+            {displayedText}
+          </div>
         </div>
       </div>
     );
@@ -1092,12 +1516,33 @@ function Bubble({
   const showExecuteButton = msg.isPlan && !executed && onExecutePlan;
 
   return (
-    <div className="flex flex-col items-start gap-0.5 my-1 w-full">
+    <div className="flex flex-col items-start gap-0.5 my-1 w-full group relative">
       {showLabel && (
         <span className="text-[10px] uppercase tracking-wider text-faint px-0.5 select-none font-semibold mt-1">pilot</span>
       )}
-      <div className="text-[13px] leading-relaxed break-words max-w-[95%] text-txt/95 py-0.5 w-full">
+      <div className="text-[13px] leading-relaxed break-words max-w-[95%] text-txt/95 py-0.5 w-full relative pr-14">
         <Markdown text={displayedText} />
+        
+        {/* Assistant copy & regenerate buttons */}
+        <div className="absolute right-0 top-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 select-none">
+          {onRegenerate && (
+            <button
+              onClick={onRegenerate}
+              className="p-1 rounded hover:bg-panel2 text-faint hover:text-muted transition border border-transparent hover:border-edge"
+              title="Regenerate response"
+            >
+              <RefreshCw size={13} />
+            </button>
+          )}
+          <button
+            onClick={handleCopy}
+            className="p-1 rounded hover:bg-panel2 text-faint hover:text-muted transition border border-transparent hover:border-edge"
+            title="Copy message"
+          >
+            {copied ? <Check size={13} className="text-good" /> : <Copy size={13} />}
+          </button>
+        </div>
+
         {showExecuteButton && (
           <div className="mt-2 flex items-center gap-2">
             <button

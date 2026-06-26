@@ -219,6 +219,8 @@ export const api = {
 
   openWorkspace: (path: string) => postJSON<{ ok: boolean; repo: string; branch: string; is_git: boolean; codegraph: "indexing" | "ready" | "unsupported" }>("/api/workspace/open", { path }),
   getWorkspace: () => getJSON<{ repo: string; branch: string; is_git: boolean; codegraph_status: string; recents?: string[] }>("/api/workspace"),
+  getWorkspaceFiles: () => getJSON<{ files: string[] }>(withToken("/api/workspace/files")),
+  compactSession: () => postJSON<{ ok: boolean; before_tokens: number; after_tokens: number }>("/api/session/compact", {}),
 
   getHooks: () => getJSON<{ hooks: Hook[]; events: string[] }>("/api/hooks"),
   addHook: (event: string, command: string) => postJSON<Hook>("/api/hooks/add", { event, command }),

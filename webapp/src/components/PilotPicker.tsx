@@ -18,6 +18,12 @@ export default function PilotPicker({ config }: {
   }, [config]);
 
   useEffect(() => {
+    const handleOpen = () => setIsOpen(true);
+    window.addEventListener("harness-open-model-picker", handleOpen);
+    return () => window.removeEventListener("harness-open-model-picker", handleOpen);
+  }, []);
+
+  useEffect(() => {
     if (!isOpen) return;
     const handleOutsideClick = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {

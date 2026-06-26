@@ -384,7 +384,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/api/workspaces/switch", "/api/workspaces/create",
                       "/api/sessions/create", "/api/sessions/switch",
                       "/api/sessions/delete", "/api/sessions/archive", "/api/sessions/rename",
-                      "/api/session/interrupt",
+                      "/api/session/interrupt", "/api/session/compact",
                       "/api/mcp/add", "/api/mcp/remove", "/api/mcp/start",
                       "/api/mcp/stop", "/api/mcp/call",
                       "/api/skills/distill", "/api/skills/approve",
@@ -420,6 +420,22 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return self._send(400, json.dumps({"error": "invalid JSON"}))
         repo = _cfg.repo
+        if path == "/api/session/compact":
+            before = _pilot._estimate_context_tokens()
+            orig_tokens = getattr(_cfg, "max_context_tokens", 96000)
+            _cfg.max_context_tokens = 1
+            try:
+                events = list(_pilot._maybe_compact_history())
+            finally:
+                _cfg.max_context_tokens = orig_tokens
+            after = _pilot._estimate_context_tokens()
+            if _sessions.active:
+                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_history())
+            return self._send(200, json.dumps({
+                "ok": True,
+                "before_tokens": before,
+                "after_tokens": after
+            }))
         if path == "/api/codegraph/reindex":
             if not repo or not os.path.isdir(repo):
                 return self._send(400, json.dumps({"error": "No open workspace"}))
@@ -1041,6 +1057,31 @@ class Handler(BaseHTTPRequestHandler):
                 {"slug": r.slug, "text": r.text, "scope": r.scope,
                  "state": r.state, "source": r.source}
                 for r in _rules.list()]))
+        if u.path == "/api/workspace/files":
+            if self._guard():
+                return
+            qtok = parse_qs(u.query).get("token", [""])[0]
+            if qtok != _TOKEN and self.headers.get("X-Harness-Token", "") != _TOKEN:
+                return self._send(403, json.dumps({"error": "missing or bad token"}))
+            repo = _cfg.repo
+            if not repo or not os.path.isdir(repo):
+                return self._send(200, json.dumps({"files": []}))
+            files_list = []
+            skip_dirs = {".git", "node_modules", ".venv", ".codegraph", "dist", "build"}
+            repo_abs = os.path.abspath(repo)
+            for root, dirs, files in os.walk(repo_abs):
+                dirs[:] = [d for d in dirs if d not in skip_dirs]
+                for f in files:
+                    full_path = os.path.join(root, f)
+                    rel_path = os.path.relpath(full_path, repo_abs)
+                    if rel_path == "." or rel_path.startswith(".."):
+                        continue
+                    files_list.append(rel_path)
+                    if len(files_list) >= 2000:
+                        break
+                if len(files_list) >= 2000:
+                    break
+            return self._send(200, json.dumps({"files": sorted(files_list)}))
         if u.path == "/api/workspace":
             repo = _cfg.repo
             is_git = False
@@ -1684,6 +1725,40 @@ class Handler(BaseHTTPRequestHandler):
         if _sessions.active and message:
             from .sessions import derive_title
             _sessions.set_title_if_default(_sessions.active, derive_title(message))
+
+        # Resolve @-file mentions in message
+        resolved_context = []
+        total_size = 0
+        repo = _cfg.repo
+        if repo and os.path.isdir(repo) and message:
+            import re
+            tokens = re.findall(r'@([a-zA-Z0-9_\-\.\/]+)', message)
+            seen_tokens = set()
+            for token in tokens:
+                if token in seen_tokens:
+                    continue
+                seen_tokens.add(token)
+                
+                full_path = os.path.abspath(os.path.join(repo, token))
+                repo_real = os.path.realpath(repo)
+                full_real = os.path.realpath(full_path)
+                
+                try:
+                    common = os.path.commonpath([repo_real, full_real])
+                    if common == repo_real and os.path.isfile(full_real):
+                        size = os.path.getsize(full_real)
+                        read_size = min(size, 50 * 1024)
+                        if total_size + read_size <= 150 * 1024:
+                            with open(full_real, 'r', encoding='utf-8', errors='replace') as f:
+                                content = f.read(read_size)
+                            resolved_context.append(f"--- File: {token} ---\n{content}\n")
+                            total_size += len(content.encode('utf-8'))
+                except Exception:
+                    pass
+            
+            if resolved_context:
+                context_block = "Referenced files:\n" + "\n".join(resolved_context) + "\n"
+                message = context_block + message
  
         pre = _pilot_preflight()
         if pre:
