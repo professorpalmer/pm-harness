@@ -74,6 +74,10 @@
       {
         "from": "codegraph-vendor",
         "to": "codegraph"
+      },
+      {
+        "from": "node-vendor",
+        "to": "node"
       }
     ],
     "extraMetadata": {

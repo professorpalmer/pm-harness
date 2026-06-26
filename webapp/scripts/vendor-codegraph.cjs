@@ -96,3 +96,35 @@ if (source === tempDir && fs.existsSync(tempDir)) {
 const sizeInBytes = getVendoredSize(dest);
 const sizeInMB = (sizeInBytes / (1024 * 1024)).toFixed(2);
 console.log(`Vendoring complete. Total size: ${sizeInMB} MB`);
+
+
+// ---- Bundle a real node binary (ABI must match codegraph's prebuilt better_sqlite3) ----
+// electron-as-node does NOT work (codegraph worker_threads recurse). We ship a real node binary.
+// The prebuilt better_sqlite3 in codegraph is Node ABI 127 (node v22), so we bundle node v22.
+(function vendorNode() {
+  const { execSync } = require("child_process");
+  const nodeVendorDir = path.join(__dirname, "..", "node-vendor");
+  // Resolve the real node binary path (follow symlinks).
+  let nodeBin = "";
+  try {
+    nodeBin = execSync("node -e \"process.stdout.write(process.execPath)\"", { encoding: "utf8" }).trim();
+    nodeBin = fs.realpathSync(nodeBin);
+  } catch (e) {
+    console.error("Could not resolve node binary to vendor:", e.message);
+    return;
+  }
+  // Sanity: warn if the vendored node ABI will not match codegraph's native module.
+  try {
+    const abi = execSync(`"${nodeBin}" -e "process.stdout.write(process.versions.modules)"`, { encoding: "utf8" }).trim();
+    if (abi !== "127") {
+      console.warn(`WARNING: bundling node ABI ${abi} but codegraph better_sqlite3 expects ABI 127 (node v22). codegraph may fail to load SQLite. Use a node v22 binary.`);
+    }
+  } catch (_) {}
+  fs.rmSync(nodeVendorDir, { recursive: true, force: true });
+  fs.mkdirSync(path.join(nodeVendorDir, "bin"), { recursive: true });
+  const dest = path.join(nodeVendorDir, "bin", "node");
+  fs.copyFileSync(nodeBin, dest);
+  fs.chmodSync(dest, 0o755);
+  const sz = (fs.statSync(dest).size / (1024 * 1024)).toFixed(1);
+  console.log(`Vendored node binary (${sz} MB) from ${nodeBin} -> ${dest}`);
+})();

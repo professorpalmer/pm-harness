@@ -27,3 +27,4 @@ build/*.iconset/
 
 # Agent artifacts (plans, local agent state) -- never commit
 .hermes/
+webapp/node-vendor/
