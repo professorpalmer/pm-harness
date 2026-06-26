@@ -246,13 +246,13 @@ export default function StatePane({ artifacts }: {
               <span className="text-[9px] text-good font-bold px-1.5 py-0.5 rounded bg-good/10 border border-good/20 uppercase">
                 Connected
               </span>
-            ) : wiki?.status === "not_configured" ? (
-              <span className="text-[9px] text-faint font-semibold px-1.5 py-0.5 rounded bg-panel2 border border-edge/50 uppercase">
-                Not Connected
-              </span>
-            ) : (
+            ) : wiki?.status === "error" ? (
               <span className="text-[9px] text-accent font-semibold px-1.5 py-0.5 rounded bg-accent2 border border-accent/20 uppercase">
                 Error
+              </span>
+            ) : (
+              <span className="text-[9px] text-faint font-semibold px-1.5 py-0.5 rounded bg-panel2 border border-edge/50 uppercase">
+                Not Connected
               </span>
             )}
             <button
@@ -266,10 +266,10 @@ export default function StatePane({ artifacts }: {
           </div>
         </div>
 
-        {wiki?.status === "not_configured" ? (
-          <div className="text-[11px] text-muted italic pt-2 px-0.5">Wiki not connected</div>
-        ) : wiki?.status === "error" ? (
+        {wiki?.status === "error" ? (
           <div className="text-[11px] text-accent italic pt-2 px-0.5">{wiki.error || "Failed to fetch wiki status"}</div>
+        ) : wiki?.status !== "ok" ? (
+          <div className="text-[11px] text-muted italic pt-2 px-0.5">Wiki not connected (optional)</div>
         ) : (
           <div className="pt-2 text-[11px] text-txt">
             {wiki ? (

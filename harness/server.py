@@ -1525,6 +1525,26 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 res = {"error": f"Unexpected error: {str(e)}", "nodes": [], "edges": []}
             if res.get("error"):
+                # Distinguish "wiki host unreachable / not actually set up" from a real
+                # API error. An unreachable host (connection refused, DNS failure, timeout)
+                # should look like NOT CONNECTED -- neutral -- not a scary red ERROR, so a
+                # user who never set up a wiki is not confused by a broken-looking panel.
+                _err_l = str(res.get("error", "")).lower()
+                _unreachable = any(t in _err_l for t in (
+                    "connection refused", "refused", "timed out", "timeout",
+                    "name or service not known", "nodename nor servname",
+                    "failed to establish", "max retries", "cannot connect",
+                    "connection error", "urlopen error", "getaddrinfo",
+                    "no route to host", "network is unreachable", "[errno",
+                ))
+                if _unreachable:
+                    return self._send(200, json.dumps({
+                        "configured": False,
+                        "status": "not_configured",
+                        "nodes": [],
+                        "edges": [],
+                        "base_url": ""
+                    }))
                 return self._send(200, json.dumps({
                     "configured": True,
                     "status": "error",
