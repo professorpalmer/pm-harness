@@ -224,15 +224,19 @@ class ConversationalSession:
         """Signal any in-flight run_auto/send to stop at the next checkpoint."""
         self._cancel.set()
 
-    def send(self, user_message: str, images: Optional[list] = None) -> Iterator[ConvEvent]:
+    def send(self, user_message: str, images: Optional[list] = None, plan: bool = False) -> Iterator[ConvEvent]:
         """Process one user message: drive the pilot loop until it yields back."""
         if not self._busy.acquire(blocking=False):
             yield ConvEvent("error", {"error": "session busy: another request is in flight"})
             return
+        original_sys = self._history[0]["content"]
+        if plan:
+            from .pilot import PILOT_SYSTEM, PLAN_SYSTEM_SUFFIX
+            self._history[0]["content"] = PILOT_SYSTEM + "\n\n" + PLAN_SYSTEM_SUFFIX
         try:
             import time
             action_starts = {}
-            for ev in self._send_locked(user_message, images=images):
+            for ev in self._send_locked(user_message, images=images, plan=plan):
                 if ev.kind == "action_start":
                     aid = ev.data.get("id")
                     if aid:
@@ -244,9 +248,10 @@ class ConversationalSession:
                         ev.data["duration_ms"] = duration_ms
                 yield ev
         finally:
+            self._history[0]["content"] = original_sys
             self._busy.release()
 
-    def _send_locked(self, user_message: str, images: Optional[list] = None) -> Iterator[ConvEvent]:
+    def _send_locked(self, user_message: str, images: Optional[list] = None, plan: bool = False) -> Iterator[ConvEvent]:
         processed_message = user_message
         if images:
             from .vision import transcribe_images
@@ -437,6 +442,15 @@ class ConversationalSession:
                     "cwd": self.config.repo or None,
                     "adapter": self.config.swarm_adapter,
                 })
+
+                if plan and act.kind in ("run_implement", "run_parallel", "write_file", "run_command"):
+                    yield ConvEvent("action_result", {
+                        "id": aid,
+                        "error": f"(plan mode: skipped {act.kind})"
+                    })
+                    self._append_action_result(act, aid, f"(plan mode: skipped {act.kind})", is_native)
+                    continue
+
                 # ---- read_file branch -----------------------------------------
                 if act.kind == "read_file":
                     if not self.config.repo:

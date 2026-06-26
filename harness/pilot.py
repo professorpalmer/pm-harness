@@ -706,3 +706,7 @@ Rules:
 - Always verify your work by running tests via `run_command` after editing.
 - Be concise and concrete. Never invent file contents; read the files first.
 """
+
+
+PLAN_SYSTEM_SUFFIX = """PLAN MODE: Do NOT call run_implement, run_parallel, write_file, or run_command. Investigate read-only if needed (read_file, search_codegraph, query_wiki, list_dir, web_search), then output a clear, actionable, numbered implementation PLAN in markdown: goal restatement, the concrete steps (each with what/where/why), files likely touched, risks, and a suggested verification. End with a one-line summary. The user will review the plan before any execution."""
+

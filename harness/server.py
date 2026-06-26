@@ -1394,7 +1394,8 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(400, json.dumps({"error": f"Invalid image path: {p}"}))
                 except ValueError:
                     return self._send(400, json.dumps({"error": f"Invalid image path: {p}"}))
-            return self._stream_chat(q.get("message", [""])[0], imgs)
+            plan_val = q.get("plan", ["false"])[0].lower() in ("true", "1", "yes")
+            return self._stream_chat(q.get("message", [""])[0], imgs, plan=plan_val)
         if u.path == "/api/terminal/stream":
             q = parse_qs(u.query)
             return self._stream_terminal(q.get("id", [""])[0])
@@ -1612,7 +1613,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _stream_chat(self, message: str, images=None):
+    def _stream_chat(self, message: str, images=None, plan: bool = False):
         """Stream the conversational PILOT loop: prose messages + collapsible
         action cards (run_swarm) + assistant_done."""
         self.send_response(200)
@@ -1636,7 +1637,7 @@ class Handler(BaseHTTPRequestHandler):
         ctx = {"session_id": _sessions.active or "", "message": message}
         run_hooks("preRun", ctx)
         try:
-            for ev in _pilot.send(message, images=images or None):
+            for ev in _pilot.send(message, images=images or None, plan=plan):
                 payload = json.dumps({"kind": ev.kind, "data": ev.data})
                 self.wfile.write(f"data: {payload}\n\n".encode())
                 self.wfile.flush()

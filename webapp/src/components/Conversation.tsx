@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, GitBranch } from "lucide-react";
+import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, GitBranch, ListChecks } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -127,11 +127,12 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<"idle"|"thinking"|"executing"|"done"|"error">("idle");
   const [auto, setAuto] = useState(false);
+  const [plan, setPlan] = useState(false);
   const [distillNotice, setDistillNotice] = useState<string | null>(null);
   const cancelRef = useRef<null | (() => void)>(null);
   const feedRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
-  const [msgQueue, setMsgQueue] = useState<{ text: string; auto: boolean }[]>([]);
+  const [msgQueue, setMsgQueue] = useState<{ text: string; auto: boolean; plan?: boolean }[]>([]);
 
   // Request notifications permission on mount
   useEffect(() => {
@@ -200,7 +201,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
       if (isQueueEnabled && msgQueue.length > 0) {
         const nextMsg = msgQueue[0];
         setMsgQueue((prev) => prev.slice(1));
-        executeSend(nextMsg.text, nextMsg.auto);
+        executeSend(nextMsg.text, nextMsg.auto, nextMsg.plan || false);
       }
     }
   }, [status]);
@@ -252,12 +253,12 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
   }, [input]);
 
-  const executeSend = (msg: string, useAuto: boolean) => {
+  const executeSend = (msg: string, useAuto: boolean, usePlan: boolean = false) => {
     setItems((p) => [...p, { kind: "msg", msg: { role: "user", text: msg } }]);
     setStatus("thinking");
     const streamer = useAuto
       ? (cb: any, done: any, err: any) => api.auto(msg, cb, done, err)
-      : (cb: any, done: any, err: any) => api.chat(msg, cb, done, err);
+      : (cb: any, done: any, err: any) => api.chat(msg, cb, done, err, usePlan);
     cancelRef.current = streamer((ev: any) => {
       const d = ev.data || {};
       if (ev.kind === "thinking") {
@@ -328,7 +329,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
 
     if (isBusy) {
       if (isQueueEnabled) {
-        setMsgQueue((prev) => [...prev, { text: msg, auto }]);
+        setMsgQueue((prev) => [...prev, { text: msg, auto, plan }]);
         setInput("");
         return;
       } else {
@@ -337,7 +338,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     }
 
     setInput("");
-    executeSend(msg, auto);
+    executeSend(msg, auto, plan);
   };
 
   const stop = () => { cancelRef.current?.(); cancelRef.current = null; setStatus("idle"); };
@@ -478,10 +479,27 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
               rows={1} placeholder={auto ? "Give the pilot an objective..." : "Message the pilot..."}
               className="w-full bg-transparent px-3 pt-2.5 pb-1 text-[13px] resize-none focus:outline-none overflow-y-auto placeholder:text-faint" />
             <div className="flex items-center gap-1.5 px-3 pb-2">
-              <button onClick={() => setAuto((a) => !a)} title="Autopilot: the pilot plans and executes autonomously (vs. you steering each step)"
+              <button onClick={() => {
+                setAuto((a) => {
+                  const next = !a;
+                  if (next) setPlan(false);
+                  return next;
+                });
+              }} title="Autopilot: the pilot plans and executes autonomously (vs. you steering each step)"
                 className={`px-1.5 h-[20px] rounded-md text-[10.5px] flex items-center gap-1 transition
                   ${auto ? "bg-warn/15 text-warn" : "text-faint hover:text-muted"}`}>
                 <Zap size={11} /> Autopilot
+              </button>
+              <button onClick={() => {
+                setPlan((p) => {
+                  const next = !p;
+                  if (next) setAuto(false);
+                  return next;
+                });
+              }} title="Plan mode -- get an actionable plan instead of execution (read-only)"
+                className={`px-1.5 h-[20px] rounded-md text-[10.5px] flex items-center gap-1 transition
+                  ${plan ? "bg-accent/15 text-accent" : "text-faint hover:text-muted"}`}>
+                <ListChecks size={11} /> Plan
               </button>
               <PilotPicker config={config} />
               <div className="flex-1" />
@@ -489,7 +507,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                 ? <button onClick={stop} className="px-2 h-[20px] rounded-md bg-risk/15 text-risk text-[10.5px] font-medium flex items-center gap-1"><Square size={9} />Stop</button>
                 : <button onClick={send} disabled={!input.trim()}
                     className="px-2.5 h-[20px] rounded-md bg-accent text-black/90 text-[10.5px] font-semibold flex items-center gap-1 hover:brightness-110 disabled:opacity-40 disabled:cursor-default transition">
-                    <Send size={9} />{auto ? "Run" : "Send"}</button>}
+                    <Send size={9} />{auto ? "Run" : plan ? "Plan" : "Send"}</button>}
             </div>
           </div>
         </div>

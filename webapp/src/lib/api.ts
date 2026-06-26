@@ -162,8 +162,8 @@ export const api = {
   archiveSession: (id: string, archived: boolean) => postJSON<{ ok: boolean }>("/api/sessions/archive", { session: id, archived }),
   renameSession: (id: string, title: string) => postJSON<{ ok: boolean }>("/api/sessions/rename", { session: id, title }),
   swapPilot: (model: string) => getJSON(withToken(`/api/pilot?model=${encodeURIComponent(model)}`)),
-  chat: (message: string, onEvent: (e: StreamEvent) => void, onDone?: () => void, onError?: (e: any) => void) =>
-    stream(`/api/chat?message=${encodeURIComponent(message)}`, onEvent, onDone, onError),
+  chat: (message: string, onEvent: (e: StreamEvent) => void, onDone?: () => void, onError?: (e: any) => void, plan: boolean = false) =>
+    stream(`/api/chat?message=${encodeURIComponent(message)}${plan ? "&plan=true" : ""}`, onEvent, onDone, onError),
   mcp: () => getJSON<{ servers: any[]; tools: any[] }>("/api/mcp"),
   mcpCatalog: () => getJSON<{ catalog: Record<string, any> }>("/api/mcp/catalog"),
   mcpAdd: (name: string, command?: string, args?: string[], env?: Record<string, string>, url?: string) => {
