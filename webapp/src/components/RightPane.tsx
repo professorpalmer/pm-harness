@@ -101,7 +101,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
           primaryTab,
           secondaryTab,
           direction: parsed.direction === "vertical" ? "vertical" : "horizontal",
-          percent: typeof parsed.percent === "number" ? parsed.percent : 50,
+          percent: (typeof parsed.percent === "number" && parsed.percent >= 20 && parsed.percent <= 80) ? parsed.percent : 50,
         };
       } catch (e) {
         // fallback
@@ -165,6 +165,11 @@ export default function RightPane({ artifacts, onOpenWizard }: {
       const rect = containerRef.current.getBoundingClientRect();
       let nextPercent = 50;
 
+      // Per-pane minimum in PIXELS so neither sub-pane can be crushed below
+      // a usable size (a fixed percent like 15% becomes ~150px on a small pane
+      // and mangles the content). Each pane keeps at least MIN_PANE_PX.
+      const MIN_PANE_PX = 260;
+      const total = splitState.direction === "horizontal" ? rect.height : rect.width;
       if (splitState.direction === "horizontal") {
         const relativeY = e.clientY - rect.top;
         nextPercent = (relativeY / rect.height) * 100;
@@ -173,8 +178,15 @@ export default function RightPane({ artifacts, onOpenWizard }: {
         nextPercent = (relativeX / rect.width) * 100;
       }
 
-      // Clamp split percent between 15% and 85%
-      nextPercent = Math.max(15, Math.min(85, nextPercent));
+      // Clamp so BOTH panes keep >= MIN_PANE_PX. If the container is too small
+      // to honor both minimums, fall back to a 50/50 split.
+      let minPct = (MIN_PANE_PX / total) * 100;
+      let maxPct = 100 - minPct;
+      if (minPct >= maxPct) {
+        nextPercent = 50;
+      } else {
+        nextPercent = Math.max(minPct, Math.min(maxPct, nextPercent));
+      }
       updateSplitState({ percent: nextPercent });
     };
 
