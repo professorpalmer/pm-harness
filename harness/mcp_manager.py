@@ -180,3 +180,10 @@ class McpManager:
             self.start_server(tool.server)
             client = self._clients.get(tool.server)
         return client.call_tool(tool.name, arguments)
+
+    def discovered_tools(self) -> List[McpTool]:
+        """Return tools for currently connected (alive) servers."""
+        with self._lock:
+            alive_servers = {name for name, client in self._clients.items() if client.alive}
+            return [t for t in self._tools.values() if t.server in alive_servers]
+

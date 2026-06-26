@@ -66,6 +66,41 @@ def _mcp_result_text(out: dict) -> str:
             elif "text" in block:
                 parts.append(str(block["text"]))
     return "\n".join(parts) if parts else str(out)
+
+
+def _format_mcp_tools_section(mcp_manager) -> str:
+    """Format connected MCP tools for the system prompt."""
+    if not mcp_manager:
+        return ""
+    try:
+        tools = mcp_manager.discovered_tools()
+    except Exception:
+        return ""
+    if not tools:
+        return ""
+
+    lines = []
+    lines.append('## Connected MCP tools (call via {"kind":"call_mcp","tool":"<server>.<tool>","arguments":{...}}):')
+    for t in tools:
+        schema = t.input_schema or {}
+        properties = schema.get("properties", {})
+        required = schema.get("required", []) or []
+        arg_parts = []
+        if isinstance(properties, dict):
+            for name, prop in properties.items():
+                if not isinstance(prop, dict):
+                    prop = {}
+                arg_type = prop.get("type", "any")
+                is_req = name in required
+                req_marker = " (required)" if is_req else ""
+                arg_parts.append(f"{name}:{arg_type}{req_marker}")
+        
+        args_str = ", ".join(arg_parts) if arg_parts else "none"
+        desc = t.description.strip() if t.description else "No description"
+        lines.append(f"- {t.qualified}: {desc} (args: {args_str})")
+    
+    return "\n".join(lines)
+
 from .autobudget import AutoBudget
 from .config import HarnessConfig
 from .state import DurableState
@@ -221,6 +256,9 @@ class ConversationalSession:
             sys_prompt = base_sys
             if cg_section:
                 sys_prompt += "\n\n" + cg_section
+            mcp_section = _format_mcp_tools_section(self._mcp)
+            if mcp_section:
+                sys_prompt += "\n\n" + mcp_section
 
             self._history[0]["content"] = sys_prompt
             prompt = self._render_history()

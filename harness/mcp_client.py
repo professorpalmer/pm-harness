@@ -31,6 +31,18 @@ from typing import Any, Dict, List, Optional
 PROTOCOL_VERSION = "2024-11-05"
 CLIENT_INFO = {"name": "pm-harness", "version": "0.1"}
 
+# Safe environment baseline to prevent leaking parent API keys/tokens to MCP subprocesses
+_SAFE_ENV_KEYS = {
+    "PATH",
+    "HOME",
+    "USER",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "SHELL",
+    "TMPDIR",
+}
+
 
 @dataclass
 class McpTool:
@@ -69,7 +81,11 @@ class StdioMcpClient:
 
     # ---- lifecycle ----------------------------------------------------------
     def start(self) -> None:
-        full_env = dict(os.environ)
+        # Filter parent environment to avoid leaking sensitive credentials/keys to child processes
+        full_env = {
+            k: v for k, v in os.environ.items()
+            if k in _SAFE_ENV_KEYS or k.startswith("XDG_")
+        }
         full_env.update({k: str(v) for k, v in self.env.items()})
         try:
             self._proc = subprocess.Popen(

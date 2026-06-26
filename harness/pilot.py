@@ -220,6 +220,7 @@ You have direct access to a local CodeGraph-indexed workspace and can explore/ed
 - `web_search`: search the internet and return top results. Requires `query`.
 - `web_fetch`: read a web page's text contents. Requires `url`.
 - `read_pdf`: extract plain text from a local PDF file or PDF URL. Requires `path` or `url`.
+- `call_mcp`: call a connected MCP tool. Requires `tool` (the qualified server.tool name) and `arguments` (object). Connected MCP tools may be listed in a "Connected MCP tools" section appended below; use them when relevant.
 
 Respond ONLY with a JSON object:
 
