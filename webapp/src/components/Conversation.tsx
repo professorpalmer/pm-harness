@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, GitBranch, ListChecks, Play } from "lucide-react";
+import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, ChevronUp, GripVertical, Trash2, GitBranch, ListChecks, Play } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -134,6 +134,58 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   const taRef = useRef<HTMLTextAreaElement>(null);
   const planTurnRef = useRef(false);
   const [msgQueue, setMsgQueue] = useState<{ text: string; auto: boolean; plan?: boolean }[]>([]);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  const moveQueueItem = (index: number, direction: "up" | "down") => {
+    if (direction === "up" && index === 0) return;
+    if (direction === "down" && index === msgQueue.length - 1) return;
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    setMsgQueue((prev) => {
+      const next = [...prev];
+      const temp = next[index];
+      next[index] = next[targetIndex];
+      next[targetIndex] = temp;
+      return next;
+    });
+  };
+
+  const handleDragStart = (idx: number) => {
+    setDragIndex(idx);
+  };
+
+  const handleDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    setDragOverIndex(idx);
+  };
+
+  const handleDragLeave = (idx: number) => {
+    if (dragOverIndex === idx) {
+      setDragOverIndex(null);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent, targetIdx: number) => {
+    e.preventDefault();
+    if (dragIndex === null || dragIndex === targetIdx) {
+      setDragIndex(null);
+      setDragOverIndex(null);
+      return;
+    }
+    setMsgQueue((prev) => {
+      const next = [...prev];
+      const [draggedItem] = next.splice(dragIndex, 1);
+      next.splice(targetIdx, 0, draggedItem);
+      return next;
+    });
+    setDragIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    setDragIndex(null);
+    setDragOverIndex(null);
+  };
 
   // Request notifications permission on mount
   useEffect(() => {
@@ -452,30 +504,102 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
             </div>
           )}
           {msgQueue.length > 0 && (
-            <div className="mb-2 space-y-1.5">
-              {msgQueue.map((qm, idx) => (
-                <div key={idx} className="flex items-center justify-between bg-panel2/60 border border-edge/60 rounded-lg px-3 py-1.5 text-[12px] text-muted">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 bg-accent/10 text-accent rounded">
-                      queued
-                    </span>
-                    <span className="truncate max-w-md">{qm.text}</span>
-                    {qm.auto && (
-                      <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 bg-warn/15 text-warn rounded">
-                        auto
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => {
-                      setMsgQueue((prev) => prev.filter((_, i) => i !== idx));
-                    }}
-                    className="text-risk hover:underline text-[10.5px] font-medium ml-2"
+            <div className="mb-3 space-y-1.5">
+              <div className="flex items-center justify-between mb-1 px-1">
+                <span className="text-[10px] uppercase tracking-wider text-faint font-semibold">
+                  Queued ({msgQueue.length})
+                </span>
+                <button
+                  onClick={() => setMsgQueue([])}
+                  className="text-[10px] text-faint hover:text-muted transition font-semibold"
+                >
+                  Clear all
+                </button>
+              </div>
+              {msgQueue.map((qm, idx) => {
+                const isDragOver = dragOverIndex === idx;
+                const isDragging = dragIndex === idx;
+
+                return (
+                  <div
+                    key={idx}
+                    draggable
+                    onDragStart={() => handleDragStart(idx)}
+                    onDragOver={(e) => handleDragOver(e, idx)}
+                    onDragLeave={() => handleDragLeave(idx)}
+                    onDrop={(e) => handleDrop(e, idx)}
+                    onDragEnd={handleDragEnd}
+                    className={`flex items-center justify-between bg-panel2/60 border rounded-lg px-3 py-1.5 text-[12px] text-muted transition-all duration-150 select-none
+                      ${isDragging ? "opacity-40" : ""}
+                      ${isDragOver ? "border-accent/40 bg-accent/5" : "border-edge/60 hover:border-edge2"}`}
                   >
-                    Cancel
-                  </button>
-                </div>
-              ))}
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      {/* Grip handle */}
+                      <div className="text-faint hover:text-muted cursor-grab active:cursor-grabbing flex items-center justify-center p-0.5">
+                        <GripVertical size={12} />
+                      </div>
+                      {/* Position number */}
+                      <span className="text-faint text-[10px] font-mono select-none">
+                        {idx + 1}
+                      </span>
+                      {/* Message text with Click-to-edit */}
+                      <span
+                        onClick={() => {
+                          setInput(qm.text);
+                          setAuto(qm.auto);
+                          setPlan(qm.plan || false);
+                          setMsgQueue((prev) => prev.filter((_, i) => i !== idx));
+                          taRef.current?.focus();
+                        }}
+                        title="Click to edit message"
+                        className="truncate max-w-md cursor-pointer hover:text-txt hover:underline transition-colors select-none"
+                      >
+                        {qm.text}
+                      </span>
+                      {/* Badges */}
+                      {qm.plan && (
+                        <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 bg-accent/15 text-accent rounded whitespace-nowrap">
+                          plan
+                        </span>
+                      )}
+                      {qm.auto && (
+                        <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 bg-warn/15 text-warn rounded whitespace-nowrap">
+                          auto
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Controls (Up / Down / Cancel) */}
+                    <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+                      <button
+                        onClick={() => moveQueueItem(idx, "up")}
+                        disabled={idx === 0}
+                        title="Move up"
+                        className="p-1 rounded text-faint hover:text-muted hover:bg-panel border border-transparent hover:border-edge/40 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                      >
+                        <ChevronUp size={12} />
+                      </button>
+                      <button
+                        onClick={() => moveQueueItem(idx, "down")}
+                        disabled={idx === msgQueue.length - 1}
+                        title="Move down"
+                        className="p-1 rounded text-faint hover:text-muted hover:bg-panel border border-transparent hover:border-edge/40 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                      >
+                        <ChevronDown size={12} />
+                      </button>
+                      <button
+                        onClick={() => {
+                          setMsgQueue((prev) => prev.filter((_, i) => i !== idx));
+                        }}
+                        title="Cancel/Remove"
+                        className="p-1 rounded text-faint hover:text-risk hover:bg-risk/10 border border-transparent hover:border-risk/20 transition-all"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
           {/* compact composer: input + a single tidy control row */}
