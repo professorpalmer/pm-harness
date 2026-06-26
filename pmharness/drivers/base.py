@@ -49,3 +49,7 @@ class Driver(Protocol):
 
     def complete(self, task_prompt: str, *, system: str = SYSTEM_PROMPT) -> DriverResponse:
         ...
+
+    def chat(self, messages: list, *, tools: Optional[list] = None, system: Optional[str] = None) -> DriverResponse:
+        ...
+

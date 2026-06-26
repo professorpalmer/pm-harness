@@ -52,6 +52,7 @@ class PilotAction:
     command: str = ""
     query: str = ""
     url: str = ""
+    tool_call_id: str = ""
 
     def validate(self) -> "PilotAction":
         if self.kind not in VALID_ACTION_KINDS:
@@ -122,6 +123,234 @@ def _coerce_actions(raw_actions) -> list:
                                    tool=str(tool), arguments=arguments,
                                    path=str(path), content=str(content), command=str(command),
                                    query=str(query), url=str(url)).validate())
+    return actions
+
+
+def build_tools_schema(mcp_tools: Optional[list] = None) -> list:
+    schema = []
+
+    # 1. read_file
+    schema.append({
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "read a file's contents from the workspace. Requires `path`.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute or relative path to the file to read"}
+                },
+                "required": ["path"]
+            }
+        }
+    })
+
+    # 2. write_file
+    schema.append({
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "write/create a file atomically. Requires `path` and `content`.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute or relative path to the file to write"},
+                    "content": {"type": "string", "description": "The exact content to write/overwrite in the file"}
+                },
+                "required": ["path", "content"]
+            }
+        }
+    })
+
+    # 3. run_command
+    schema.append({
+        "type": "function",
+        "function": {
+            "name": "run_command",
+            "description": "run a terminal shell command. Requires `command`.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The terminal shell command to execute"}
+                },
+                "required": ["command"]
+            }
+        }
+    })
+
+    # 4. list_dir
+    schema.append({
+        "type": "function",
+        "function": {
+            "name": "list_dir",
+            "description": "list the files and folders inside a directory. `path` is optional.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Directory path to list. If empty, lists workspace root."}
+                }
+            }
+        }
+    })
+
+    # 5. web_search
+    schema.append({
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "search the internet and return top results. Requires `query`.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"}
+                },
+                "required": ["query"]
+            }
+        }
+    })
+
+    # 6. web_fetch
+    schema.append({
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "read a web page's text contents. Requires `url`.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL of the webpage to fetch"}
+                },
+                "required": ["url"]
+            }
+        }
+    })
+
+    # 7. read_pdf
+    schema.append({
+        "type": "function",
+        "function": {
+            "name": "read_pdf",
+            "description": "extract plain text from a local PDF file or PDF URL. Requires `path` or `url`.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Local path to PDF file"},
+                    "url": {"type": "string", "description": "URL to PDF file"}
+                }
+            }
+        }
+    })
+
+    # 8. run_swarm
+    schema.append({
+        "type": "function",
+        "function": {
+            "name": "run_swarm",
+            "description": "dispatch a parallel agent swarm for complex/broad investigations. Requires `goal`.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "description": "The specific objective or question for the swarm workers"},
+                    "roles": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional worker roles list"
+                    },
+                    "worker_mode": {
+                        "type": "string",
+                        "enum": ["subprocess", "inline", "daemon"],
+                        "description": "Optional worker process mode"
+                    }
+                },
+                "required": ["goal"]
+            }
+        }
+    })
+
+    # MCP tools
+    if mcp_tools:
+        for tool in mcp_tools:
+            mcp_name = f"mcp_{tool.server}_{tool.name}"
+            schema.append({
+                "type": "function",
+                "function": {
+                    "name": mcp_name,
+                    "description": tool.description or f"MCP tool from server {tool.server}",
+                    "parameters": tool.input_schema or {"type": "object", "properties": {}, "required": []}
+                }
+            })
+
+    return schema
+
+
+def parse_tool_calls(tool_calls: list) -> list[PilotAction]:
+    actions = []
+    if not tool_calls:
+        return actions
+
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        func = tc.get("function")
+        if not func:
+            continue
+        name = func.get("name") or ""
+        tc_id = tc.get("id") or ""
+        raw_args = func.get("arguments") or {}
+        if isinstance(raw_args, str):
+            try:
+                args = json.loads(raw_args)
+            except Exception:
+                args = {}
+        elif isinstance(raw_args, dict):
+            args = raw_args
+        else:
+            args = {}
+
+        if name.startswith("mcp_"):
+            parts = name.split("_", 2)
+            if len(parts) >= 3:
+                server = parts[1]
+                tool_name = parts[2]
+                kind = "call_mcp"
+                tool = f"{server}.{tool_name}"
+            else:
+                kind = "call_mcp"
+                tool = name[4:]
+
+            actions.append(PilotAction(
+                kind=kind,
+                tool=tool,
+                arguments=args,
+                tool_call_id=tc_id
+            ).validate())
+        elif name in VALID_ACTION_KINDS:
+            kind = name
+            path = args.get("path") or ""
+            content = args.get("content") or ""
+            command = args.get("command") or ""
+            query = args.get("query") or ""
+            url = args.get("url") or ""
+            goal = args.get("goal") or ""
+            roles = args.get("roles") or []
+            if isinstance(roles, str):
+                roles = [roles]
+
+            actions.append(PilotAction(
+                kind=kind,
+                path=path,
+                content=content,
+                command=command,
+                query=query,
+                url=url,
+                goal=goal,
+                roles=roles,
+                arguments=args,
+                tool_call_id=tc_id
+            ).validate())
+        else:
+            raise PilotError(f"unknown native tool name: {name}")
+
     return actions
 
 
@@ -224,7 +453,11 @@ You have direct access to a local CodeGraph-indexed workspace and can explore/ed
 - `read_pdf`: extract plain text from a local PDF file or PDF URL. Requires `path` or `url`.
 - `call_mcp`: call a connected MCP tool. Requires `tool` (the qualified server.tool name) and `arguments` (object). Connected MCP tools may be listed in a "Connected MCP tools" section appended below; use them when relevant.
 
-Respond ONLY with a JSON object:
+NATIVE TOOL-CALLING (Primary Mode):
+If native tool calling (function calling) is enabled, you MUST invoke functions/tools directly rather than writing JSON envelopes. Keep your user-facing message content to a brief, friendly sentence (pure prose) describing your action or findings. Never paste tool outputs, command outputs, or full file contents into your message content.
+
+FALLBACK JSON ENVELOPE MODE (Non-native fallback):
+If native tool-calling is NOT supported by the active driver/model, respond ONLY with a JSON object:
 
   {
     "thinking": "<optional private reasoning/scratchpad -- analysis, plan, what you are considering>",
@@ -235,8 +468,7 @@ Respond ONLY with a JSON object:
   }
 
 Rules:
-- `thinking` (optional) is your private reasoning/scratchpad -- analysis, plan, what you're considering. It is shown to the user in a separate collapsible Thinking section, dimmed. Put your reasoning here, and keep "say" for the concise user-facing explanation. This SEPARATES reasoning (thinking) from the user-facing message (say) -- the model fills both in the SAME response, no extra calls.
-- `say` is always present: the `say` field is for natural-language explanation to the USER ONLY. Keep it extremely tight and concise (under 2 sentences). Do NOT narrate the same intent repeatedly across turns. Each turn's `say` must be ONE concise sentence or empty if you are just acting -- do not restate your plan every turn. Let the tool chips show the work. Do NOT paste file contents, command output, tracebacks, or large code blocks you obtained from tools back into `say` -- reference them briefly instead. Never echo or quote the "(... completed with exit code ...)" tool-result envelopes -- those are shown to the user automatically in the action chips.
+- Keep your prose explanation (message content or "say") extremely tight and concise (under 2 sentences). Let the tool chips show the work. Do NOT paste file contents, command output, tracebacks, or large code blocks back into prose -- reference them briefly instead. Never echo or quote tool-result messages.
 - Prefer your direct tools (read_file, write_file, run_command, list_dir) for precise actions and testing.
 - Use `run_swarm` when you need a team of workers to analyze a broad issue or scan the codebase.
 - Always verify your work by running tests via `run_command` after editing.

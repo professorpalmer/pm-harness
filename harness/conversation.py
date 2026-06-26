@@ -30,7 +30,7 @@ import threading
 import time
 import subprocess
 from dataclasses import dataclass, field
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Any
 
 from pmharness import registry as reg
 from . import providers as prov
@@ -196,9 +196,28 @@ class ConversationalSession:
         lines = []
         for m in self._history:
             role = m["role"].upper()
-            lines.append(f"{role}: {m['content']}")
+            content = m.get("content") or ""
+            if m.get("tool_calls"):
+                tc_strs = []
+                for tc in m["tool_calls"]:
+                    func = tc.get("function") or {}
+                    tc_strs.append(f"({func.get('name')} with arguments {func.get('arguments')})")
+                if tc_strs:
+                    content = (content + "\n" + "\n".join(tc_strs)).strip()
+            elif m.get("role") == "tool":
+                role = "USER"
+                tc_id = m.get("tool_call_id") or ""
+                content = f"(tool result for {tc_id}):\n{content}"
+            lines.append(f"{role}: {content}")
         lines.append("ASSISTANT:")
         return "\n\n".join(lines)
+
+    def _append_action_result(self, act: Any, aid: str, content: str, is_native: bool) -> None:
+        if is_native:
+            tc_id = getattr(act, "tool_call_id", None) or aid
+            self._history.append({"role": "tool", "tool_call_id": tc_id, "content": content})
+        else:
+            self._history.append({"role": "user", "content": content})
 
     def cancel(self) -> None:
         """Signal any in-flight run_auto/send to stop at the next checkpoint."""
@@ -263,13 +282,21 @@ class ConversationalSession:
 
             self._history[0]["content"] = sys_prompt
             prompt = self._render_history()
+
             try:
-                resp = self.pilot.complete(prompt, system=sys_prompt)
+                if hasattr(self.pilot, "chat"):
+                    from .pilot import build_tools_schema
+                    mcp_tools = self._mcp.discovered_tools() if self._mcp else None
+                    tools_schema = build_tools_schema(mcp_tools)
+                    resp = self.pilot.chat(self._history[1:], tools=tools_schema, system=sys_prompt)
+                else:
+                    resp = self.pilot.complete(prompt, system=sys_prompt)
             except Exception as e:
                 yield ConvEvent("error", {"error": f"pilot transport: {e}"})
                 return
             finally:
                 self._history[0]["content"] = base_sys
+
             # real token metering: prompt + completion (drivers report tokens_out;
             # estimate tokens_in from prompt length when not provided).
             self._tokens_used += int(getattr(resp, "tokens_out", 0) or 0)
@@ -277,14 +304,46 @@ class ConversationalSession:
             if resp.error:
                 yield ConvEvent("error", {"error": f"pilot: {resp.error}"})
                 return
-            try:
-                turn = parse_pilot_turn(resp.text)
-            except PilotError as e:
-                # one lenient retry: tell the pilot to fix its envelope
-                self._history.append({"role": "user",
-                    "content": f"(system) Your last reply was not valid. {e}. "
-                               f"Reply with the JSON envelope {{\"say\":...,\"actions\":[...]}}."})
-                continue
+
+            is_native = False
+            tool_calls = []
+            reasoning = ""
+            pure_content = ""
+
+            if hasattr(self.pilot, "chat"):
+                tool_calls = resp.meta.get("tool_calls") or []
+                reasoning = resp.meta.get("reasoning") or ""
+                pure_content = resp.text or ""
+
+                if tool_calls or reasoning:
+                    is_native = True
+                elif pure_content:
+                    from .pilot import _extract_json_object
+                    obj = _extract_json_object(pure_content)
+                    if obj and isinstance(obj, dict) and ("say" in obj or "actions" in obj or "thinking" in obj):
+                        is_native = False
+                    else:
+                        is_native = True
+                else:
+                    is_native = True
+
+            if is_native:
+                try:
+                    from .pilot import parse_tool_calls, PilotTurn
+                    actions = parse_tool_calls(tool_calls)
+                    turn = PilotTurn(say=pure_content, thinking=reasoning, actions=actions)
+                except Exception as e:
+                    yield ConvEvent("error", {"error": f"native tool parsing error: {e}"})
+                    return
+            else:
+                try:
+                    turn = parse_pilot_turn(resp.text)
+                except PilotError as e:
+                    # one lenient retry: tell the pilot to fix its envelope
+                    self._history.append({"role": "user",
+                        "content": f"(system) Your last reply was not valid. {e}. "
+                                   f"Reply with the JSON envelope {{\"say\":...,\"actions\":[...]}}."})
+                    continue
 
             # 2. Emit the pilot's prose to the user.
             cleaned_thinking_text = clean_say(turn.thinking) if turn.thinking else ""
@@ -296,7 +355,17 @@ class ConversationalSession:
                 yield ConvEvent("message", {"role": "assistant", "text": cleaned_say_text})
                 turn_prose.append(cleaned_say_text)
             # record the pilot's turn in transcript (prose only -- the conversation)
-            self._history.append({"role": "assistant", "content": cleaned_say_text or "(acting)"})
+            if is_native:
+                assistant_msg: dict[str, Any] = {"role": "assistant"}
+                if cleaned_say_text:
+                    assistant_msg["content"] = cleaned_say_text
+                else:
+                    assistant_msg["content"] = ""
+                if tool_calls:
+                    assistant_msg["tool_calls"] = tool_calls
+                self._history.append(assistant_msg)
+            else:
+                self._history.append({"role": "assistant", "content": cleaned_say_text or "(acting)"})
 
             # 3. No actions => the pilot is done talking; yield back to the user.
             if not turn.has_actions:
@@ -332,7 +401,7 @@ class ConversationalSession:
                     if not self.config.repo:
                         error_msg = "No workspace directory (config.repo) is open."
                         yield ConvEvent("action_result", {"id": aid, "error": error_msg})
-                        self._history.append({"role": "user", "content": f"(read_file {aid} failed: {error_msg})"})
+                        self._append_action_result(act, aid, f"(read_file {aid} failed: {error_msg})", is_native)
                         continue
                     target_path = act.path
                     if not os.path.isabs(target_path):
@@ -340,7 +409,7 @@ class ConversationalSession:
                     if not is_safe_path(target_path, self.config.repo):
                         error_msg = f"Path traversal attempt rejected: {act.path}"
                         yield ConvEvent("action_result", {"id": aid, "error": error_msg})
-                        self._history.append({"role": "user", "content": f"(read_file {aid} failed: {error_msg})"})
+                        self._append_action_result(act, aid, f"(read_file {aid} failed: {error_msg})", is_native)
                         continue
                     try:
                         if not os.path.exists(target_path):
@@ -356,17 +425,17 @@ class ConversationalSession:
                             "id": aid, "num": 1, "types": ["file"], "adapter": "local", "mode": "tool",
                             "artifacts": [{"type": "file", "headline": f"Read {len(content)} chars from {act.path}"}],
                         })
-                        self._history.append({"role": "user", "content": f"(read_file {act.path} returned)\n{content}"})
+                        self._append_action_result(act, aid, f"(read_file {act.path} returned)\n{content}", is_native)
                     except Exception as e:
                         yield ConvEvent("action_result", {"id": aid, "error": str(e)})
-                        self._history.append({"role": "user", "content": f"(read_file {act.path} failed: {e})"})
+                        self._append_action_result(act, aid, f"(read_file {act.path} failed: {e})", is_native)
                     continue
                 # ---- write_file branch ----------------------------------------
                 if act.kind == "write_file":
                     if not self.config.repo:
                         error_msg = "No workspace directory (config.repo) is open."
                         yield ConvEvent("action_result", {"id": aid, "error": error_msg})
-                        self._history.append({"role": "user", "content": f"(write_file {aid} failed: {error_msg})"})
+                        self._append_action_result(act, aid, f"(write_file {aid} failed: {error_msg})", is_native)
                         continue
                     target_path = act.path
                     if not os.path.isabs(target_path):
@@ -374,7 +443,7 @@ class ConversationalSession:
                     if not is_safe_path(target_path, self.config.repo):
                         error_msg = f"Path traversal attempt rejected: {act.path}"
                         yield ConvEvent("action_result", {"id": aid, "error": error_msg})
-                        self._history.append({"role": "user", "content": f"(write_file {aid} failed: {error_msg})"})
+                        self._append_action_result(act, aid, f"(write_file {aid} failed: {error_msg})", is_native)
                         continue
                     try:
                         target_dir = os.path.dirname(target_path)
@@ -394,17 +463,17 @@ class ConversationalSession:
                             "id": aid, "num": 1, "types": ["file"], "adapter": "local", "mode": "tool",
                             "artifacts": [{"type": "file", "headline": f"Wrote {bytes_written} bytes to {act.path}"}],
                         })
-                        self._history.append({"role": "user", "content": f"(write_file {act.path} successfully wrote {bytes_written} bytes)"})
+                        self._append_action_result(act, aid, f"(write_file {act.path} successfully wrote {bytes_written} bytes)", is_native)
                     except Exception as e:
                         yield ConvEvent("action_result", {"id": aid, "error": str(e)})
-                        self._history.append({"role": "user", "content": f"(write_file {act.path} failed: {e})"})
+                        self._append_action_result(act, aid, f"(write_file {act.path} failed: {e})", is_native)
                     continue
                 # ---- run_command branch ---------------------------------------
                 if act.kind == "run_command":
                     if not self.config.repo:
                         error_msg = "No workspace directory (config.repo) is open."
                         yield ConvEvent("action_result", {"id": aid, "error": error_msg})
-                        self._history.append({"role": "user", "content": f"(run_command {aid} failed: {error_msg})"})
+                        self._append_action_result(act, aid, f"(run_command {aid} failed: {error_msg})", is_native)
                         continue
                     try:
                         p = subprocess.run(
@@ -432,14 +501,14 @@ class ConversationalSession:
                         "id": aid, "num": 1, "types": ["command"], "adapter": "local", "mode": "tool",
                         "artifacts": [{"type": "command", "headline": f"Command exited with {exit_code}"}],
                     })
-                    self._history.append({"role": "user", "content": f"(run_command '{act.command}' completed with exit code {exit_code})\n{output}"})
+                    self._append_action_result(act, aid, f"(run_command '{act.command}' completed with exit code {exit_code})\n{output}", is_native)
                     continue
                 # ---- list_dir branch ------------------------------------------
                 if act.kind == "list_dir":
                     if not self.config.repo:
                         error_msg = "No workspace directory (config.repo) is open."
                         yield ConvEvent("action_result", {"id": aid, "error": error_msg})
-                        self._history.append({"role": "user", "content": f"(list_dir {aid} failed: {error_msg})"})
+                        self._append_action_result(act, aid, f"(list_dir {aid} failed: {error_msg})", is_native)
                         continue
                     target_path = act.path
                     if not target_path or not target_path.strip():
@@ -450,7 +519,7 @@ class ConversationalSession:
                     if not is_safe_path(target_path, self.config.repo):
                         error_msg = f"Path traversal attempt rejected: {act.path}"
                         yield ConvEvent("action_result", {"id": aid, "error": error_msg})
-                        self._history.append({"role": "user", "content": f"(list_dir {aid} failed: {error_msg})"})
+                        self._append_action_result(act, aid, f"(list_dir {aid} failed: {error_msg})", is_native)
                         continue
                     try:
                         if not os.path.exists(target_path):
@@ -479,10 +548,10 @@ class ConversationalSession:
                             "id": aid, "num": 1, "types": ["dir"], "adapter": "local", "mode": "tool",
                             "artifacts": [{"type": "dir", "headline": f"Listed {len(entries)} items in {act.path or '/'}"}],
                         })
-                        self._history.append({"role": "user", "content": f"(list_dir {act.path or '/'} returned)\n{result_text}"})
+                        self._append_action_result(act, aid, f"(list_dir {act.path or '/'} returned)\n{result_text}", is_native)
                     except Exception as e:
                         yield ConvEvent("action_result", {"id": aid, "error": str(e)})
-                        self._history.append({"role": "user", "content": f"(list_dir {act.path or '/'} failed: {e})"})
+                        self._append_action_result(act, aid, f"(list_dir {act.path or '/'} failed: {e})", is_native)
                     continue
                 # ---- web_search branch ----------------------------------------
                 if act.kind == "web_search":
@@ -493,10 +562,10 @@ class ConversationalSession:
                             "id": aid, "num": 1, "types": ["web_search"], "adapter": "local", "mode": "tool",
                             "artifacts": [{"type": "web_search", "headline": f"Searched for '{act.query}'"}],
                         })
-                        self._history.append({"role": "user", "content": f"(web_search '{act.query}' returned)\n{result_text}"})
+                        self._append_action_result(act, aid, f"(web_search '{act.query}' returned)\n{result_text}", is_native)
                     except Exception as e:
                         yield ConvEvent("action_result", {"id": aid, "error": str(e)})
-                        self._history.append({"role": "user", "content": f"(web_search '{act.query}' failed: {e})"})
+                        self._append_action_result(act, aid, f"(web_search '{act.query}' failed: {e})", is_native)
                     continue
                 # ---- web_fetch branch -----------------------------------------
                 if act.kind == "web_fetch":
@@ -507,10 +576,10 @@ class ConversationalSession:
                             "id": aid, "num": 1, "types": ["web_fetch"], "adapter": "local", "mode": "tool",
                             "artifacts": [{"type": "web_fetch", "headline": f"Fetched {act.url}"}],
                         })
-                        self._history.append({"role": "user", "content": f"(web_fetch '{act.url}' returned)\n{result_text}"})
+                        self._append_action_result(act, aid, f"(web_fetch '{act.url}' returned)\n{result_text}", is_native)
                     except Exception as e:
                         yield ConvEvent("action_result", {"id": aid, "error": str(e)})
-                        self._history.append({"role": "user", "content": f"(web_fetch '{act.url}' failed: {e})"})
+                        self._append_action_result(act, aid, f"(web_fetch '{act.url}' failed: {e})", is_native)
                     continue
                 # ---- read_pdf branch ------------------------------------------
                 if act.kind == "read_pdf":
@@ -522,7 +591,7 @@ class ConversationalSession:
                         if not self.config.repo:
                             error_msg = "No workspace directory (config.repo) is open."
                             yield ConvEvent("action_result", {"id": aid, "error": error_msg})
-                            self._history.append({"role": "user", "content": f"(read_pdf {aid} failed: {error_msg})"})
+                            self._append_action_result(act, aid, f"(read_pdf {aid} failed: {error_msg})", is_native)
                             continue
                         target_path = act.path
                         if not os.path.isabs(target_path):
@@ -530,7 +599,7 @@ class ConversationalSession:
                         if not is_safe_path(target_path, self.config.repo):
                             error_msg = f"Path traversal attempt rejected: {act.path}"
                             yield ConvEvent("action_result", {"id": aid, "error": error_msg})
-                            self._history.append({"role": "user", "content": f"(read_pdf {aid} failed: {error_msg})"})
+                            self._append_action_result(act, aid, f"(read_pdf {aid} failed: {error_msg})", is_native)
                             continue
                         target = target_path
 
@@ -540,33 +609,30 @@ class ConversationalSession:
                             "id": aid, "num": 1, "types": ["read_pdf"], "adapter": "local", "mode": "tool",
                             "artifacts": [{"type": "read_pdf", "headline": f"Read PDF from {act.path or act.url}"}],
                         })
-                        self._history.append({"role": "user", "content": f"(read_pdf '{act.path or act.url}' returned)\n{result_text}"})
+                        self._append_action_result(act, aid, f"(read_pdf '{act.path or act.url}' returned)\n{result_text}", is_native)
                     except Exception as e:
                         yield ConvEvent("action_result", {"id": aid, "error": str(e)})
-                        self._history.append({"role": "user", "content": f"(read_pdf '{act.path or act.url}' failed: {e})"})
+                        self._append_action_result(act, aid, f"(read_pdf '{act.path or act.url}' failed: {e})", is_native)
                     continue
                 # ---- MCP tool call branch -------------------------------------
                 if act.kind == "call_mcp":
                     if self._mcp is None:
                         yield ConvEvent("action_result", {"id": aid, "error": "MCP not available"})
-                        self._history.append({"role": "user",
-                            "content": f"(mcp {aid} unavailable)"})
+                        self._append_action_result(act, aid, f"(mcp {aid} unavailable)", is_native)
                         continue
                     try:
                         out = self._mcp.call(act.tool, act.arguments)
                         text = _mcp_result_text(out)
                     except Exception as e:
                         yield ConvEvent("action_result", {"id": aid, "error": f"mcp: {e}"})
-                        self._history.append({"role": "user",
-                            "content": f"(mcp {act.tool} failed: {e})"})
+                        self._append_action_result(act, aid, f"(mcp {act.tool} failed: {e})", is_native)
                         continue
                     yield ConvEvent("action_result", {
                         "id": aid, "tool": act.tool, "num": 1,
                         "types": ["mcp"], "adapter": "mcp", "mode": "tool",
                         "artifacts": [{"type": "mcp", "headline": f"{act.tool}: {text[:120]}"}],
                     })
-                    self._history.append({"role": "user",
-                        "content": f"(mcp {act.tool} returned)\n{text[:2000]}"})
+                    self._append_action_result(act, aid, f"(mcp {act.tool} returned)\n{text[:2000]}", is_native)
                     continue
                 # ---- swarm branch --------------------------------------------
                 intent = DriverIntent(action="run_swarm", goal=act.goal,
@@ -575,8 +641,7 @@ class ConversationalSession:
                     result: BridgeResult = execute_intent(intent, state_dir=self.state_dir)
                 except Exception as e:
                     yield ConvEvent("action_result", {"id": aid, "error": f"execute: {e}"})
-                    self._history.append({"role": "user",
-                        "content": f"(swarm {aid} failed: {e})"})
+                    self._append_action_result(act, aid, f"(swarm {aid} failed: {e})", is_native)
                     continue
                 swarms += 1
                 if result.adapter == "demo":
@@ -600,11 +665,7 @@ class ConversationalSession:
                              "Do NOT keep retrying; explain this to the user and finish "
                              "with no actions. Real analysis needs --repo + "
                              "--swarm-adapter openai.)")
-                self._history.append({"role": "user", "content":
-                    f"(swarm {aid} '{act.goal}' returned {result.num_artifacts} "
-                    f"artifacts via {result.adapter}:\n{digest}\n"
-                    f"Explain these findings to the user and either run a narrowed "
-                    f"follow-up swarm or finish with no actions.){stall}"})
+                self._append_action_result(act, aid, f"(swarm {aid} '{act.goal}' returned {result.num_artifacts} artifacts via {result.adapter}:\n{digest}\nExplain these findings to the user and either run a narrowed follow-up swarm or finish with no actions.){stall}", is_native)
 
         # Hit the step cap -- close the turn gracefully.
         self._maybe_ingest(user_message, turn_prose, turn_findings)
