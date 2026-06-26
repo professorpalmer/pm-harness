@@ -175,6 +175,29 @@ class ConversationalSession:
         # auto-distill: when on, run_auto proposes PENDING skill/rule candidates on
         # completion (still human-gated for approval). Off by default.
         self._auto_distill = os.environ.get("HARNESS_AUTO_DISTILL", "").strip() in ("1", "true", "yes")
+        self._state = "idle"
+        
+        import queue
+        import concurrent.futures
+        self._apply_lock = threading.Lock()
+        self._swarm_pool = concurrent.futures.ThreadPoolExecutor(max_workers=getattr(config, "max_workers", 4))
+        self._swarm_results: queue.Queue = queue.Queue()
+        self._swarm_futures: set[concurrent.futures.Future] = set()
+        self._swarm_futures_lock = threading.Lock()
+        self._interrupted_swarms = False
+
+    def state(self) -> str:
+        if self._state == "thinking":
+            return "thinking"
+        if self.has_pending_swarms():
+            return "awaiting_swarm"
+        return self._state
+
+    def has_pending_swarms(self) -> bool:
+        with self._swarm_futures_lock:
+            return len(self._swarm_futures) > 0
+
+
 
     @property
     def durable(self) -> DurableState:
@@ -225,6 +248,12 @@ class ConversationalSession:
     def cancel(self) -> None:
         """Signal any in-flight run_auto/send to stop at the next checkpoint."""
         self._cancel.set()
+        # interrupt()/_cancel: best-effort -- on interrupt, set a flag so completed-but-unfolded
+        # swarm results are still delivered but no NEW swarm work is started.
+        # There is a small gap where background swarm futures already submitted to self._swarm_pool
+        # cannot be forcefully aborted immediately since Python threads cannot be killed, but they will
+        # exit when they check self._cancel or finish subprocess await, and we won't start new swarm work.
+        self._interrupted_swarms = True
 
     def send(self, user_message: str, images: Optional[list] = None, plan: bool = False) -> Iterator[ConvEvent]:
         """Process one user message: drive the pilot loop until it yields back."""
@@ -254,6 +283,13 @@ class ConversationalSession:
             self._busy.release()
 
     def _send_locked(self, user_message: str, images: Optional[list] = None, plan: bool = False) -> Iterator[ConvEvent]:
+        self._state = "thinking"
+        try:
+            yield from self._send_locked_inner(user_message, images=images, plan=plan)
+        finally:
+            self._state = "idle"
+
+    def _send_locked_inner(self, user_message: str, images: Optional[list] = None, plan: bool = False) -> Iterator[ConvEvent]:
         processed_message = user_message
         if images:
             from .vision import transcribe_images
@@ -843,96 +879,35 @@ class ConversationalSession:
                         p.wait(timeout=600)
 
                         if job_id:
-                            await_cmd = _puppetmaster_cmd("await", job_id, "--cwd", self.config.repo)
-                            subprocess.run(await_cmd, cwd=self.config.repo, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
-
-                            art_cmd = _puppetmaster_cmd("artifacts", job_id, "--cwd", self.config.repo)
-                            art_p = subprocess.run(art_cmd, cwd=self.config.repo, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
-                            art_out = art_p.stdout or ""
+                            # Submit the await+apply task to the thread pool
+                            future = self._swarm_pool.submit(self._run_swarm_background, job_id, act.goal, None)
+                            with self._swarm_futures_lock:
+                                self._swarm_futures.add(future)
                             
-                            try:
-                                artifacts = json.loads(art_out)
-                            except Exception:
-                                artifacts = []
-
-                            self._add_worker_tokens_from_artifacts(artifacts)
-
-                            num_artifacts = len(artifacts)
-                            artifact_types = sorted({str(a.get("type", "finding")) for a in artifacts})
+                            def make_cleanup(fut):
+                                def _cleanup(f):
+                                    with self._swarm_futures_lock:
+                                        self._swarm_futures.discard(f)
+                                return _cleanup
+                            future.add_done_callback(make_cleanup(future))
                             
-                            patch_summary = ""
-                            patch_art = next((a for a in artifacts if a.get("type") == "patch"), None)
-                            if patch_art:
-                                payload = patch_art.get("payload") or {}
-                                files_changed = payload.get("files", [])
-                                if files_changed:
-                                    patch_summary = f"Files changed: {', '.join(files_changed)}"
-                                else:
-                                    diff_text = payload.get("unified_diff") or ""
-                                    if diff_text:
-                                        patch_summary = f"Diff total chars: {len(diff_text)}"
+                            # Emit ConvEvent kind="swarm_pending" with {job_ids, objective}
+                            yield ConvEvent("swarm_pending", {
+                                "job_ids": [job_id],
+                                "objective": act.goal
+                            })
                             
-                            findings_summary = []
-                            for a in artifacts:
-                                if a.get("type") == "finding":
-                                    rep = (a.get("payload") or {}).get("report") or ""
-                                    if rep:
-                                        findings_summary.append(rep[:120])
-                            
-                            summary_parts = []
-                            if patch_summary:
-                                summary_parts.append(patch_summary)
-                            if findings_summary:
-                                summary_parts.append("; ".join(findings_summary[:3]))
-                            
-                            summary = "\n".join(summary_parts) if summary_parts else "Successfully completed implement task"
-                            
-                            ar_list = []
-                            for a in artifacts[:8]:
-                                t = a.get("type", "finding")
-                                headline = ""
-                                if t == "patch":
-                                    files = (a.get("payload") or {}).get("files") or []
-                                    headline = f"Patch: modified {', '.join(files)}" if files else "Patch generated"
-                                elif t == "finding":
-                                    claim = (a.get("payload") or {}).get("claim") or ""
-                                    rep = (a.get("payload") or {}).get("report") or ""
-                                    headline = claim or rep[:80] or "Finding"
-                                else:
-                                    headline = f"{t.capitalize()} artifact"
-                                ar_list.append({"type": t, "headline": headline})
-                            
-                            applied, applied_files, apply_msg = self._apply_worker_patch(artifacts)
-                            has_patch_art = any(isinstance(a, dict) and a.get("type") == "patch" for a in artifacts)
-                            
-                            apply_summary = ""
-                            if has_patch_art:
-                                if applied:
-                                    apply_summary = f"Applied patch to {len(applied_files)} files: {', '.join(applied_files)}"
-                                else:
-                                    apply_summary = f"PATCH DID NOT APPLY: {apply_msg}"
-                            
-                            if apply_summary:
-                                summary = f"{summary}\n{apply_summary}" if summary else apply_summary
-                            
-                            ar_data = {
+                            # Complete the visible action start and result for the dispatch itself
+                            yield ConvEvent("action_result", {
                                 "id": aid,
                                 "job_id": job_id,
-                                "num": num_artifacts,
-                                "types": artifact_types,
-                                "artifacts": ar_list,
-                                "adapter": adapter,
-                                "mode": "implement",
-                            }
-                            if has_patch_art and not applied:
-                                ar_data["error"] = f"PATCH DID NOT APPLY: {apply_msg}"
-                                
-                            yield ConvEvent("action_result", ar_data)
+                                "status": "pending",
+                                "message": f"Dispatched background swarm job {job_id}"
+                            })
                             
-                            if has_patch_art and not applied:
-                                self._append_action_result(act, aid, f"(run_implement job {job_id} on {adapter} failed: {apply_summary})", is_native)
-                            else:
-                                self._append_action_result(act, aid, f"(run_implement job {job_id} on {adapter} returned {num_artifacts} artifacts:\n{summary}\n)", is_native)
+                            self._append_action_result(act, aid, f"(run_implement {aid} dispatched in background: job {job_id})", is_native)
+                            yield ConvEvent("assistant_done", {"turns": step + 1, "swarms": swarms + 1})
+                            return
                         else:
                             output = "".join(all_output_lines)[:5000]
                             yield ConvEvent("action_result", {
@@ -1077,86 +1052,30 @@ class ConversationalSession:
 
                             if job_id:
                                 job_ids_collected.append(job_id)
-                                await_cmd = _puppetmaster_cmd("--state-dir", state_dir, "await", job_id, "--cwd", self.config.repo)
-                                subprocess.run(await_cmd, cwd=self.config.repo, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
-
-                                art_cmd = _puppetmaster_cmd("--state-dir", state_dir, "artifacts", job_id, "--cwd", self.config.repo)
-                                art_p = subprocess.run(art_cmd, cwd=self.config.repo, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
-                                art_out = art_p.stdout or ""
                                 
-                                try:
-                                    artifacts = json.loads(art_out)
-                                except Exception:
-                                    artifacts = []
-
-                                self._add_worker_tokens_from_artifacts(artifacts)
+                                # Submit to background pool.
+                                # Note: state_dir is passed, and _run_swarm_background will clean it up!
+                                # So we do NOT clean up state_dir in the finally block if the job started.
+                                future = self._swarm_pool.submit(self._run_swarm_background, job_id, sub_goal, state_dir)
+                                with self._swarm_futures_lock:
+                                    self._swarm_futures.add(future)
                                 
-                                num_art = len(artifacts)
-                                aggregate_num_artifacts += num_art
-                                art_types = sorted({str(a.get("type", "finding")) for a in artifacts})
+                                def make_cleanup(fut):
+                                    def _cleanup(f):
+                                        with self._swarm_futures_lock:
+                                            self._swarm_futures.discard(f)
+                                    return _cleanup
+                                future.add_done_callback(make_cleanup(future))
                                 
-                                ar_list = []
-                                for a in artifacts[:4]:
-                                    t = a.get("type", "finding")
-                                    headline = ""
-                                    if t == "patch":
-                                        files = (a.get("payload") or {}).get("files") or []
-                                        headline = f"Patch: modified {', '.join(files)}" if files else "Patch generated"
-                                    elif t == "finding":
-                                        claim = (a.get("payload") or {}).get("claim") or ""
-                                        rep = (a.get("payload") or {}).get("report") or ""
-                                        headline = claim or rep[:80] or "Finding"
-                                    else:
-                                        headline = f"{t.capitalize()} artifact"
-                                    ar_list.append({"type": t, "headline": headline})
-
-                                applied, applied_files, apply_msg = self._apply_worker_patch(artifacts)
-                                has_patch_art = any(isinstance(a, dict) and a.get("type") == "patch" for a in artifacts)
+                                # Prevent cleanup of state_dir in local finally block by setting p_info["state_dir"] = None
+                                p_info["state_dir"] = None
                                 
-                                worker_statuses.append({
-                                    "job_id": job_id,
-                                    "applied": "yes" if applied else "no",
-                                    "files": applied_files,
-                                    "has_patch": has_patch_art,
-                                    "msg": apply_msg
-                                })
-
-                                sub_res_data = {
+                                yield ConvEvent("action_result", {
                                     "id": sub_aid,
                                     "job_id": job_id,
-                                    "num": num_art,
-                                    "types": art_types,
-                                    "artifacts": ar_list,
-                                    "adapter": adapter,
-                                    "mode": mode,
-                                    "applied": "yes" if applied else ("no" if has_patch_art else "n/a"),
-                                    "files": applied_files
-                                }
-                                if has_patch_art and not applied:
-                                    sub_res_data["error"] = f"PATCH DID NOT APPLY: {apply_msg}"
-                                yield ConvEvent("action_result", sub_res_data)
-
-                                patch_desc = ""
-                                if has_patch_art:
-                                    if applied:
-                                        patch_desc = f"Patch applied to: {', '.join(applied_files)}" if applied_files else "Patch applied"
-                                    else:
-                                        patch_desc = f"PATCH DID NOT APPLY: {apply_msg}"
-                                
-                                findings = [
-                                    (a.get("payload") or {}).get("report", "")[:100]
-                                    for a in artifacts if a.get("type") == "finding"
-                                ]
-                                findings_desc = "; ".join(findings[:2])
-                                
-                                p_sum = []
-                                if patch_desc:
-                                    p_sum.append(patch_desc)
-                                if findings_desc:
-                                    p_sum.append(findings_desc)
-                                
-                                sum_str = " | ".join(p_sum) if p_sum else "Completed task successfully"
-                                aggregate_artifacts_summary.append(f"Sub-worker for '{sub_goal}' (job {job_id}): {sum_str}")
+                                    "status": "pending",
+                                    "message": f"Dispatched parallel background swarm job {job_id}"
+                                })
                             else:
                                 ret_code = p_info["proc"].returncode
                                 output_text = "".join(p_info["lines"])
@@ -1173,39 +1092,30 @@ class ConversationalSession:
                                 yield ConvEvent("action_result", {"id": sub_aid, "error": err_msg})
                                 aggregate_artifacts_summary.append(f"Sub-worker for '{sub_goal}' failed: {err_msg}")
                         finally:
-                            if state_dir:
-                                shutil.rmtree(state_dir, ignore_errors=True)
+                            if p_info.get("state_dir"):
+                                import shutil
+                                shutil.rmtree(p_info["state_dir"], ignore_errors=True)
 
-                    aggregate_artifacts_list = [{"type": "parallel_summary", "headline": s} for s in aggregate_artifacts_summary[:8]]
-                    
-                    any_failed = any(status["has_patch"] and status["applied"] == "no" for status in worker_statuses)
-                    
-                    event_data = {
-                        "id": aid,
-                        "job_id": ",".join(job_ids_collected) if job_ids_collected else "none",
-                        "num": aggregate_num_artifacts,
-                        "types": ["parallel_summary"],
-                        "artifacts": aggregate_artifacts_list,
-                        "adapter": adapter,
-                        "mode": mode,
-                        "workers": [{
-                            "job_id": s["job_id"],
-                            "applied": s["applied"],
-                            "files": s["files"]
-                        } for s in worker_statuses]
-                    }
-                    if any_failed:
-                        failed_jobs = [s["job_id"] for s in worker_statuses if s["has_patch"] and s["applied"] == "no"]
-                        event_data["error"] = f"CRITICAL: Worker patches failed to apply for jobs: {', '.join(failed_jobs)}"
-                    
-                    yield ConvEvent("action_result", event_data)
-
-                    summary_all = "\n".join(aggregate_artifacts_summary)
-                    if any_failed:
-                        failed_details = [f"Job {s['job_id']}: {s['msg']}" for s in worker_statuses if s["has_patch"] and s["applied"] == "no"]
-                        summary_all += f"\n\nCRITICAL: Some worker patches failed to apply!\n" + "\n".join(failed_details)
-                        
-                    self._append_action_result(act, aid, f"(run_parallel wave completed on {adapter} in {mode} mode, returned jobs: {', '.join(job_ids_collected)}:\n{summary_all}\n)", is_native)
+                    if job_ids_collected:
+                        yield ConvEvent("swarm_pending", {
+                            "job_ids": job_ids_collected,
+                            "objective": f"Parallel wave of goals: {', '.join(goals)}"
+                        })
+                        yield ConvEvent("action_result", {
+                            "id": aid,
+                            "job_id": ",".join(job_ids_collected),
+                            "status": "pending",
+                            "message": f"Dispatched parallel background swarm jobs: {', '.join(job_ids_collected)}"
+                        })
+                        self._append_action_result(act, aid, f"(run_parallel dispatched {len(job_ids_collected)} jobs in background: {', '.join(job_ids_collected)})", is_native)
+                        yield ConvEvent("assistant_done", {"turns": step + 1, "swarms": swarms + len(job_ids_collected)})
+                        return
+                    else:
+                        yield ConvEvent("action_result", {
+                            "id": aid,
+                            "error": "No jobs successfully dispatched"
+                        })
+                        self._append_action_result(act, aid, f"(run_parallel failed to dispatch any jobs)", is_native)
                     continue
 
                 # ---- route_task branch ---------------------------------------
@@ -1459,6 +1369,197 @@ class ConversationalSession:
         except Exception:
             pass
         return "hermes"  # fallback
+
+    def _await_and_apply_job(self, job_id: str, state_dir: Optional[str] = None) -> dict:
+        import json
+        import subprocess
+        # 1. Await job
+        if state_dir:
+            await_cmd = _puppetmaster_cmd("--state-dir", state_dir, "await", job_id, "--cwd", self.config.repo)
+        else:
+            await_cmd = _puppetmaster_cmd("await", job_id, "--cwd", self.config.repo)
+        subprocess.run(await_cmd, cwd=self.config.repo, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
+
+        # 2. Fetch artifacts
+        if state_dir:
+            art_cmd = _puppetmaster_cmd("--state-dir", state_dir, "artifacts", job_id, "--cwd", self.config.repo)
+        else:
+            art_cmd = _puppetmaster_cmd("artifacts", job_id, "--cwd", self.config.repo)
+        art_p = subprocess.run(art_cmd, cwd=self.config.repo, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        art_out = art_p.stdout or ""
+        try:
+            artifacts = json.loads(art_out)
+        except Exception:
+            artifacts = []
+
+        # 3. Add worker tokens
+        tokens_in, tokens_out = self._add_worker_tokens_from_artifacts(artifacts)
+
+        # 4. Process artifacts
+        num_artifacts = len(artifacts)
+        artifact_types = sorted({str(a.get("type", "finding")) for a in artifacts})
+        
+        patch_summary = ""
+        patch_art = next((a for a in artifacts if isinstance(a, dict) and a.get("type") == "patch"), None)
+        if patch_art:
+            payload = patch_art.get("payload") or {}
+            files_changed = payload.get("files", [])
+            if files_changed:
+                patch_summary = f"Files changed: {', '.join(files_changed)}"
+            else:
+                diff_text = payload.get("unified_diff") or ""
+                if diff_text:
+                    patch_summary = f"Diff total chars: {len(diff_text)}"
+        
+        findings_summary = []
+        for a in artifacts:
+            if isinstance(a, dict) and a.get("type") == "finding":
+                rep = (a.get("payload") or {}).get("report") or ""
+                if rep:
+                    findings_summary.append(rep[:120])
+        
+        summary_parts = []
+        if patch_summary:
+            summary_parts.append(patch_summary)
+        if findings_summary:
+            summary_parts.append("; ".join(findings_summary[:3]))
+        
+        summary = "\n".join(summary_parts) if summary_parts else "Successfully completed implement task"
+        
+        ar_list = []
+        for a in artifacts[:8]:
+            if not isinstance(a, dict):
+                continue
+            t = a.get("type", "finding")
+            headline = ""
+            if t == "patch":
+                files = (a.get("payload") or {}).get("files") or []
+                headline = f"Patch: modified {', '.join(files)}" if files else "Patch generated"
+            elif t == "finding":
+                claim = (a.get("payload") or {}).get("claim") or ""
+                rep = (a.get("payload") or {}).get("report") or ""
+                headline = claim or rep[:80] or "Finding"
+            else:
+                headline = f"{t.capitalize()} artifact"
+            ar_list.append({"type": t, "headline": headline})
+
+        # 5. Apply patch
+        # CORRECTNESS (comment these in code): Guard the git apply operation with self._apply_lock
+        # so two concurrent backgrounded swarms cannot attempt to run git apply / git merge simultaneously,
+        # which would cause repository index/state corruption.
+        with self._apply_lock:
+            applied, applied_files, apply_msg = self._apply_worker_patch(artifacts)
+        has_patch_art = any(isinstance(a, dict) and a.get("type") == "patch" for a in artifacts)
+        
+        apply_summary = ""
+        if has_patch_art:
+            if applied:
+                apply_summary = f"Applied patch to {len(applied_files)} files: {', '.join(applied_files)}"
+            else:
+                apply_summary = f"PATCH DID NOT APPLY: {apply_msg}"
+        
+        if apply_summary:
+            summary = f"{summary}\n{apply_summary}" if summary else apply_summary
+
+        error = f"PATCH DID NOT APPLY: {apply_msg}" if (has_patch_art and not applied) else None
+
+        return {
+            "job_id": job_id,
+            "applied": applied,
+            "files": applied_files,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "summary": summary,
+            "error": error,
+            "artifacts": artifacts,
+            "has_patch_art": has_patch_art,
+            "apply_msg": apply_msg,
+            "num_artifacts": num_artifacts,
+            "artifact_types": artifact_types,
+            "ar_list": ar_list,
+        }
+
+    def _run_swarm_background(self, job_id: str, objective: str, state_dir: Optional[str] = None) -> None:
+        try:
+            # CORRECTNESS: Do NOT touch self._history here to maintain single-writer invariant.
+            # Background threads are strictly read-only or local-variable-only with respect to transcript memory,
+            # ensuring that the self._history shared list is never corrupted by concurrent modifications.
+            res_dict = self._await_and_apply_job(job_id, state_dir=state_dir)
+            
+            # Put result in queue
+            self._swarm_results.put({
+                "job_id": job_id,
+                "objective": objective,
+                "result": res_dict,
+                "state_dir": state_dir
+            })
+        except Exception as e:
+            # Put error result in queue
+            self._swarm_results.put({
+                "job_id": job_id,
+                "objective": objective,
+                "result": {
+                    "job_id": job_id,
+                    "applied": False,
+                    "files": [],
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "summary": f"Failed background await: {e}",
+                    "error": str(e),
+                    "artifacts": [],
+                    "has_patch_art": False,
+                    "apply_msg": str(e),
+                    "num_artifacts": 0,
+                    "artifact_types": [],
+                    "ar_list": []
+                },
+                "state_dir": state_dir
+            })
+        finally:
+            # Cleanup state_dir if present
+            if state_dir:
+                import shutil
+                shutil.rmtree(state_dir, ignore_errors=True)
+
+    def drain_swarm_results(self) -> Iterator[ConvEvent]:
+        # holding _busy blocking
+        self._busy.acquire(blocking=True)
+        try:
+            import queue
+            while True:
+                try:
+                    item = self._swarm_results.get_nowait()
+                except queue.Empty:
+                    break
+                
+                job_id = item["job_id"]
+                objective = item["objective"]
+                res_job = item["result"]
+                
+                # Append a labeled follow-up assistant message to self._history (SINGLE-WRITER held via _busy lock!)
+                applied = res_job["applied"]
+                applied_files = res_job["files"]
+                summary = res_job["summary"]
+                
+                msg_content = f"[swarm result for: {objective}] {summary}"
+                if applied and applied_files:
+                    msg_content += f"; applied {len(applied_files)} files"
+                elif res_job.get("has_patch_art") and not applied:
+                    msg_content += f"; patch failed to apply: {res_job.get('apply_msg')}"
+                
+                self._history.append({"role": "assistant", "content": msg_content})
+                
+                # Yield ConvEvent kind="swarm_result"
+                yield ConvEvent("swarm_result", {
+                    "job_id": job_id,
+                    "objective": objective,
+                    "result": res_job,
+                    "message": msg_content
+                })
+                
+                self._swarm_results.task_done()
+        finally:
+            self._busy.release()
 
     def _maybe_ingest(self, user_message: str, prose: list, findings: list) -> None:
         """Auto-ingest a session digest to the wiki when enabled and there are
