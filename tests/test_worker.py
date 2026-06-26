@@ -189,3 +189,87 @@ def test_worker_destructive_guards(monkeypatch):
         
     finally:
         shutil.rmtree(repo_dir)
+
+
+def test_worker_leaf_mode_schemas_and_defense(monkeypatch):
+    from unittest.mock import MagicMock, patch
+    import json
+    from harness.pilot import build_tools_schema
+    from harness.config import HarnessConfig
+
+    # 1. build_tools_schema with no_delegation=True
+    schema_worker = build_tools_schema(no_delegation=True)
+    tool_names_worker = {t["function"]["name"] for t in schema_worker}
+
+    # Excludes delegation actions
+    assert "run_implement" not in tool_names_worker
+    assert "run_parallel" not in tool_names_worker
+    assert "run_swarm" not in tool_names_worker
+
+    # Includes direct-edit actions
+    assert "write_file" in tool_names_worker
+    assert "read_file" in tool_names_worker
+    assert "run_command" in tool_names_worker
+    assert "list_dir" in tool_names_worker
+    assert "search_codegraph" in tool_names_worker
+    assert "query_wiki" in tool_names_worker
+
+    # 2. build_tools_schema by default (regression guard)
+    schema_default = build_tools_schema()
+    tool_names_default = {t["function"]["name"] for t in schema_default}
+    assert "run_implement" in tool_names_default
+    assert "run_parallel" in tool_names_default
+    assert "run_swarm" in tool_names_default
+
+    # 3. Verify ProviderWorker constructs session with no_delegation=True
+    repo_dir = create_temp_git_repo()
+    try:
+        captured_no_delegation = None
+        original_init = ConversationalSession.__init__
+
+        def mock_init(self, config):
+            nonlocal captured_no_delegation
+            captured_no_delegation = getattr(config, "no_delegation", False)
+            original_init(self, config)
+
+        monkeypatch.setattr(ConversationalSession, "__init__", mock_init)
+
+        def mock_run_auto(self, objective, budget=None, require_codegraph=True):
+            yield ConvEvent("auto_halt", {"reason": "pilot reports objective met"})
+
+        monkeypatch.setattr(ConversationalSession, "run_auto", mock_run_auto)
+
+        worker = ProviderWorker(
+            repo=repo_dir,
+            goal="test no_delegation"
+        )
+        worker.run()
+
+        assert captured_no_delegation is True
+    finally:
+        shutil.rmtree(repo_dir)
+
+    # 4. Verify defense-in-depth on action loop
+    config = HarnessConfig(no_delegation=True, repo=os.path.abspath("."))
+    session = ConversationalSession(config)
+
+    # Mock pilot chat() to return a run_implement attempt
+    mock_pilot = MagicMock()
+    first_resp = MagicMock()
+    first_resp.text = json.dumps({
+        "say": "Trying to delegate",
+        "actions": [{"kind": "run_implement", "goal": "nested task"}]
+    })
+    first_resp.meta = {}
+    first_resp.error = None
+    mock_pilot.chat.return_value = first_resp
+    session.pilot = mock_pilot
+
+    # Trigger action loop
+    events = list(session.send("trigger delegation"))
+
+    # Assert defense-in-depth warning was produced
+    action_results = [e for e in events if e.kind == "action_result"]
+    assert len(action_results) >= 1
+    assert "delegation is disabled for workers" in action_results[0].data.get("error", "")
+
