@@ -1608,7 +1608,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                 <span>
                   {contextUsage
                     ? `${Math.min(100, Math.round((contextUsage.total / contextUsage.limit) * 100))}%`
-                    : "Context"}
+                    : "Usage"}
                 </span>
               </button>
               <div className="flex-1" />
