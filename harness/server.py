@@ -435,8 +435,19 @@ class Handler(BaseHTTPRequestHandler):
                             recents = json.load(f).get("recents", []) or []
                     except Exception:
                         recents = []
-                # prepend, dedupe (keep first occurrence), cap 8
+                # never persist temp dirs (test/ephemeral state_dirs leak otherwise)
+                import tempfile as _tf
+                _tmproot = os.path.realpath(_tf.gettempdir())
+                def _persistable(_pth):
+                    if not _pth:
+                        return False
+                    _rp = os.path.realpath(_pth)
+                    if _rp.startswith(_tmproot) or "/var/folders/" in _rp or "/T/tmp" in _pth:
+                        return False
+                    return os.path.isdir(_pth)
+                # prepend, dedupe (keep first occurrence), drop temp/dead dirs, cap 8
                 recents = [target_repo] + [r for r in recents if r != target_repo]
+                recents = [r for r in recents if _persistable(r)]
                 recents = recents[:8]
                 with open(ws_json_path, "w") as f:
                     json.dump({"repo": target_repo, "recents": recents}, f)
@@ -1029,6 +1040,15 @@ class Handler(BaseHTTPRequestHandler):
                         recents = json.load(f).get("recents", []) or []
             except Exception:
                 recents = []
+            # filter temp/dead dirs so ephemeral test state_dirs never show as recents
+            import tempfile as _tf
+            _tmproot = os.path.realpath(_tf.gettempdir())
+            recents = [
+                r for r in recents
+                if r and os.path.isdir(r)
+                and not os.path.realpath(r).startswith(_tmproot)
+                and "/var/folders/" not in os.path.realpath(r)
+            ]
             return self._send(200, json.dumps({
                 "repo": repo,
                 "branch": branch,
