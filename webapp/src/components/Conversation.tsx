@@ -148,11 +148,6 @@ const SLASH_COMMANDS = [
 ];
 
 
-const CTX_COLORS = ["#8b8b8b", "#7c6cf0", "#3fb950", "#d4a72c", "#bd8bbf", "#5b9bd5", "#f06c6c", "#6ca0f0"];
-function fmtK(n: number): string {
-  if (n >= 1000) return (n / 1000).toFixed(1) + "K";
-  return String(n);
-}
 
 export default function Conversation({ config, activeSessionId, onArtifacts, onJobChange }: {
   config: Config | null;
@@ -1223,35 +1218,6 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
               </button>
             </div>
           )}
-          {showContextPanel && contextUsage && (
-            <div className="mb-3 bg-panel border border-edge rounded-lg p-3 text-[11.5px]">
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-semibold text-txt">Context Usage</span>
-                <button onClick={() => setShowContextPanel(false)} className="text-faint hover:text-txt"><X size={13} /></button>
-              </div>
-              <div className="flex items-center justify-between text-faint mb-1.5">
-                <span>{contextUsage.limit > 0 ? Math.round((contextUsage.total / contextUsage.limit) * 100) : 0}% Full</span>
-                <span>~{fmtK(contextUsage.total)} / {fmtK(contextUsage.limit)} Tokens</span>
-              </div>
-              <div className="flex h-1.5 w-full rounded-full overflow-hidden bg-panel2 mb-2.5">
-                {contextUsage.categories.filter((c) => c.tokens > 0).map((c, i) => (
-                  <div key={c.name} title={`${c.name}: ${fmtK(c.tokens)}`}
-                    style={{ width: `${(c.tokens / Math.max(contextUsage.limit, contextUsage.total)) * 100}%`, background: CTX_COLORS[i % CTX_COLORS.length] }} />
-                ))}
-              </div>
-              <div className="space-y-1">
-                {contextUsage.categories.filter((c) => c.tokens > 0).map((c, i) => (
-                  <div key={c.name} className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-sm" style={{ background: CTX_COLORS[i % CTX_COLORS.length] }} />
-                      <span className="text-muted">{c.name}</span>
-                    </div>
-                    <span className="text-faint tabular-nums">{fmtK(c.tokens)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
           {msgQueue.length > 0 && (
             <div className="mb-3 space-y-1.5">
               <div className="flex items-center justify-between mb-1 px-1">
@@ -1381,6 +1347,18 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
             )}
 
             {/* Context Usage expandable panel */}
+            {showContextPanel && !contextUsage && (
+              <div className="flex items-center justify-between p-3.5 bg-panel border-b border-edge text-[11.5px] select-none rounded-t-2xl animate-in slide-in-from-bottom duration-150">
+                <div className="flex items-center gap-2 text-faint">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span className="font-semibold text-txt">Context Usage</span>
+                  <span className="text-muted">loading...</span>
+                </div>
+                <button onClick={() => setShowContextPanel(false)} className="text-faint hover:text-muted transition p-0.5 rounded hover:bg-panel2" title="Close">
+                  <X size={13} />
+                </button>
+              </div>
+            )}
             {showContextPanel && contextUsage && (
               <div className="flex flex-col p-3.5 bg-panel border-b border-edge text-[11.5px] select-none rounded-t-2xl animate-in slide-in-from-bottom duration-150">
                 <div className="flex items-center justify-between font-medium mb-2.5">
