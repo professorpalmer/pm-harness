@@ -895,7 +895,20 @@ class ConversationalSession:
                                     headline = f"{t.capitalize()} artifact"
                                 ar_list.append({"type": t, "headline": headline})
                             
-                            yield ConvEvent("action_result", {
+                            applied, applied_files, apply_msg = self._apply_worker_patch(artifacts)
+                            has_patch_art = any(isinstance(a, dict) and a.get("type") == "patch" for a in artifacts)
+                            
+                            apply_summary = ""
+                            if has_patch_art:
+                                if applied:
+                                    apply_summary = f"Applied patch to {len(applied_files)} files: {', '.join(applied_files)}"
+                                else:
+                                    apply_summary = f"PATCH DID NOT APPLY: {apply_msg}"
+                            
+                            if apply_summary:
+                                summary = f"{summary}\n{apply_summary}" if summary else apply_summary
+                            
+                            ar_data = {
                                 "id": aid,
                                 "job_id": job_id,
                                 "num": num_artifacts,
@@ -903,9 +916,16 @@ class ConversationalSession:
                                 "artifacts": ar_list,
                                 "adapter": adapter,
                                 "mode": "implement",
-                            })
+                            }
+                            if has_patch_art and not applied:
+                                ar_data["error"] = f"PATCH DID NOT APPLY: {apply_msg}"
+                                
+                            yield ConvEvent("action_result", ar_data)
                             
-                            self._append_action_result(act, aid, f"(run_implement job {job_id} on {adapter} returned {num_artifacts} artifacts:\n{summary}\n)", is_native)
+                            if has_patch_art and not applied:
+                                self._append_action_result(act, aid, f"(run_implement job {job_id} on {adapter} failed: {apply_summary})", is_native)
+                            else:
+                                self._append_action_result(act, aid, f"(run_implement job {job_id} on {adapter} returned {num_artifacts} artifacts:\n{summary}\n)", is_native)
                         else:
                             output = "".join(all_output_lines)[:5000]
                             yield ConvEvent("action_result", {
@@ -1020,6 +1040,7 @@ class ConversationalSession:
                     aggregate_artifacts_summary = []
                     job_ids_collected = []
                     aggregate_num_artifacts = 0
+                    worker_statuses = []
 
                     for idx, p_info in enumerate(processes):
                         sub_aid = p_info["id"]
@@ -1077,21 +1098,38 @@ class ConversationalSession:
                                         headline = f"{t.capitalize()} artifact"
                                     ar_list.append({"type": t, "headline": headline})
 
-                                yield ConvEvent("action_result", {
+                                applied, applied_files, apply_msg = self._apply_worker_patch(artifacts)
+                                has_patch_art = any(isinstance(a, dict) and a.get("type") == "patch" for a in artifacts)
+                                
+                                worker_statuses.append({
+                                    "job_id": job_id,
+                                    "applied": "yes" if applied else "no",
+                                    "files": applied_files,
+                                    "has_patch": has_patch_art,
+                                    "msg": apply_msg
+                                })
+
+                                sub_res_data = {
                                     "id": sub_aid,
                                     "job_id": job_id,
                                     "num": num_art,
                                     "types": art_types,
                                     "artifacts": ar_list,
                                     "adapter": adapter,
-                                    "mode": mode
-                                })
+                                    "mode": mode,
+                                    "applied": "yes" if applied else ("no" if has_patch_art else "n/a"),
+                                    "files": applied_files
+                                }
+                                if has_patch_art and not applied:
+                                    sub_res_data["error"] = f"PATCH DID NOT APPLY: {apply_msg}"
+                                yield ConvEvent("action_result", sub_res_data)
 
-                                patch_art = next((a for a in artifacts if a.get("type") == "patch"), None)
                                 patch_desc = ""
-                                if patch_art:
-                                    files = (patch_art.get("payload") or {}).get("files") or []
-                                    patch_desc = f"Patch modified: {', '.join(files)}" if files else "Patch generated"
+                                if has_patch_art:
+                                    if applied:
+                                        patch_desc = f"Patch applied to: {', '.join(applied_files)}" if applied_files else "Patch applied"
+                                    else:
+                                        patch_desc = f"PATCH DID NOT APPLY: {apply_msg}"
                                 
                                 findings = [
                                     (a.get("payload") or {}).get("report", "")[:100]
@@ -1119,7 +1157,7 @@ class ConversationalSession:
                                     err_msg = "worker completed but job_id unrecoverable"
                                 else:
                                     err_msg = "worker completed but job_id unrecoverable (no success marker found)"
-
+                                
                                 yield ConvEvent("action_result", {"id": sub_aid, "error": err_msg})
                                 aggregate_artifacts_summary.append(f"Sub-worker for '{sub_goal}' failed: {err_msg}")
                         finally:
@@ -1128,17 +1166,33 @@ class ConversationalSession:
 
                     aggregate_artifacts_list = [{"type": "parallel_summary", "headline": s} for s in aggregate_artifacts_summary[:8]]
                     
-                    yield ConvEvent("action_result", {
+                    any_failed = any(status["has_patch"] and status["applied"] == "no" for status in worker_statuses)
+                    
+                    event_data = {
                         "id": aid,
                         "job_id": ",".join(job_ids_collected) if job_ids_collected else "none",
                         "num": aggregate_num_artifacts,
                         "types": ["parallel_summary"],
                         "artifacts": aggregate_artifacts_list,
                         "adapter": adapter,
-                        "mode": mode
-                    })
+                        "mode": mode,
+                        "workers": [{
+                            "job_id": s["job_id"],
+                            "applied": s["applied"],
+                            "files": s["files"]
+                        } for s in worker_statuses]
+                    }
+                    if any_failed:
+                        failed_jobs = [s["job_id"] for s in worker_statuses if s["has_patch"] and s["applied"] == "no"]
+                        event_data["error"] = f"CRITICAL: Worker patches failed to apply for jobs: {', '.join(failed_jobs)}"
+                    
+                    yield ConvEvent("action_result", event_data)
 
                     summary_all = "\n".join(aggregate_artifacts_summary)
+                    if any_failed:
+                        failed_details = [f"Job {s['job_id']}: {s['msg']}" for s in worker_statuses if s["has_patch"] and s["applied"] == "no"]
+                        summary_all += f"\n\nCRITICAL: Some worker patches failed to apply!\n" + "\n".join(failed_details)
+                        
                     self._append_action_result(act, aid, f"(run_parallel wave completed on {adapter} in {mode} mode, returned jobs: {', '.join(job_ids_collected)}:\n{summary_all}\n)", is_native)
                     continue
 
@@ -1264,6 +1318,104 @@ class ConversationalSession:
 
         self._tokens_used += sum_in + sum_out
         return (sum_in, sum_out)
+
+    def _apply_worker_patch(self, artifacts: list) -> tuple[bool, list[str], str]:
+        """Finds the patch artifact (type=="patch"), extracts its unified_diff,
+        and applies it cleanly/idempotently via git apply to self.config.repo.
+        Returns (applied_bool, files_changed, message).
+        """
+        import os
+        import tempfile
+        import subprocess
+
+        if not self.config.repo or not os.path.exists(self.config.repo):
+            return False, [], "no workspace directory (config.repo) is open"
+
+        # Check if the directory is a git repo
+        try:
+            p_check = subprocess.run(
+                ["git", "rev-parse", "--is-inside-work-tree"],
+                cwd=self.config.repo,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            if p_check.returncode != 0:
+                return False, [], f"not a git repository: {self.config.repo}"
+        except Exception as e:
+            return False, [], f"failed to check git repo: {e}"
+
+        patch_art = next((a for a in artifacts if isinstance(a, dict) and a.get("type") == "patch"), None)
+        if not patch_art:
+            return False, [], "no patch to apply"
+
+        payload = patch_art.get("payload") or {}
+        diff_text = payload.get("unified_diff") or ""
+        if not diff_text.strip():
+            return False, [], "no patch to apply"
+
+        files = payload.get("files") or []
+
+        # Write diff to a temporary file
+        fd, temp_path = tempfile.mkstemp(suffix=".patch")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(diff_text)
+            
+            # a. First check if already applied (idempotent): git apply --reverse --check on the diff
+            rev_p = subprocess.run(
+                ["git", "apply", "--reverse", "--check", temp_path],
+                cwd=self.config.repo,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            if rev_p.returncode == 0:
+                return True, files, "already applied"
+
+            # b. Else git apply --check to verify it applies cleanly
+            check_p = subprocess.run(
+                ["git", "apply", "--check", temp_path],
+                cwd=self.config.repo,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            if check_p.returncode == 0:
+                # It applies cleanly, so apply it!
+                apply_p = subprocess.run(
+                    ["git", "apply", temp_path],
+                    cwd=self.config.repo,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                if apply_p.returncode == 0:
+                    return True, files, "applied cleanly"
+                else:
+                    err_msg = apply_p.stderr.strip() or "git apply failed"
+                    return False, files, f"git apply failed: {err_msg}"
+            else:
+                # c. If git apply --check fails (e.g. partial overlap), try git apply --3way
+                three_way_p = subprocess.run(
+                    ["git", "apply", "--3way", temp_path],
+                    cwd=self.config.repo,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                if three_way_p.returncode == 0:
+                    return True, files, "applied with 3way merge"
+                else:
+                    err_msg = three_way_p.stderr.strip() or check_p.stderr.strip() or "patch did not apply cleanly"
+                    return False, files, f"patch did not apply cleanly: {err_msg}"
+        except Exception as e:
+            return False, files, f"error during patch application: {e}"
+        finally:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
 
     def _detect_default_implement_adapter(self) -> str:
         try:

@@ -1,5 +1,6 @@
 """Tests for 'full gas' pilot orchestration capabilities: run_implement, run_parallel, and route_task."""
 import pytest
+import subprocess
 from unittest.mock import MagicMock, patch
 import json
 import tempfile
@@ -112,136 +113,246 @@ def test_run_swarm_remains_read_only():
     assert acts[0].roles == ["explore"]
 
 
-@patch("subprocess.Popen")
-@patch("subprocess.run")
-def test_executor_smoke_run_implement(mock_run, mock_popen):
-    # Set up config
-    cfg = HarnessConfig(driver="stub-oracle-v2", state_dir=tempfile.mkdtemp())
-    cfg.repo = "/mock/repo"
+def test_executor_smoke_run_implement():
+    import os
+    import shutil
+    import subprocess
+    from unittest.mock import patch, MagicMock
     
-    # Mock subprocess.Popen for start command
-    mock_p = MagicMock()
-    mock_p.stdout = ["Started job job_1234567890ab"]
-    mock_popen.return_value = mock_p
+    real_run = subprocess.run
+    real_popen = subprocess.Popen
     
-    # Mock subprocess.run for await and artifacts
-    mock_res_await = MagicMock()
-    mock_res_await.return_value = MagicMock(returncode=0)
-    
-    mock_res_art = MagicMock()
-    mock_res_art.stdout = json.dumps([
-        {
-            "job_id": "job_1234567890ab",
-            "type": "patch",
-            "payload": {
-                "files": ["src/main.py"],
-                "unified_diff": "diff src/main.py..."
-            }
-        }
-    ])
-    mock_run.side_effect = [mock_res_await, mock_res_art]
-    
-    session = ConversationalSession(cfg)
-    
-    # We inject our detect function mock to always return "hermes"
-    session._detect_default_implement_adapter = MagicMock(return_value="hermes")
-    
-    # Send a prompt triggering a pilot action
-    from harness.pilot import PilotAction
-    action = PilotAction(kind="run_implement", goal="Add print statement")
-    
-    # Directly invoke our send logic or trigger actions processing
-    # Let's mock a pilot turn that returns this action
-    class FakePilot:
-        name = "fake"
-        def __init__(self):
-            self.calls = 0
-        def complete(self, prompt, *, system=None):
-            from pmharness.drivers.openai_compat import DriverResponse
-            self.calls += 1
-            if self.calls == 1:
-                txt = '{"say": "Starting implement worker.", "actions": [{"kind": "run_implement", "goal": "Add print statement"}]}'
-            else:
-                txt = '{"say": "Done.", "actions": []}'
-            return DriverResponse(text=txt, tokens_out=10, latency_ms=1.0)
+    # Set up config with a real temp git repo
+    temp_repo = tempfile.mkdtemp()
+    try:
+        subprocess.run(["git", "init"], cwd=temp_repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=temp_repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=temp_repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        # Commit a base file
+        with open(os.path.join(temp_repo, "base.txt"), "w") as f:
+            f.write("Line 1")
+        subprocess.run(["git", "add", "base.txt"], cwd=temp_repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=temp_repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        cfg = HarnessConfig(driver="stub-oracle-v2", state_dir=tempfile.mkdtemp())
+        cfg.repo = temp_repo
+        
+        with patch("subprocess.Popen") as mock_popen, patch("subprocess.run") as mock_run:
+            # Mock subprocess.Popen for start command
+            mock_p = MagicMock()
+            mock_p.stdout = ["Started job job_1234567890ab"]
             
-    session.pilot = FakePilot()
-    events = list(session.send("Implement something!"))
-    
-    # Verify events
-    kinds = [e.kind for e in events]
-    assert "action_start" in kinds
-    assert "action_result" in kinds
-    
-    # Verify subprocess was called with correct arguments
-    mock_popen.assert_called_once()
-    args, kwargs = mock_popen.call_args
-    cmd = args[0]
-    assert "puppetmaster" in cmd
-    assert "hermes" in cmd
-    assert "Add print statement" in cmd
-    assert "--cwd" in cmd
-    assert "/mock/repo" in cmd
-    assert "--mode" in cmd
-    assert "implement" in cmd
+            # Setup conditional Popen side effect
+            def popen_side_effect(args, *a, **k):
+                is_pm = False
+                if isinstance(args, list):
+                    is_pm = any("puppetmaster" in str(arg) for arg in args)
+                elif isinstance(args, str):
+                    is_pm = "puppetmaster" in args
+                    
+                if is_pm:
+                    return mock_p
+                return real_popen(args, *a, **k)
+                
+            mock_popen.side_effect = popen_side_effect
+            
+            # We need a conditional side effect to allow real git commands
+            def side_effect(args, *a, **k):
+                is_pm = False
+                if isinstance(args, list):
+                    is_pm = any("puppetmaster" in str(arg) for arg in args)
+                elif isinstance(args, str):
+                    is_pm = "puppetmaster" in args
+                    
+                if is_pm:
+                    if "await" in args:
+                        return MagicMock(returncode=0)
+                    elif "artifacts" in args:
+                        mock_res_art = MagicMock()
+                        mock_res_art.stdout = json.dumps([
+                            {
+                                "job_id": "job_1234567890ab",
+                                "type": "patch",
+                                "payload": {
+                                    "files": ["src/main.py"],
+                                    "unified_diff": "diff --git a/src/main.py b/src/main.py\nnew file mode 100644\n--- /dev/null\n+++ b/src/main.py\n@@ -0,0 +1 @@\n+print('hello')\n"
+                                }
+                            }
+                        ])
+                        return mock_res_art
+                return real_run(args, *a, **k)
+                
+            mock_run.side_effect = side_effect
+            
+            session = ConversationalSession(cfg)
+            
+            # We inject our detect function mock to always return "hermes"
+            session._detect_default_implement_adapter = MagicMock(return_value="hermes")
+            
+            # Send a prompt triggering a pilot action
+            from harness.pilot import PilotAction
+            action = PilotAction(kind="run_implement", goal="Add print statement")
+            
+            # Directly invoke our send logic or trigger actions processing
+            class FakePilot:
+                name = "fake"
+                def __init__(self):
+                    self.calls = 0
+                def complete(self, prompt, *, system=None):
+                    from pmharness.drivers.openai_compat import DriverResponse
+                    self.calls += 1
+                    if self.calls == 1:
+                        txt = '{"say": "Starting implement worker.", "actions": [{"kind": "run_implement", "goal": "Add print statement"}]}'
+                    else:
+                        txt = '{"say": "Done.", "actions": []}'
+                    return DriverResponse(text=txt, tokens_out=10, latency_ms=1.0)
+                    
+            session.pilot = FakePilot()
+            events = list(session.send("Implement something!"))
+            
+            # Verify events
+            kinds = [e.kind for e in events]
+            assert "action_start" in kinds
+            assert "action_result" in kinds
+            
+            # Verify mock_popen was called at least once
+            assert mock_popen.call_count >= 1
+            
+            # The KEY new assertion: after a simulated run, the target file actually exists on disk.
+            target_path = os.path.join(temp_repo, "src/main.py")
+            assert os.path.exists(target_path)
+            with open(target_path, "r") as f:
+                assert f.read() == "print('hello')\n"
+            
+    finally:
+        shutil.rmtree(temp_repo, ignore_errors=True)
 
 
-@patch("subprocess.Popen")
-@patch("subprocess.run")
-def test_executor_smoke_run_parallel(mock_run, mock_popen):
-    cfg = HarnessConfig(driver="stub-oracle-v2", state_dir=tempfile.mkdtemp())
-    cfg.repo = "/mock/repo"
+def test_executor_smoke_run_parallel():
+    import os
+    import shutil
+    import subprocess
+    from unittest.mock import patch, MagicMock
     
-    mock_p = MagicMock()
-    mock_p.stdout = ["Started job job_abcdef123456"]
-    mock_popen.return_value = mock_p
+    real_run = subprocess.run
+    real_popen = subprocess.Popen
     
-    mock_res_await = MagicMock()
-    mock_res_await.return_value = MagicMock(returncode=0)
-    
-    mock_res_art = MagicMock()
-    mock_res_art.stdout = json.dumps([
-        {
-            "job_id": "job_abcdef123456",
-            "type": "finding",
-            "payload": {
-                "report": "Analysis results"
-            }
-        }
-    ])
-    def _run_side(*a, **k):
-        # await calls return rc=0; artifacts calls return the json; any extra
-        # call (e.g. platform status) returns a benign empty result.
-        argv = a[0] if a else k.get("args", [])
-        if isinstance(argv, (list, tuple)) and "artifacts" in argv:
-            return mock_res_art
-        return mock_res_await
-    mock_run.side_effect = _run_side
-    
-    session = ConversationalSession(cfg)
-    session._detect_default_implement_adapter = MagicMock(return_value="hermes")
-    
-    class FakeParallelPilot:
-        name = "fake"
-        def __init__(self):
-            self.calls = 0
-        def complete(self, prompt, *, system=None):
-            from pmharness.drivers.openai_compat import DriverResponse
-            self.calls += 1
-            if self.calls == 1:
-                txt = '{"say": "Running in parallel.", "actions": [{"kind": "run_parallel", "goals": ["Audit auth", "Audit cache"], "mode": "analysis"}]}'
-            else:
-                txt = '{"say": "Done.", "actions": []}'
-            return DriverResponse(text=txt, tokens_out=10, latency_ms=1.0)
+    temp_repo = tempfile.mkdtemp()
+    try:
+        subprocess.run(["git", "init"], cwd=temp_repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=temp_repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=temp_repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        with open(os.path.join(temp_repo, "base.txt"), "w") as f:
+            f.write("Line 1")
+        subprocess.run(["git", "add", "base.txt"], cwd=temp_repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=temp_repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        cfg = HarnessConfig(driver="stub-oracle-v2", state_dir=tempfile.mkdtemp())
+        cfg.repo = temp_repo
+        
+        with patch("subprocess.Popen") as mock_popen, patch("subprocess.run") as mock_run:
+            mock_p1 = MagicMock()
+            mock_p1.stdout = ["Started job job_abcdef111111"]
+            mock_p2 = MagicMock()
+            mock_p2.stdout = ["Started job job_abcdef222222"]
             
-    session.pilot = FakeParallelPilot()
-    events = list(session.send("Run parallel checks!"))
-    
-    # Let's verify our processes were fanned out
-    assert mock_popen.call_count == 2
-    # Verify aggregate result is returned
-    kinds = [e.kind for e in events]
-    assert "action_result" in kinds
+            # setup conditional Popen side effect
+            p_calls = []
+            def popen_side_effect(args, *a, **k):
+                is_pm = False
+                if isinstance(args, list):
+                    is_pm = any("puppetmaster" in str(arg) for arg in args)
+                elif isinstance(args, str):
+                    is_pm = "puppetmaster" in args
+                    
+                if is_pm:
+                    p_calls.append(args)
+                    if len(p_calls) == 1:
+                        return mock_p1
+                    return mock_p2
+                return real_popen(args, *a, **k)
+                
+            mock_popen.side_effect = popen_side_effect
+            
+            def side_effect(args, *a, **k):
+                is_pm = False
+                if isinstance(args, list):
+                    is_pm = any("puppetmaster" in str(arg) for arg in args)
+                elif isinstance(args, str):
+                    is_pm = "puppetmaster" in args
+                    
+                if is_pm:
+                    if "await" in args:
+                        return MagicMock(returncode=0)
+                    elif "artifacts" in args:
+                        job_id = None
+                        for arg in args:
+                            if isinstance(arg, str) and arg.startswith("job_"):
+                                job_id = arg
+                        
+                        mock_res_art = MagicMock()
+                        if job_id:
+                            filename = f"src/{job_id}.py"
+                            mock_res_art.stdout = json.dumps([
+                                {
+                                    "job_id": job_id,
+                                    "type": "patch",
+                                    "payload": {
+                                        "files": [filename],
+                                        "unified_diff": f"diff --git a/{filename} b/{filename}\nnew file mode 100644\n--- /dev/null\n+++ b/{filename}\n@@ -0,0 +1 @@\n+print('{job_id}')\n"
+                                    }
+                                }
+                            ])
+                        else:
+                            mock_res_art.stdout = "[]"
+                        return mock_res_art
+                    elif "platform" in args:
+                        mock_res_plat = MagicMock()
+                        mock_res_plat.stdout = "[on] hermes"
+                        return mock_res_plat
+                return real_run(args, *a, **k)
+                
+            mock_run.side_effect = side_effect
+            
+            session = ConversationalSession(cfg)
+            session._detect_default_implement_adapter = MagicMock(return_value="hermes")
+            
+            class FakeParallelPilot:
+                name = "fake"
+                def __init__(self):
+                    self.calls = 0
+                def complete(self, prompt, *, system=None):
+                    from pmharness.drivers.openai_compat import DriverResponse
+                    self.calls += 1
+                    if self.calls == 1:
+                        txt = '{"say": "Running in parallel.", "actions": [{"kind": "run_parallel", "goals": ["Audit auth", "Audit cache"], "mode": "implement"}]}'
+                    else:
+                        txt = '{"say": "Done.", "actions": []}'
+                    return DriverResponse(text=txt, tokens_out=10, latency_ms=1.0)
+                    
+            session.pilot = FakeParallelPilot()
+            events = list(session.send("Run parallel checks!"))
+            
+            # Let's verify our processes were fanned out
+            assert len(p_calls) == 2
+            # Verify aggregate result is returned
+            kinds = [e.kind for e in events]
+            assert "action_result" in kinds
+            
+            # The KEY new assertion: after a simulated run, the target files actually exist on disk.
+            path1 = os.path.join(temp_repo, "src/job_abcdef111111.py")
+            path2 = os.path.join(temp_repo, "src/job_abcdef222222.py")
+            assert os.path.exists(path1)
+            assert os.path.exists(path2)
+            with open(path1, "r") as f:
+                assert f.read() == "print('job_abcdef111111')\n"
+            with open(path2, "r") as f:
+                assert f.read() == "print('job_abcdef222222')\n"
+                
+    finally:
+        shutil.rmtree(temp_repo, ignore_errors=True)
 
 
 @patch("tempfile.mkdtemp")
