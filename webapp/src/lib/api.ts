@@ -339,6 +339,9 @@ export const api = {
   getPlatform: () => getJSON<{ adapters: PlatformAdapter[] }>("/api/platform"),
   togglePlatform: (name: string, enabled: boolean) => postJSON<{ adapters: PlatformAdapter[] }>("/api/platform", { name, enabled }),
 
+  listCommands: () => getJSON<{ commands: { name: string; description: string; scope: string }[] }>("/api/commands"),
+  renderCommand: (name: string, args: string) => postJSON<{ name: string; prompt: string }>("/api/commands/render", { name, args }),
+
   getGitStatus: () => getJSON<GitStatus>(withToken("/api/git/status")),
   connectGit: (method: "gh" | "device") => postJSON<GitConnectResponse>("/api/git/connect", { method }),
   pollGitDevice: (device_code: string) => postJSON<GitPollResponse>("/api/git/device/poll", { device_code }),

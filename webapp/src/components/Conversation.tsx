@@ -235,6 +235,38 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
 
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
+  const [customCommands, setCustomCommands] = useState<{ name: string; description: string; scope: string }[]>([]);
+
+  const allSlashCommands = [
+    ...SLASH_COMMANDS,
+    ...customCommands.map(c => ({
+      cmd: "/" + c.name,
+      desc: c.description + " (custom)"
+    }))
+  ];
+
+  const fetchCustomCommands = () => {
+    api.listCommands()
+      .then((res) => {
+        if (res && Array.isArray(res.commands)) {
+          setCustomCommands(res.commands);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load custom commands:", err);
+      });
+  };
+
+  useEffect(() => {
+    fetchCustomCommands();
+  }, []);
+
+  useEffect(() => {
+    if (slashSearch !== null) {
+      fetchCustomCommands();
+    }
+  }, [slashSearch]);
+
   const moveQueueItem = (index: number, direction: "up" | "down") => {
     if (direction === "up" && index === 0) return;
     if (direction === "down" && index === msgQueue.length - 1) return;
@@ -653,7 +685,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     }
 
     if (slashSearch !== null) {
-      const matchingSlash = SLASH_COMMANDS.filter(s => s.cmd.toLowerCase().startsWith("/" + slashSearch.toLowerCase()));
+      const matchingSlash = allSlashCommands.filter(s => s.cmd.toLowerCase().startsWith("/" + slashSearch.toLowerCase()));
       if (matchingSlash.length > 0) {
         if (e.key === "ArrowDown") {
           setSelectedSlashIndex((prev) => (prev + 1) % matchingSlash.length);
@@ -957,7 +989,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
         setInput("");
         setEditingIndex(null);
         const helpText = "Available Slash Commands:\n\n" +
-          SLASH_COMMANDS.map(s => `* \`${s.cmd}\` - ${s.desc}`).join("\n") +
+          allSlashCommands.map(s => `* \`${s.cmd}\` - ${s.desc}`).join("\n") +
           "\n\nType @ to list and mention files in your message context.";
         setItems((p) => [
           ...p,
@@ -970,6 +1002,41 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
           }
         ]);
         return;
+      }
+
+      const isBuiltIn = SLASH_COMMANDS.some(s => s.cmd === cmd);
+      if (!isBuiltIn) {
+        const customCmdName = cmd.startsWith("/") ? cmd.slice(1) : cmd;
+        const isCustom = customCommands.some(c => c.name === customCmdName);
+        if (isCustom) {
+          const restOfLine = msg.substring(cmd.length).trim();
+          setStatus("thinking");
+          api.renderCommand(customCmdName, restOfLine)
+            .then((res) => {
+              setStatus("done");
+              setInput(res.prompt);
+              setEditingIndex(null);
+              setTimeout(() => {
+                if (taRef.current) {
+                  taRef.current.focus();
+                }
+              }, 10);
+            })
+            .catch((err) => {
+              setStatus("error");
+              setItems((p) => [
+                ...p,
+                {
+                  kind: "msg",
+                  msg: {
+                    role: "assistant",
+                    text: "[error] Render failed: " + (err.message || err)
+                  }
+                }
+              ]);
+            });
+          return;
+        }
       }
     }
 
@@ -1513,7 +1580,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
 
             {/* Slash commands autocomplete dropdown */}
             {slashSearch !== null && (() => {
-              const matchingSlash = SLASH_COMMANDS.filter(s => s.cmd.toLowerCase().startsWith("/" + slashSearch.toLowerCase()));
+              const matchingSlash = allSlashCommands.filter(s => s.cmd.toLowerCase().startsWith("/" + slashSearch.toLowerCase()));
               if (matchingSlash.length === 0) return null;
               return (
                 <div className="absolute left-2 bottom-full mb-1.5 z-50 max-h-[220px] w-[320px] overflow-y-auto bg-panel border border-edge rounded-xl shadow-2xl py-1">

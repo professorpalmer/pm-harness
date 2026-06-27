@@ -27,6 +27,7 @@ from .conversation import ConversationalSession
 from .mcp_manager import McpManager, CATALOG
 from .skill_store import SkillStore
 from .rule_store import RuleStore
+from .command_store import CommandStore
 from .memory_store import MemoryStore, MEMORY_CHAR_LIMIT
 from . import workspaces as _ws
 from .sessions import SessionStore, save_transcript, load_transcript
@@ -192,6 +193,7 @@ if _sessions.active:
 
 _skills = SkillStore()
 _rules = RuleStore()
+_commands = CommandStore()
 _memory = MemoryStore()
 _UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "harness-uploads")
 os.makedirs(_UPLOAD_DIR, exist_ok=True)
@@ -401,6 +403,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/api/hooks/add", "/api/hooks/update", "/api/hooks/remove",
                       "/api/workspace/open", "/api/codegraph/reindex",
                       "/api/file/write",
+                      "/api/commands/render",
                       "/api/git/connect", "/api/git/device/poll", "/api/git/disconnect",
                       "/api/checkpoints/restore", "/api/checkpoints/snapshot",
                       "/api/terminal/create", "/api/terminal/write",
@@ -488,6 +491,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps({"error": "No open workspace"}))
             _reindex_codegraph_bg(repo)
             return self._send(200, json.dumps({"ok": True, "status": "indexing"}))
+        if path == "/api/commands/render":
+            name = body.get("name", "").strip()
+            args = body.get("args", "")
+            if not name:
+                return self._send(400, json.dumps({"error": "Missing name parameter"}))
+            rendered = _commands.render(name, args, repo=repo)
+            if rendered is None:
+                return self._send(404, json.dumps({"error": "unknown command"}))
+            return self._send(200, json.dumps({"name": name, "prompt": rendered}))
+
         if path == "/api/file/write":
             if not repo or not os.path.exists(repo):
                 return self._send(400, json.dumps({"error": "No open workspace"}))
@@ -1244,6 +1257,16 @@ class Handler(BaseHTTPRequestHandler):
                            "description": t.description} for t in _mcp.tools()]}))
         if u.path == "/api/mcp/catalog":
             return self._send(200, json.dumps({"catalog": CATALOG}))
+        if u.path == "/api/commands":
+            qargs = parse_qs(u.query)
+            repo = qargs.get("repo", [""])[0].strip() or _cfg.repo
+            cmds = _commands.list(repo=repo)
+            return self._send(200, json.dumps({
+                "commands": [
+                    {"name": c.name, "description": c.description, "scope": c.scope}
+                    for c in cmds
+                ]
+            }))
         if u.path == "/api/skills":
             return self._send(200, json.dumps([
                 {"slug": sk.slug, "name": sk.name, "description": sk.description,
