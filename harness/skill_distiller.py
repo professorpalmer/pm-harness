@@ -45,20 +45,36 @@ def _tokens(text: str) -> set:
     return set(re.findall(r"[a-z0-9]{3,}", (text or "").lower()))
 
 
-def _is_duplicate(cand: Candidate, store: SkillStore, threshold: float = 0.6) -> Optional[str]:
-    """Jaccard overlap on name+description tokens vs existing skills."""
+# Skip-dedup: a candidate this similar to an existing skill is treated as a
+# duplicate at all. Merge: only when it is near-certainly the SAME skill do we
+# auto-merge/patch (merging distinct skills is destructive, so it needs higher
+# confidence than a plain skip).
+DUP_THRESHOLD = 0.6
+MERGE_THRESHOLD = 0.7
+
+
+def _best_match(cand: Candidate, store: SkillStore) -> tuple:
+    """Return (slug, score) of the most token-similar existing skill, or (None, 0.0).
+    Jaccard overlap on name+description tokens."""
     ctoks = _tokens(cand.name + " " + cand.description)
     if not ctoks:
-        return None
+        return (None, 0.0)
+    best_slug, best_score = None, 0.0
     for sk in store.list():
         stoks = _tokens(sk.name + " " + sk.description)
         if not stoks:
             continue
-        inter = len(ctoks & stoks)
         union = len(ctoks | stoks)
-        if union and inter / union >= threshold:
-            return sk.slug
-    return None
+        score = (len(ctoks & stoks) / union) if union else 0.0
+        if score > best_score:
+            best_slug, best_score = sk.slug, score
+    return (best_slug, best_score)
+
+
+def _is_duplicate(cand: Candidate, store: SkillStore, threshold: float = DUP_THRESHOLD) -> Optional[str]:
+    """Jaccard overlap on name+description tokens vs existing skills."""
+    slug, score = _best_match(cand, store)
+    return slug if (slug and score >= threshold) else None
 
 
 def _escape_ctrl_in_strings(s: str) -> str:
@@ -136,8 +152,12 @@ def distill_session(pilot, objective: str, findings: List[dict],
     if not cand:
         return {"status": "skipped", "reason": "no reusable lesson"}
 
-    dup = _is_duplicate(cand, store)
-    if dup:
+    match_slug, match_score = _best_match(cand, store)
+    # Only auto-merge when near-certainly the same skill (>= MERGE_THRESHOLD).
+    # Borderline-similar candidates (DUP_THRESHOLD..MERGE_THRESHOLD) are proposed
+    # as a NEW pending skill instead -- recoverable, never destructively merged.
+    if match_slug and match_score >= MERGE_THRESHOLD:
+        dup = match_slug
         existing = store.get(dup)
         if existing:
             merge_prompt = (

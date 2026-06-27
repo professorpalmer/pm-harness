@@ -172,3 +172,54 @@ def test_human_gate_holds_all(tmp_path):
     rule = next((r for r in rules if r.slug == rule_res["proposed"][0]), None)
     assert rule is not None
     assert rule.state == "pending"
+
+
+def test_repeated_patch_no_slug_growth(tmp_path):
+    """Regression: repeatedly patching the same skill must not chain the slug
+    (foo-patch-patch-patch...) into an OS filename-length crash. Found by stress
+    test. The patch slug must stay stable ({root}-patch) and supersede the root."""
+    from harness.skill_store import SkillStore, Skill
+    store = SkillStore(root=str(tmp_path / "skills"))
+    store.save(Skill(name="Deploy flow", description="how to deploy",
+                     body="v1", state="active"))
+    root = store.list("active")[0].slug
+    # 50 repeated patches of the same skill - must not crash or multiply
+    for n in range(50):
+        store.propose_update(root, f"body v{n + 2}", source="distilled:patch")
+    pending = store.list("pending")
+    assert len(pending) == 1, f"expected 1 stable pending patch, got {len(pending)}"
+    # the patch supersedes the ROOT, not a chained patch slug
+    assert pending[0].supersedes == root
+    assert "-patch-patch" not in pending[0].slug
+    # approving merges into the original and removes the patch
+    approved = store.set_state(pending[0].slug, "active")
+    assert approved is not None
+    assert len([s for s in store.list("active") if s.name == "Deploy flow"]) == 1
+
+
+def test_distinct_skills_not_destructively_merged(tmp_path):
+    """Regression: borderline-similar but DISTINCT skills (same domain, different
+    verb ~= 0.6 similarity) must be proposed as NEW pending skills, not merged
+    into one (which destroys knowledge). Merge only at >= MERGE_THRESHOLD."""
+    from harness.skill_store import SkillStore, Skill
+    from harness.skill_distiller import distill_session
+
+    class _P:
+        def __init__(self, resp): self.resp = resp
+        def complete(self, p, system=""):
+            class R: text = self.resp
+            return R()
+
+    store = SkillStore(root=str(tmp_path / "skills"))
+    f = [{"type": "finding", "headline": "a"}, {"type": "finding", "headline": "b"}]
+    import json
+    r1 = distill_session(_P(json.dumps({"name": "Trace SSE websocket handshake",
+                                        "description": "trace the SSE websocket handshake",
+                                        "body": "x"})), "o", f, store)
+    r2 = distill_session(_P(json.dumps({"name": "Debug SSE websocket handshake",
+                                        "description": "debug the SSE websocket handshake",
+                                        "body": "y"})), "o", f, store)
+    assert r1["status"] == "proposed"
+    # distinct verb (~0.6) must NOT be auto-merged into r1
+    assert r2["status"] == "proposed", f"distinct skill was destructively merged: {r2}"
+    assert len(store.list("pending")) == 2

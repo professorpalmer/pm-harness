@@ -185,14 +185,20 @@ class SkillStore:
         existing = self.get(slug)
         if not existing:
             raise ValueError(f"Skill not found: {slug}")
+        # Always supersede the ROOT skill, never chain patch-of-a-patch (which
+        # would grow the slug unboundedly: foo-patch-patch-patch...). If the
+        # target is itself a pending patch, redirect to the skill it supersedes.
+        root_slug = getattr(existing, "supersedes", "") or slug
         patch_skill = Skill(
             name=new_name or existing.name,
             description=new_description or existing.description,
             body=new_body,
             state="pending",
             source=source or existing.source,
-            supersedes=slug
+            supersedes=root_slug
         )
+        # Stable slug ({root}-patch): re-proposing overwrites the same pending
+        # patch rather than creating a new one each time.
         self.save(patch_skill)
         return patch_skill
 
