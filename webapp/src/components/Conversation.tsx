@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, ChevronUp, GripVertical, Trash2, GitBranch, ListChecks, Play, Copy, Check, Pencil, RefreshCw, FileText, History, X, Code } from "lucide-react";
+import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, ChevronUp, GripVertical, Trash2, GitBranch, ListChecks, Play, Copy, Check, Pencil, RefreshCw, FileText, History, X, Code, Share2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -32,16 +32,19 @@ type Item =
   | { kind: "swarm_result"; job_id: string; applied: boolean; files: string[]; summary: string; error: string | null; objective?: string }
   | { kind: "checkpoint"; id: string; label: string; trigger: string }
   | { kind: "compaction"; before_tokens: number; after_tokens: number }
+  | { kind: "codegraph_context"; symbols: number; query: string }
   | { kind: "steer"; text: string };
 
 type GroupedItem =
   | { kind: "msg"; msg: Msg }
+  | { kind: "thinking"; text: string }
   | { kind: "swarm_pending"; job_ids: string[]; objective: string; resolved?: boolean }
   | { kind: "swarm_result"; job_id: string; applied: boolean; files: string[]; summary: string; error: string | null; objective?: string }
   | { kind: "checkpoint"; id: string; label: string; trigger: string }
   | { kind: "compaction"; before_tokens: number; after_tokens: number }
+  | { kind: "codegraph_context"; symbols: number; query: string }
   | { kind: "steer"; text: string }
-  | { kind: "activity_group"; items: ( { kind: "card"; card: Card } | { kind: "thinking"; text: string } )[] };
+  | { kind: "activity_group"; items: ( { kind: "card"; card: Card } | { kind: "thinking"; text: string } | { kind: "codegraph_context"; symbols: number; query: string } | { kind: "msg"; msg: Msg } )[] };
 
 function getSimilarity(s1: string, s2: string): number {
   const norm1 = s1.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -108,37 +111,63 @@ function deduplicateConsecutiveAssistantMessages(items: Item[]): Item[] {
 }
 
 function groupAgentActivity(items: Item[]): GroupedItem[] {
+  // Mental model (Cursor/Hermes): a turn is [user msg] + [investigation] +
+  // [final answer]. The investigation -- every tool card, reasoning block,
+  // codegraph chip, AND per-step micro-narration -- folds into ONE collapsible
+  // box. Only the user message and the FINAL assistant answer render standalone.
+  //
+  // To classify an assistant message as "mid-investigation" (fold) vs "final
+  // answer" (standalone), we look ahead: if a tool card appears later in this
+  // turn (before the next user message), this assistant msg is just per-step
+  // chatter and belongs in the box. The last assistant msg with no card after it
+  // is the real answer.
   const grouped: GroupedItem[] = [];
-  let currentGroup: ( { kind: "card"; card: Card } | { kind: "thinking"; text: string } )[] = [];
+  let currentGroup: ( { kind: "card"; card: Card } | { kind: "thinking"; text: string } | { kind: "codegraph_context"; symbols: number; query: string } | { kind: "msg"; msg: Msg } )[] = [];
 
-  for (const item of items) {
-    if (item.kind === "thinking" && (!item.text || !item.text.trim())) {
-      continue;
+  const flush = () => {
+    if (currentGroup.length > 0) {
+      grouped.push({ kind: "activity_group", items: currentGroup });
+      currentGroup = [];
     }
+  };
+
+  // True if a tool card appears at index > i before the next user message.
+  const cardFollowsInTurn = (i: number): boolean => {
+    for (let j = i + 1; j < items.length; j++) {
+      const it = items[j];
+      if (it.kind === "msg" && (it as { kind: "msg"; msg: Msg }).msg.role === "user") return false;
+      if (it.kind === "card") return true;
+    }
+    return false;
+  };
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind === "thinking" && (!item.text || !item.text.trim())) continue;
 
     if (item.kind === "msg") {
-      if (currentGroup.length > 0) {
-        grouped.push({ kind: "activity_group", items: currentGroup });
-        currentGroup = [];
-      }
-      grouped.push(item);
-    } else if (item.kind === "swarm_pending" || item.kind === "swarm_result" || item.kind === "checkpoint" || item.kind === "compaction" || item.kind === "steer") {
-      if (currentGroup.length > 0) {
-        grouped.push({ kind: "activity_group", items: currentGroup });
-        currentGroup = [];
-      }
-      grouped.push(item);
-    } else {
-      if (item.kind === "card" || item.kind === "thinking") {
+      const isUser = item.msg.role === "user";
+      // User messages and the final assistant answer break out as standalone
+      // prose; per-step assistant narration (a card still follows) folds in.
+      if (isUser) {
+        flush();
+        grouped.push(item);
+      } else if (cardFollowsInTurn(i)) {
         currentGroup.push(item);
+      } else {
+        flush();
+        grouped.push(item);
       }
+    } else if (item.kind === "swarm_pending" || item.kind === "swarm_result" || item.kind === "checkpoint" || item.kind === "compaction" || item.kind === "steer") {
+      flush();
+      grouped.push(item);
+    } else if (item.kind === "card" || item.kind === "thinking" || item.kind === "codegraph_context") {
+      // Cards, reasoning, codegraph chips: all collect into the one box.
+      currentGroup.push(item);
     }
   }
 
-  if (currentGroup.length > 0) {
-    grouped.push({ kind: "activity_group", items: currentGroup });
-  }
-
+  flush();
   return grouped;
 }
 
@@ -942,6 +971,8 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
       const d = ev.data || {};
       if (ev.kind === "compacting") {
         setCompactingStatus(d.message || "Summarizing chat context");
+      } else if (ev.kind === "codegraph_context") {
+        setItems((p) => [...p, { kind: "codegraph_context" as const, symbols: d.symbols || 0, query: d.query || "" }]);
       } else if (ev.kind === "compaction") {
         setCompactingStatus(null);
         setItems((p) => [...p, { kind: "compaction" as const, before_tokens: d.before_tokens, after_tokens: d.after_tokens }]);
@@ -1064,6 +1095,11 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
         handleSwarmResult(d);
       } else if (ev.kind === "assistant_done") {
         setStatus("done");
+        // The backend derives a session title from the first user message
+        // (set_title_if_default). Tell the sidebar to refetch so the auto-named
+        // session shows up immediately, Cursor/Hermes-style, instead of staying
+        // "New session" until reload.
+        window.dispatchEvent(new Event("harness-config-changed"));
       } else if (ev.kind === "error") {
         setCompactingStatus(null);
         setStatus("error");
@@ -1422,6 +1458,13 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                     <span>restore point created: {it.label} ({it.id.slice(0, 8)})</span>
                   </div>
                 );
+              } else if (it.kind === "codegraph_context") {
+                return (
+                  <div key={i} className="flex items-center gap-1.5 py-0.5 text-[10px] text-accent/70 w-fit my-0.5 select-none" title={it.query ? `CodeGraph consulted for: ${it.query}` : "CodeGraph consulted"}>
+                    <Share2 size={9} className="text-accent/70" />
+                    <span>CodeGraph consulted{it.symbols > 0 ? ` -- ${it.symbols} symbols` : ""}</span>
+                  </div>
+                );
               } else if (it.kind === "compaction") {
                 return (
                   <div key={i} className="flex items-center gap-1.5 py-1 px-3 rounded-full bg-panel2/10 border border-edge/10 text-[10.5px] text-faint w-fit my-1 select-none font-mono">
@@ -1435,18 +1478,15 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                     <span>{it.text}</span>
                   </div>
                 );
+              } else if (it.kind === "thinking") {
+                return <ThinkingBlock key={i} text={it.text} />;
               } else if (it.kind === "activity_group") {
                 return (
-                  <div key={i} className="flex flex-col gap-0.5 pl-3 border-l-2 border-edge/40 my-1 w-full">
-                    {it.items.map((git, idx) => {
-                      if (git.kind === "card") {
-                        return <ActionCard key={idx} card={git.card} onToggle={() => setCard(git.card.id, { open: !git.card.open })} />;
-                      } else if (git.kind === "thinking") {
-                        return <ThinkingBlock key={idx} text={git.text} />;
-                      }
-                      return null;
-                    })}
-                  </div>
+                  <ActivityGroup
+                    key={i}
+                    items={it.items}
+                    onToggleCard={(card) => setCard(card.id, { open: !card.open })}
+                  />
                 );
               }
               return null;
@@ -2094,8 +2134,108 @@ function getCardMeta(card: Card): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+function ActivityGroup({
+  items,
+  onToggleCard,
+}: {
+  items: ( { kind: "card"; card: Card } | { kind: "thinking"; text: string } | { kind: "codegraph_context"; symbols: number; query: string } | { kind: "msg"; msg: Msg } )[];
+  onToggleCard: (card: Card) => void;
+}) {
+  // Compact-by-default: a whole investigation collapses to one summary line
+  // (Cursor-style "Investigated -- N steps"), expandable to the full list.
+  const [open, setOpen] = useState(false);
+
+  const cards = items.filter((it) => it.kind === "card") as { kind: "card"; card: Card }[];
+  const cgItems = items.filter((it) => it.kind === "codegraph_context") as { kind: "codegraph_context"; symbols: number; query: string }[];
+  const actionCount = cards.length;
+  const anyRunning = cards.some((c) => c.card.running);
+
+  // A group with NO tool actions (just a lone CodeGraph chip from the per-step
+  // auto-injection) should not render a misleading "0 steps" box. Suppress it
+  // entirely -- the CodeGraph work shows in the group that actually has actions.
+  if (actionCount === 0) {
+    return null;
+  }
+
+  // Build a tight one-line summary of what kinds of actions ran.
+  const kindCounts: Record<string, number> = {};
+  for (const c of cards) {
+    const k = c.card.kind || "action";
+    kindCounts[k] = (kindCounts[k] || 0) + 1;
+  }
+  const kindLabel = (k: string) => k.replace(/_/g, " ");
+  const kindSummary = Object.entries(kindCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([k, n]) => `${n} ${kindLabel(k)}${n === 1 ? "" : "s"}`)
+    .join(", ");
+
+  const renderInner = (it: typeof items[number], idx: number) => {
+    if (it.kind === "card") return <ActionCard key={idx} card={it.card} onToggle={() => onToggleCard(it.card)} />;
+    if (it.kind === "thinking") return <ThinkingBlock key={idx} text={it.text} />;
+    if (it.kind === "msg") {
+      // Per-step micro-narration: small muted line inside the box.
+      if (!it.msg.text || !it.msg.text.trim()) return null;
+      return (
+        <div key={idx} className="text-[12px] text-muted/90 py-0.5 leading-relaxed whitespace-pre-wrap">
+          {it.msg.text}
+        </div>
+      );
+    }
+    if (it.kind === "codegraph_context") {
+      return (
+        <div key={idx} className="flex items-center gap-1.5 py-0.5 text-[10px] text-accent/70 select-none" title={it.query ? `CodeGraph consulted for: ${it.query}` : "CodeGraph consulted"}>
+          <Share2 size={9} className="text-accent/70" />
+          <span>CodeGraph consulted{it.symbols > 0 ? ` -- ${it.symbols} symbols` : ""}</span>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  // Tiny groups (1-2 actions, no codegraph noise, no narration) render inline --
+  // collapsing them would add a click for no benefit.
+  const hasMsg = items.some((it) => it.kind === "msg" && (it as { kind: "msg"; msg: Msg }).msg.text.trim());
+  if (actionCount <= 2 && cgItems.length === 0 && !hasMsg) {
+    return (
+      <div className="flex flex-col gap-0.5 pl-3 border-l-2 border-edge/40 my-1 w-full">
+        {items.map(renderInner)}
+      </div>
+    );
+  }
+
+  return (
+    <div className="my-1 w-full">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-panel2/20 border border-edge/30 hover:bg-panel2/40 transition text-[11px] text-muted w-fit select-none"
+      >
+        {open ? <ChevronDown size={11} className="text-faint" /> : <ChevronRight size={11} className="text-faint" />}
+        {anyRunning ? <Loader2 size={11} className="animate-spin text-accent" /> : <Share2 size={11} className="text-accent" />}
+        <span className="text-txt/80 font-medium">
+          {anyRunning ? "Investigating" : "Investigated"}
+        </span>
+        <span className="text-faint">
+          {actionCount} step{actionCount === 1 ? "" : "s"}{kindSummary ? ` -- ${kindSummary}` : ""}
+        </span>
+        {cgItems.length > 0 && (
+          <span className="ml-0.5 text-accent/80">+ CodeGraph</span>
+        )}
+      </button>
+      {open && (
+        <div className="flex flex-col gap-0.5 pl-3 mt-1 border-l-2 border-edge/40 w-full">
+          {items.map(renderInner)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function ThinkingBlock({ text }: { text: string }) {
-  const [collapsed, setCollapsed] = useState(true);
+  // Narration shows inline by default (followable conversation, Hermes/Cursor style).
+  // Collapsible to tuck away when the reader wants just the actions.
+  const [collapsed, setCollapsed] = useState(false);
 
   if (!text || !text.trim()) {
     return null;
@@ -2106,16 +2246,16 @@ function ThinkingBlock({ text }: { text: string }) {
   };
 
   return (
-    <div className="flex flex-col w-full py-0.5 select-none">
+    <div className="flex flex-col w-full py-0.5">
       <button
         onClick={toggle}
-        className="flex items-center gap-1 text-faint hover:text-muted transition font-mono text-[11px] text-left w-fit"
+        className="flex items-center gap-1 text-faint/70 hover:text-muted transition font-mono text-[10px] text-left w-fit select-none uppercase tracking-wide"
       >
-        {collapsed ? <ChevronRight size={10} className="text-faint" /> : <ChevronDown size={10} className="text-faint" />}
-        <span>thinking</span>
+        {collapsed ? <ChevronRight size={9} className="text-faint/70" /> : <ChevronDown size={9} className="text-faint/70" />}
+        <span>reasoning</span>
       </button>
       {!collapsed && (
-        <div className="mt-1 pl-2 ml-1.5 border-l border-edge text-faint text-[11px] whitespace-pre-wrap leading-relaxed max-w-[95%]">
+        <div className="mt-0.5 pl-2.5 ml-1 border-l-2 border-edge/40 text-muted text-[13px] whitespace-pre-wrap leading-relaxed max-w-[92%]">
           {text}
         </div>
       )}

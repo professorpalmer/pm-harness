@@ -1228,12 +1228,35 @@ class ConversationalSession:
             # wall-time. Workers edit directly and do not use codegraph (it is also excluded
             # from their toolset), so skipping it is pure win.
             _no_deleg = getattr(self.config, "no_delegation", False)
+            cg_symbol_count = 0
             if self.config.repo and not _no_deleg:
                 try:
                     from puppetmaster.codegraph import codegraph_context, codegraph_prompt_section
                     cg_slice = codegraph_context(task=user_message, cwd=self.config.repo)
                     if cg_slice:
-                        cg_section = codegraph_prompt_section(cg_slice)
+                        # Count located symbols (entry points + related symbols) so the
+                        # UI can show that CodeGraph was consulted this turn.
+                        cg_symbol_count = cg_slice.count("- **") + cg_slice.count("#### ")
+                        # Prepend an AUTHORITATIVE directive so the model leans on the
+                        # already-injected CodeGraph slice instead of redundantly raw-reading
+                        # whole files (qwen tends to dump files even with context present).
+                        authoritative = (
+                            "CODEGRAPH HAS ALREADY BEEN QUERIED FOR THIS TASK. The relevant "
+                            "symbols, definitions, and code are provided in the section below. "
+                            "USE THIS as your primary source. Do NOT re-read entire files that "
+                            "already appear here -- only read_file specific additional lines you "
+                            "still need (with start_line + limit), or call search_codegraph to "
+                            "widen the graph. Whole-file dumps when the answer is already below "
+                            "are wasteful and wrong.\n"
+                        )
+                        cg_section = authoritative + codegraph_prompt_section(cg_slice)
+                        # Visibility: tell the UI CodeGraph was consulted (only when the
+                        # interactive pilot actually got context, first attempt of the step).
+                        if not _no_deleg:
+                            yield ConvEvent("codegraph_context", {
+                                "symbols": cg_symbol_count,
+                                "query": (user_message or "")[:120],
+                            })
                 except Exception:
                     pass
 

@@ -135,6 +135,11 @@ export default function LeftRail({ jobsRefresh, onSessionChange }: {
   const switchSession = async (id: string) => {
     await api.switchSession(id);
     await loadSess();
+    // Session switch can repoint the active repo (and thus the codegraph) on the
+    // backend. Fire the same event the dir-open path uses so the codegraph/state
+    // panel refetches -- without this, clicking a session leaves the old graph
+    // shown even though the backend already swapped repos.
+    window.dispatchEvent(new Event("harness-config-changed"));
   };
   const newSession = async () => { await api.createSession(); await loadSess(); };
   useEffect(() => {
