@@ -16,6 +16,7 @@ import urllib.error
 from typing import Callable
 
 from .base import DriverResponse, SYSTEM_PROMPT
+from .retry import with_retry
 from pmharness.reasoning import extract_reasoning, strip_think_blocks
 
 
@@ -70,41 +71,44 @@ class OpenAICompatDriver:
             "Authorization": f"Bearer {self._key()}",
         }
         headers.update(self.extra_headers)
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        t0 = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", "replace")[:500]
-            return DriverResponse(
-                text="", model=self.name, error=f"HTTP {e.code}: {detail}",
-                latency_ms=(time.time() - t0) * 1000.0,
-            )
-        except Exception as e:  # network, timeout, json
-            return DriverResponse(
-                text="", model=self.name, error=repr(e),
-                latency_ms=(time.time() - t0) * 1000.0,
-            )
+        def _call() -> DriverResponse:
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            t0 = time.time()
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", "replace")[:500]
+                return DriverResponse(
+                    text="", model=self.name, error=f"HTTP {e.code}: {detail}",
+                    latency_ms=(time.time() - t0) * 1000.0,
+                )
+            except Exception as e:  # network, timeout, json
+                return DriverResponse(
+                    text="", model=self.name, error=repr(e),
+                    latency_ms=(time.time() - t0) * 1000.0,
+                )
 
-        latency = (time.time() - t0) * 1000.0
-        try:
-            text = raw["choices"][0]["message"]["content"] or ""
-        except (KeyError, IndexError, TypeError):
+            latency = (time.time() - t0) * 1000.0
+            try:
+                text = raw["choices"][0]["message"]["content"] or ""
+            except (KeyError, IndexError, TypeError):
+                return DriverResponse(
+                    text="", model=self.name, error=f"unexpected response shape: {str(raw)[:300]}",
+                    latency_ms=latency,
+                )
+            usage = raw.get("usage", {}) or {}
             return DriverResponse(
-                text="", model=self.name, error=f"unexpected response shape: {str(raw)[:300]}",
+                text=text,
+                tokens_in=int(usage.get("prompt_tokens", 0) or 0),
+                tokens_out=int(usage.get("completion_tokens", 0) or 0),
                 latency_ms=latency,
+                model=self.name,
+                meta={"raw_finish": raw["choices"][0].get("finish_reason") if raw.get("choices") else None},
             )
-        usage = raw.get("usage", {}) or {}
-        return DriverResponse(
-            text=text,
-            tokens_in=int(usage.get("prompt_tokens", 0) or 0),
-            tokens_out=int(usage.get("completion_tokens", 0) or 0),
-            latency_ms=latency,
-            model=self.name,
-            meta={"raw_finish": raw["choices"][0].get("finish_reason") if raw.get("choices") else None},
-        )
+
+        return with_retry(_call)
 
     def chat(self, messages: list, *, tools: list | None = None, system: str | None = None) -> DriverResponse:
         url = f"{self.base_url}/chat/completions"
@@ -131,53 +135,56 @@ class OpenAICompatDriver:
             "Authorization": f"Bearer {self._key()}",
         }
         headers.update(self.extra_headers)
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        t0 = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", "replace")[:500]
-            return DriverResponse(
-                text="", model=self.name, error=f"HTTP {e.code}: {detail}",
-                latency_ms=(time.time() - t0) * 1000.0,
-            )
-        except Exception as e:
-            return DriverResponse(
-                text="", model=self.name, error=repr(e),
-                latency_ms=(time.time() - t0) * 1000.0,
-            )
+        def _call() -> DriverResponse:
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            t0 = time.time()
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", "replace")[:500]
+                return DriverResponse(
+                    text="", model=self.name, error=f"HTTP {e.code}: {detail}",
+                    latency_ms=(time.time() - t0) * 1000.0,
+                )
+            except Exception as e:
+                return DriverResponse(
+                    text="", model=self.name, error=repr(e),
+                    latency_ms=(time.time() - t0) * 1000.0,
+                )
 
-        latency = (time.time() - t0) * 1000.0
-        try:
-            choice = raw["choices"][0]
-            message_obj = choice["message"]
-            text = message_obj.get("content") or ""
-            tool_calls = message_obj.get("tool_calls") or []
-            finish_reason = choice.get("finish_reason") or ""
-        except (KeyError, IndexError, TypeError):
+            latency = (time.time() - t0) * 1000.0
+            try:
+                choice = raw["choices"][0]
+                message_obj = choice["message"]
+                text = message_obj.get("content") or ""
+                tool_calls = message_obj.get("tool_calls") or []
+                finish_reason = choice.get("finish_reason") or ""
+            except (KeyError, IndexError, TypeError):
+                return DriverResponse(
+                    text="", model=self.name, error=f"unexpected response shape: {str(raw)[:300]}",
+                    latency_ms=latency,
+                )
+
+            reasoning = extract_reasoning(message_obj)
+            pure_text = strip_think_blocks(text)
+
+            usage = raw.get("usage", {}) or {}
             return DriverResponse(
-                text="", model=self.name, error=f"unexpected response shape: {str(raw)[:300]}",
+                text=pure_text,
+                tokens_in=int(usage.get("prompt_tokens", 0) or 0),
+                tokens_out=int(usage.get("completion_tokens", 0) or 0),
                 latency_ms=latency,
+                model=self.name,
+                meta={
+                    "tool_calls": tool_calls,
+                    "reasoning": reasoning,
+                    "finish_reason": finish_reason,
+                },
             )
 
-        reasoning = extract_reasoning(message_obj)
-        pure_text = strip_think_blocks(text)
-
-        usage = raw.get("usage", {}) or {}
-        return DriverResponse(
-            text=pure_text,
-            tokens_in=int(usage.get("prompt_tokens", 0) or 0),
-            tokens_out=int(usage.get("completion_tokens", 0) or 0),
-            latency_ms=latency,
-            model=self.name,
-            meta={
-                "tool_calls": tool_calls,
-                "reasoning": reasoning,
-                "finish_reason": finish_reason,
-            },
-        )
+        return with_retry(_call)
 
     def chat_stream(
         self,
@@ -213,121 +220,129 @@ class OpenAICompatDriver:
             "Authorization": f"Bearer {self._key()}",
         }
         headers.update(self.extra_headers)
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        t0 = time.time()
-        full_text = ""
-        reasoning_pieces = []
-        assembled_tool_calls = {}
-        finish_reason = ""
-        tokens_in = 0
-        tokens_out = 0
+        def _call() -> DriverResponse:
+            t0 = time.time()
+            full_text = ""
+            reasoning_pieces = []
+            assembled_tool_calls = {}
+            finish_reason = ""
+            tokens_in = 0
+            tokens_out = 0
+            stream_started = False
 
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                for line in resp:
-                    line_str = line.decode("utf-8", "replace").strip()
-                    if not line_str:
-                        continue
-                    if line_str.startswith("data: "):
-                        data_str = line_str[6:].strip()
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data_str)
-                        except Exception:
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    for line in resp:
+                        line_str = line.decode("utf-8", "replace").strip()
+                        if not line_str:
                             continue
+                        if line_str.startswith("data: "):
+                            data_str = line_str[6:].strip()
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                            except Exception:
+                                continue
 
-                        # Process token usage if present
-                        chunk_usage = chunk.get("usage")
-                        if chunk_usage:
-                            tokens_in = int(chunk_usage.get("prompt_tokens", 0) or 0)
-                            tokens_out = int(chunk_usage.get("completion_tokens", 0) or 0)
+                            # Process token usage if present
+                            chunk_usage = chunk.get("usage")
+                            if chunk_usage:
+                                tokens_in = int(chunk_usage.get("prompt_tokens", 0) or 0)
+                                tokens_out = int(chunk_usage.get("completion_tokens", 0) or 0)
 
-                        choices = chunk.get("choices") or []
-                        if choices:
-                            choice = choices[0]
-                            delta = choice.get("delta") or {}
+                            choices = chunk.get("choices") or []
+                            if choices:
+                                choice = choices[0]
+                                delta = choice.get("delta") or {}
 
-                            # Content text delta
-                            content_delta = delta.get("content") or ""
-                            if content_delta:
-                                on_delta(content_delta)
-                                full_text += content_delta
+                                # Content text delta
+                                content_delta = delta.get("content") or ""
+                                if content_delta:
+                                    stream_started = True
+                                    on_delta(content_delta)
+                                    full_text += content_delta
 
-                            # Reasoning delta
-                            reasoning_delta = delta.get("reasoning") or delta.get("reasoning_content") or ""
-                            if reasoning_delta:
-                                reasoning_pieces.append(reasoning_delta)
+                                # Reasoning delta
+                                reasoning_delta = delta.get("reasoning") or delta.get("reasoning_content") or ""
+                                if reasoning_delta:
+                                    reasoning_pieces.append(reasoning_delta)
 
-                            # Tool calls delta
-                            delta_tool_calls = delta.get("tool_calls") or []
-                            for tc in delta_tool_calls:
-                                idx = tc.get("index")
-                                if idx is None:
-                                    continue
-                                if idx not in assembled_tool_calls:
-                                    assembled_tool_calls[idx] = {
-                                        "id": tc.get("id") or "",
-                                        "type": tc.get("type") or "function",
-                                        "function": {
-                                            "name": tc.get("function", {}).get("name") or "",
-                                            "arguments": tc.get("function", {}).get("arguments") or ""
+                                # Tool calls delta
+                                delta_tool_calls = delta.get("tool_calls") or []
+                                for tc in delta_tool_calls:
+                                    idx = tc.get("index")
+                                    if idx is None:
+                                        continue
+                                    if idx not in assembled_tool_calls:
+                                        assembled_tool_calls[idx] = {
+                                            "id": tc.get("id") or "",
+                                            "type": tc.get("type") or "function",
+                                            "function": {
+                                                "name": tc.get("function", {}).get("name") or "",
+                                                "arguments": tc.get("function", {}).get("arguments") or ""
+                                            }
                                         }
-                                    }
-                                else:
-                                    existing = assembled_tool_calls[idx]
-                                    if tc.get("id"):
-                                        existing["id"] = tc.get("id")
-                                    if tc.get("type"):
-                                        existing["type"] = tc.get("type")
+                                    else:
+                                        existing = assembled_tool_calls[idx]
+                                        if tc.get("id"):
+                                            existing["id"] = tc.get("id")
+                                        if tc.get("type"):
+                                            existing["type"] = tc.get("type")
 
-                                    tc_func = tc.get("function") or {}
-                                    if tc_func.get("name"):
-                                        existing["function"]["name"] += tc_func["name"]
-                                    if tc_func.get("arguments"):
-                                        existing["function"]["arguments"] += tc_func["arguments"]
+                                        tc_func = tc.get("function") or {}
+                                        if tc_func.get("name"):
+                                            existing["function"]["name"] += tc_func["name"]
+                                        if tc_func.get("arguments"):
+                                            existing["function"]["arguments"] += tc_func["arguments"]
 
-                            chunk_finish_reason = choice.get("finish_reason")
-                            if chunk_finish_reason:
-                                finish_reason = chunk_finish_reason
+                                chunk_finish_reason = choice.get("finish_reason")
+                                if chunk_finish_reason:
+                                    finish_reason = chunk_finish_reason
 
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", "replace")[:500]
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", "replace")[:500]
+                return DriverResponse(
+                    text="", model=self.name, error=f"HTTP {e.code}: {detail}",
+                    latency_ms=(time.time() - t0) * 1000.0,
+                    meta={"stream_started": stream_started},
+                )
+            except Exception as e:
+                return DriverResponse(
+                    text="", model=self.name, error=repr(e),
+                    latency_ms=(time.time() - t0) * 1000.0,
+                    meta={"stream_started": stream_started},
+                )
+
+            latency = (time.time() - t0) * 1000.0
+
+            # Build message_obj to pass to extract_reasoning
+            message_obj = {"content": full_text}
+            accumulated_reasoning = "".join(reasoning_pieces)
+            if accumulated_reasoning:
+                message_obj["reasoning"] = accumulated_reasoning
+                message_obj["reasoning_content"] = accumulated_reasoning
+
+            reasoning = extract_reasoning(message_obj)
+            pure_text = strip_think_blocks(full_text)
+
+            tool_calls = [assembled_tool_calls[i] for i in sorted(assembled_tool_calls.keys())]
+
             return DriverResponse(
-                text="", model=self.name, error=f"HTTP {e.code}: {detail}",
-                latency_ms=(time.time() - t0) * 1000.0,
+                text=pure_text,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                latency_ms=latency,
+                model=self.name,
+                meta={
+                    "tool_calls": tool_calls,
+                    "reasoning": reasoning,
+                    "finish_reason": finish_reason,
+                    "stream_started": stream_started,
+                },
             )
-        except Exception as e:
-            return DriverResponse(
-                text="", model=self.name, error=repr(e),
-                latency_ms=(time.time() - t0) * 1000.0,
-            )
 
-        latency = (time.time() - t0) * 1000.0
-
-        # Build message_obj to pass to extract_reasoning
-        message_obj = {"content": full_text}
-        accumulated_reasoning = "".join(reasoning_pieces)
-        if accumulated_reasoning:
-            message_obj["reasoning"] = accumulated_reasoning
-            message_obj["reasoning_content"] = accumulated_reasoning
-
-        reasoning = extract_reasoning(message_obj)
-        pure_text = strip_think_blocks(full_text)
-
-        tool_calls = [assembled_tool_calls[i] for i in sorted(assembled_tool_calls.keys())]
-
-        return DriverResponse(
-            text=pure_text,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            latency_ms=latency,
-            model=self.name,
-            meta={
-                "tool_calls": tool_calls,
-                "reasoning": reasoning,
-                "finish_reason": finish_reason,
-            },
-        )
+        return with_retry(_call)
 

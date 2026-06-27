@@ -12,6 +12,7 @@ import urllib.request
 import urllib.error
 
 from .base import DriverResponse, SYSTEM_PROMPT
+from .retry import with_retry
 
 
 class AnthropicDriver:
@@ -54,35 +55,39 @@ class AnthropicDriver:
             "x-api-key": self._key(),
             "anthropic-version": self.version,
         }
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        t0 = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", "replace")[:500]
-            return DriverResponse(text="", model=self.name, error=f"HTTP {e.code}: {detail}",
-                                  latency_ms=(time.time() - t0) * 1000.0)
-        except Exception as e:
-            return DriverResponse(text="", model=self.name, error=repr(e),
-                                  latency_ms=(time.time() - t0) * 1000.0)
-        latency = (time.time() - t0) * 1000.0
-        try:
-            # content is a list of blocks; take the first text block
-            blocks = raw.get("content", [])
-            text = ""
-            for b in blocks:
-                if b.get("type") == "text":
-                    text = b.get("text", "")
-                    break
-        except (AttributeError, TypeError):
-            return DriverResponse(text="", model=self.name,
-                                  error=f"unexpected response: {str(raw)[:300]}", latency_ms=latency)
-        usage = raw.get("usage", {}) or {}
-        return DriverResponse(
-            text=text,
-            tokens_in=int(usage.get("input_tokens", 0) or 0),
-            tokens_out=int(usage.get("output_tokens", 0) or 0),
-            latency_ms=latency, model=self.name,
-            meta={"stop_reason": raw.get("stop_reason")},
-        )
+
+        def _call() -> DriverResponse:
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            t0 = time.time()
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", "replace")[:500]
+                return DriverResponse(text="", model=self.name, error=f"HTTP {e.code}: {detail}",
+                                      latency_ms=(time.time() - t0) * 1000.0)
+            except Exception as e:
+                return DriverResponse(text="", model=self.name, error=repr(e),
+                                      latency_ms=(time.time() - t0) * 1000.0)
+            latency = (time.time() - t0) * 1000.0
+            try:
+                # content is a list of blocks; take the first text block
+                blocks = raw.get("content", [])
+                text = ""
+                for b in blocks:
+                    if b.get("type") == "text":
+                        text = b.get("text", "")
+                        break
+            except (AttributeError, TypeError):
+                return DriverResponse(text="", model=self.name,
+                                      error=f"unexpected response: {str(raw)[:300]}", latency_ms=latency)
+            usage = raw.get("usage", {}) or {}
+            return DriverResponse(
+                text=text,
+                tokens_in=int(usage.get("input_tokens", 0) or 0),
+                tokens_out=int(usage.get("output_tokens", 0) or 0),
+                latency_ms=latency, model=self.name,
+                meta={"stop_reason": raw.get("stop_reason")},
+            )
+
+        return with_retry(_call)
