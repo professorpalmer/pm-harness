@@ -7,7 +7,7 @@
 // The renderer is the SAME React app as the web build; only the transport
 // implementation differs (IPC here vs fetch/SSE on the web).
 
-const { app, BrowserWindow, ipcMain, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 app.name = "Marionette";
 const { spawn } = require("node:child_process");
 const http = require("node:http");
@@ -218,8 +218,10 @@ ipcMain.on("harness:stream", (event, channelId, apiPath) => {
 // ---- native bridges (file tree + git) ----
 const { registerFsBridge } = require("./fs-bridge.cjs");
 const { registerGitBridge } = require("./git-bridge.cjs");
+const { registerUpdateBridge } = require("./update-bridge.cjs");
 registerFsBridge(ipcMain);
 registerGitBridge(ipcMain);
+registerUpdateBridge(ipcMain, app, shell);
 
 function createWindow() {
   win = new BrowserWindow({

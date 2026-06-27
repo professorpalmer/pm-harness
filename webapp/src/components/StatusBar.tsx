@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Circle, GitBranch, Boxes, Cpu, PanelLeft, PanelRight, Coins } from "lucide-react";
+import { Circle, GitBranch, Boxes, Cpu, PanelLeft, PanelRight, Coins, ArrowUpCircle } from "lucide-react";
 import { api, type Config } from "../lib/api";
 import { isDesktop } from "../lib/transport";
 
@@ -12,6 +12,28 @@ export default function StatusBar({ config, jobCount, leftOpen, rightOpen, onTog
 }) {
   const [branch, setBranch] = useState("");
   const [usage, setUsage] = useState<{ tokens_used: number; est_cost_usd: number } | null>(null);
+  const [update, setUpdate] = useState<{ version: string; url: string; name: string } | null>(null);
+
+  // Tier-1 update check: ping GitHub Releases once on launch (desktop only).
+  // Silent on failure -- an update nudge must never get in the way.
+  useEffect(() => {
+    const ipc = (window as any).harnessIPC;
+    if (!ipc || !ipc.updates) return;
+    let cancelled = false;
+    ipc.updates.check()
+      .then((res: any) => {
+        if (!cancelled && res && res.available && res.url) {
+          setUpdate({ version: res.version, url: res.url, name: res.name });
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const openUpdate = () => {
+    const ipc = (window as any).harnessIPC;
+    if (ipc && ipc.updates && update) ipc.updates.openDownload(update.url);
+  };
 
   const fetchUsage = () => {
     api.getUsage()
@@ -85,6 +107,16 @@ export default function StatusBar({ config, jobCount, leftOpen, rightOpen, onTog
       <div className="flex-1" />
       <span className="flex items-center gap-1"><Cpu size={10} />{config?.driver?.split(":").pop() || "pilot"}</span>
       <span>{config?.reach || ""}</span>
+      {update && (
+        <button
+          onClick={openUpdate}
+          title={`Marionette ${update.version} is available -- click to download`}
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded text-accent hover:bg-accent/10 transition font-medium"
+        >
+          <ArrowUpCircle size={11} />
+          <span>update {update.version}</span>
+        </button>
+      )}
       <span className="text-muted/60">{isDesktop ? "desktop" : "web"}</span>
     </div>
   );

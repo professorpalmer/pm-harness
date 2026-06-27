@@ -45,5 +45,10 @@ contextBridge.exposeInMainWorld("harnessIPC", {
     diffStaged: (repo, file) => ipcRenderer.invoke("git:diffStaged", repo, file),
     applyHunk: (repo, patchText, reverse) => ipcRenderer.invoke("git:applyHunk", repo, patchText, reverse),
   },
+  // Tier-1 updates: check GitHub Releases for a newer version + open the download.
+  updates: {
+    check: () => ipcRenderer.invoke("updates:check"),
+    openDownload: (url) => ipcRenderer.invoke("updates:openDownload", url),
+  },
   isDesktop: true,
 });
