@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Settings as SettingsIcon, ChevronRight, ChevronDown, Plus, Trash2 } from "lucide-react";
 import { api, type Settings, type UsageData, type PlatformAdapter, type GitStatus } from "../lib/api";
 import SkillsPane from "./SkillsPane";
+import MemoryPane from "./MemoryPane";
 
 export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => void }) {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -38,6 +39,7 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
   // Expand/collapse states
   const [hooksOpen, setHooksOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
 
   // Form states for hooks
   const [newHookEvent, setNewHookEvent] = useState("");
@@ -669,6 +671,27 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
                   </button>
                 </div>
               </div>
+            </div>
+          )}
+        </div>
+
+        {/* Agent Memory Section */}
+        <div className="border-t border-edge pt-3 space-y-2">
+          <button
+            onClick={() => setMemoryOpen(!memoryOpen)}
+            className="w-full flex items-center justify-between text-left focus:outline-none"
+          >
+            <span className="uppercase tracking-wider text-[10px] text-faint font-semibold flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent inline-block"></span> Agent Memory
+            </span>
+            <span className="text-muted">
+              {memoryOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            </span>
+          </button>
+
+          {memoryOpen && (
+            <div className="space-y-3 bg-panel2/40 border border-edge/50 rounded p-2.5 mt-1">
+              <MemoryPane embedded />
             </div>
           )}
         </div>

@@ -300,6 +300,9 @@ export const api = {
   ruleReject: (slug: string) => postJSON<{ ok: boolean }>("/api/rules/reject", { slug }),
   skillApprove: (slug: string) => postJSON<{ ok: boolean }>("/api/skills/approve", { slug }),
   skillReject: (slug: string) => postJSON<{ ok: boolean }>("/api/skills/reject", { slug }),
+  memory: () => getJSON<{ memory: { id: string; text: string; category: string; created_at: number; source: string }[]; total_chars: number; limit: number }>("/api/memory"),
+  memoryAdd: (text: string, category?: string) => postJSON<{ id: string; text: string; category: string }>("/api/memory/add", { text, category }),
+  memoryRemove: (id: string) => postJSON<{ ok: boolean }>("/api/memory/remove", { id }),
   auto: (objective: string, onEvent: (e: StreamEvent) => void, onDone?: () => void, onError?: (e: any) => void) =>
     stream(`/api/auto?objective=${encodeURIComponent(objective)}`, onEvent, onDone, onError),
   exportUrl: (sessionId: string, format: "md" | "json") =>
