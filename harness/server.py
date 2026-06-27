@@ -642,6 +642,10 @@ class Handler(BaseHTTPRequestHandler):
             if not target_repo or not os.path.isdir(target_repo):
                 return self._send(400, json.dumps({"error": "Path is not an existing directory"}))
 
+            # Save outgoing conversation transcript
+            if _sessions.active:
+                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_transcript_data())
+
             _cfg.repo = target_repo
             os.environ["HARNESS_REPO"] = target_repo
 
@@ -674,8 +678,6 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-            _rebuild_pilot_and_session()
-
             is_git = False
             branch = ""
             try:
@@ -694,8 +696,21 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+            # Select the target project's session instead of carrying the current one
+            target_sessions = [s for s in _sessions.list() if s.get("repo") == target_repo]
+            if target_sessions:
+                newest_session = max(target_sessions, key=lambda s: s.get("created", 0))
+                _sessions.switch(newest_session["id"])
+            else:
+                basename = os.path.basename(os.path.abspath(target_repo)) or "Workspace"
+                _sessions.create(title=basename, repo=target_repo, branch=branch)
+
+            _rebuild_pilot_and_session()
+
+            # Explicitly load target session's transcript to replace the preserved history
             if _sessions.active:
-                _sessions.stamp_session(_sessions.active, target_repo, branch)
+                target_history = load_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active)
+                _pilot.load_history(target_history)
 
             has_codegraph = os.path.isdir(os.path.join(target_repo, ".codegraph"))
             if not has_codegraph:
@@ -712,7 +727,8 @@ class Handler(BaseHTTPRequestHandler):
                 "repo": target_repo,
                 "branch": branch,
                 "is_git": is_git,
-                "codegraph": _get_codegraph_status(target_repo)
+                "codegraph": _get_codegraph_status(target_repo),
+                "active_session": _sessions.active
             }))
 
         if path == "/api/workspaces/switch":

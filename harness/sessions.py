@@ -11,7 +11,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, asdict
-from typing import Optional
+from typing import Optional, Any
 
 
 @dataclass
@@ -153,7 +153,7 @@ def derive_title(prompt: str) -> str:
     return title or "New session"
 
 
-def save_transcript(state_dir: str, session_id: str, messages: list) -> None:
+def save_transcript(state_dir: str, session_id: str, messages: Any) -> None:
     if not session_id:
         return
     # Sanitize session_id to prevent directory traversal
@@ -172,7 +172,7 @@ def save_transcript(state_dir: str, session_id: str, messages: list) -> None:
         pass
 
 
-def load_transcript(state_dir: str, session_id: str) -> list:
+def load_transcript(state_dir: str, session_id: str) -> Any:
     if not session_id:
         return []
     safe_sid = "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))

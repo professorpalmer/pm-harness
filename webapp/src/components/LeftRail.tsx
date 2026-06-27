@@ -62,7 +62,20 @@ export default function LeftRail({ jobsRefresh, onSessionChange }: {
       onSessionChange?.("");
     }
   }).catch(() => {});
-  useEffect(() => { loadWs(); loadSess(); fetchWorkspace(); }, []);
+  useEffect(() => {
+    loadWs();
+    loadSess();
+    fetchWorkspace();
+    const handleConfigChanged = () => {
+      loadWs();
+      loadSess();
+      fetchWorkspace();
+    };
+    window.addEventListener("harness-config-changed", handleConfigChanged);
+    return () => {
+      window.removeEventListener("harness-config-changed", handleConfigChanged);
+    };
+  }, []);
 
   const handleOpenProject = async (path: string) => {
     setOpening(true);
