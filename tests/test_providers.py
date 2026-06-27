@@ -66,5 +66,5 @@ def test_available_pilots_are_provider_scoped(monkeypatch):
         monkeypatch.delenv(ev, raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-xxx")
     pilots = prov.available_pilots()
-    assert all(p.startswith("openrouter:") for p in pilots)
+    assert all(p.startswith("openrouter:") or p == "moa-planner" or p.startswith("moa:") for p in pilots)
     assert len(pilots) >= 3

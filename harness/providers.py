@@ -85,10 +85,10 @@ PROVIDERS = (
         name="gemini", aliases=("google", "google-gemini"),
         env_vars=("GEMINI_API_KEY", "GOOGLE_API_KEY"),
         base_url="https://generativelanguage.googleapis.com/v1beta/openai",
-        api_mode="chat_completions", display_name="Google Gemini",
+        api_mode="gemini_native", display_name="Google Gemini",
         # use -latest aliases so the picker tracks Google's current models
         # without pinning a version that may rotate out.
-        pilot_models=("gemini-flash-latest", "gemini-pro-latest"),
+        pilot_models=("gemini-3.5-flash", "gemini-flash-latest", "gemini-pro-latest"),
     ),
     Provider(
         name="deepseek", aliases=("deepseek-chat",),
@@ -157,6 +157,17 @@ def available_pilots() -> list:
     for p in available_providers():
         for m in p.pilot_models:
             entries.append(f"{p.name}:{m}")
+
+    # MoA virtual model presets
+    if os.environ.get("OPENROUTER_API_KEY", "").strip():
+        try:
+            from pmharness.registry import load_catalog
+            moa_presets = load_catalog().get("moa_presets", {})
+            for name in moa_presets:
+                # surface MoA presets with the "moa:" convention build_pilot understands
+                entries.append(f"moa:{name}")
+        except Exception:
+            pass
     return entries
 
 
@@ -170,6 +181,24 @@ def build_pilot(spec: str, *, max_tokens: int = 1500):
     Returns a driver exposing .complete(prompt, system=...). Transport is OURS
     (pmharness drivers); only the routing DATA is Hermes-derived.
     """
+    preset_name = spec
+    if spec.startswith("moa:"):
+        preset_name = spec[4:]
+
+    try:
+        from pmharness.registry import load_catalog
+        moa_presets = load_catalog().get("moa_presets", {})
+    except Exception:
+        moa_presets = {}
+
+    if preset_name in moa_presets or spec.startswith("moa-") or preset_name.startswith("moa-"):
+        if not os.environ.get("OPENROUTER_API_KEY", "").strip():
+            raise ProviderError(
+                f"no provider key available for pilot {spec!r}. Set: OPENROUTER_API_KEY"
+            )
+        from pmharness.registry import build as registry_build
+        return registry_build(preset_name, reach="openrouter")
+
     from pmharness.drivers.openai_compat import OpenAICompatDriver
     from pmharness.drivers.anthropic import AnthropicDriver
 
@@ -203,7 +232,15 @@ def build_pilot(spec: str, *, max_tokens: int = 1500):
             + ", ".join(sorted({ev for p in PROVIDERS for ev in p.env_vars}))
         )
 
-    key_env = provider.key_env()
+    key_env = provider.key_env() or ""
+    if provider.api_mode == "gemini_native":
+        from pmharness.drivers.gemini import GeminiDriver
+        burl = provider.base_url
+        kwargs = {}
+        if burl and burl.rstrip("/").endswith("v1beta"):
+            kwargs["base_url"] = burl
+        return GeminiDriver(name=spec, model=model, api_key_env=key_env, max_tokens=max_tokens, **kwargs)
+
     if provider.api_mode == "anthropic_messages":
         # AnthropicDriver appends /messages, so the base must end in the version
         # segment (.../v1 for Anthropic native, .../anthropic for MiniMax).
