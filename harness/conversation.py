@@ -129,6 +129,7 @@ def load_workspace_rules(repo: Optional[str]) -> str:
 from .skill_store import SkillStore
 from .skill_distiller import distill_session, distill_rules
 from .rule_store import RuleStore
+from .memory_store import MemoryStore
 
 
 def _mcp_result_text(out: dict) -> str:
@@ -225,6 +226,11 @@ class ConversationalSession:
         if active_rules:
             rules_block = "\n".join(f"- {r.text}" for r in active_rules)
             system = (system + "\n\n# Standing rules (ALWAYS honor)\n" + rules_block)
+        # durable memory (persistent across sessions -- user facts and preferences)
+        self._memory = MemoryStore()
+        mem_block = self._memory.render_block()
+        if mem_block:
+            system = system + "\n\n" + mem_block
         # workspace rules (auto-loaded from repository if available)
         ws_rules = load_workspace_rules(config.repo)
         if ws_rules:
@@ -2087,6 +2093,56 @@ class ConversationalSession:
                     except Exception as e:
                         yield ConvEvent("action_result", {"id": aid, "error": str(e)})
                         self._append_action_result(act, aid, f"(route_task for '{instruction}' failed: {e})", is_native)
+                    continue
+
+                # ---- memory branch -------------------------------------------
+                if act.kind == "memory":
+                    try:
+                        op = act.memory_action
+                        if op == "add":
+                            entry = self._memory.add(
+                                text=act.memory_content,
+                                category=act.memory_category or "general",
+                                source="agent"
+                            )
+                            warning = ""
+                            if self._memory.over_budget():
+                                warning = " WARNING: Durable memory is over the character budget (4000 chars). Old entries should be pruned."
+                            res_str = f"Successfully saved to memory with ID {entry.id}: '{entry.text}' (category: {entry.category}){warning}"
+                        elif op == "remove":
+                            ok = self._memory.remove(act.memory_id)
+                            if ok:
+                                res_str = f"Successfully removed memory entry with ID {act.memory_id}."
+                            else:
+                                res_str = f"Error: memory entry with ID {act.memory_id} not found."
+                        elif op == "update":
+                            ok = self._memory.update(act.memory_id, act.memory_content)
+                            if ok:
+                                res_str = f"Successfully updated memory entry {act.memory_id} to: '{act.memory_content}'"
+                            else:
+                                res_str = f"Error: memory entry with ID {act.memory_id} not found."
+                        elif op == "list":
+                            entries = self._memory.list()
+                            if entries:
+                                items = "\n".join(f"- [{e.id}] ({e.category}): {e.text}" for e in entries)
+                                res_str = f"Durable memory entries:\n{items}"
+                            else:
+                                res_str = "Durable memory is empty."
+                        else:
+                            raise ValueError(f"Unknown memory action: {op}")
+
+                        yield ConvEvent("action_result", {
+                            "id": aid,
+                            "num": 1,
+                            "types": ["memory"],
+                            "adapter": "local",
+                            "mode": "tool",
+                            "artifacts": [{"type": "memory", "headline": f"Memory {op} succeeded"}]
+                        })
+                        self._append_action_result(act, aid, res_str, is_native)
+                    except Exception as e:
+                        yield ConvEvent("action_result", {"id": aid, "error": str(e)})
+                        self._append_action_result(act, aid, f"(memory tool execution failed: {e})", is_native)
                     continue
 
         # Hit the step cap -- close the turn gracefully.

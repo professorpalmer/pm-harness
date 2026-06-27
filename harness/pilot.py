@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-VALID_ACTION_KINDS = {"run_swarm", "call_mcp", "read_file", "write_file", "edit_file", "run_command", "list_dir", "web_search", "web_fetch", "read_pdf", "search_codegraph", "query_wiki", "run_implement", "run_parallel", "route_task", "view_image"}
+VALID_ACTION_KINDS = {"run_swarm", "call_mcp", "read_file", "write_file", "edit_file", "run_command", "list_dir", "web_search", "web_fetch", "read_pdf", "search_codegraph", "query_wiki", "run_implement", "run_parallel", "route_task", "view_image", "memory"}
 
 
 @dataclass
@@ -59,10 +59,23 @@ class PilotAction:
     instruction: str = ""       # route_task: instruction text
     old_str: str = ""
     new_str: str = ""
+    memory_action: str = ""
+    memory_content: str = ""
+    memory_id: str = ""
+    memory_category: str = "general"
 
     def validate(self) -> "PilotAction":
         if self.kind not in VALID_ACTION_KINDS:
             raise PilotError(f"unknown action kind: {self.kind!r}")
+        if self.kind == "memory":
+            if not self.memory_action:
+                raise PilotError("memory action requires an 'action'")
+            if self.memory_action not in ("add", "remove", "update", "list"):
+                raise PilotError(f"unknown memory action: {self.memory_action}")
+            if self.memory_action in ("add", "update") and not (self.memory_content or "").strip():
+                raise PilotError(f"memory action {self.memory_action} requires 'content'")
+            if self.memory_action in ("remove", "update") and not (self.memory_id or "").strip():
+                raise PilotError(f"memory action {self.memory_action} requires 'entry_id'")
         if self.kind == "run_swarm" and not (self.goal or "").strip():
             raise PilotError("run_swarm action requires a non-empty goal")
         if self.kind == "run_implement" and not (self.goal or "").strip():
@@ -423,6 +436,39 @@ def build_tools_schema(mcp_tools: Optional[list] = None, no_delegation: bool = F
         }
     })
 
+    # 14. memory
+    schema.append({
+        "type": "function",
+        "function": {
+            "name": "memory",
+            "description": "Save or update a durable fact or preference that should persist across ALL future sessions (user preferences, environment details, stable conventions). Use when the user states a preference, corrects you, or reveals a stable fact about their setup. Keep entries compact and high-signal. Do NOT save ephemeral task state or secrets.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["add", "remove", "update", "list"],
+                        "description": "The memory operation to perform"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The fact or preference to save (required for 'add' and 'update')"
+                    },
+                    "entry_id": {
+                        "type": "string",
+                        "description": "The unique ID of the memory entry to update or remove (required for 'update' and 'remove')"
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["preference", "environment", "fact", "convention"],
+                        "description": "Category for classification (optional)"
+                    }
+                },
+                "required": ["action"]
+            }
+        }
+    })
+
     # MCP tools
     if mcp_tools:
         for tool in mcp_tools:
@@ -483,6 +529,10 @@ def _tool_name_to_action(name: str, args: dict, tool_call_id: str = "") -> Pilot
         adapter = args.get("adapter") or ""
         mode = args.get("mode") or ""
         instruction = args.get("instruction") or ""
+        memory_action = args.get("action") or ""
+        memory_content = args.get("content") or args.get("text") or ""
+        memory_id = args.get("entry_id") or args.get("id") or ""
+        memory_category = args.get("category") or "general"
 
         return PilotAction(
             kind=kind,
@@ -499,6 +549,10 @@ def _tool_name_to_action(name: str, args: dict, tool_call_id: str = "") -> Pilot
             instruction=instruction,
             old_str=old_str,
             new_str=new_str,
+            memory_action=memory_action,
+            memory_content=memory_content,
+            memory_id=memory_id,
+            memory_category=memory_category,
             arguments=args,
             tool_call_id=tool_call_id
         ).validate()

@@ -27,6 +27,7 @@ from .conversation import ConversationalSession
 from .mcp_manager import McpManager, CATALOG
 from .skill_store import SkillStore
 from .rule_store import RuleStore
+from .memory_store import MemoryStore, MEMORY_CHAR_LIMIT
 from . import workspaces as _ws
 from .sessions import SessionStore, save_transcript, load_transcript
 from .autobudget import AutoBudget
@@ -191,6 +192,7 @@ if _sessions.active:
 
 _skills = SkillStore()
 _rules = RuleStore()
+_memory = MemoryStore()
 _UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "harness-uploads")
 os.makedirs(_UPLOAD_DIR, exist_ok=True)
 
@@ -390,6 +392,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/api/skills/distill", "/api/skills/approve",
                       "/api/skills/reject", "/api/skills/archive",
                       "/api/rules/approve", "/api/rules/reject",
+                      "/api/memory/add", "/api/memory/remove",
                       "/api/settings", "/api/providers/probe", "/api/wiki/config",
                       "/api/platform", "/api/reviews/apply", "/api/reviews/dismiss",
                       "/api/registry", "/api/roles", "/api/pilot/validate",
@@ -662,6 +665,21 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/rules/reject":
             _rules.set_state(body.get("slug", ""), "archived")
             return self._send(200, json.dumps({"ok": True}))
+        if path == "/api/memory/add":
+            text = body.get("text", "")
+            category = body.get("category", "general")
+            entry = _memory.add(text, category=category, source="user")
+            return self._send(200, json.dumps({
+                "id": entry.id,
+                "text": entry.text,
+                "category": entry.category,
+                "created_at": entry.created_at,
+                "source": entry.source
+            }))
+        if path == "/api/memory/remove":
+            entry_id = body.get("id", "")
+            ok = _memory.remove(entry_id)
+            return self._send(200, json.dumps({"ok": ok}))
         if path == "/api/sessions/create":
             if _sessions.active:
                 save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_history())
@@ -1237,6 +1255,17 @@ class Handler(BaseHTTPRequestHandler):
                 {"slug": r.slug, "text": r.text, "scope": r.scope,
                  "state": r.state, "source": r.source}
                 for r in _rules.list()]))
+        if u.path == "/api/memory":
+            entries = _memory.list()
+            return self._send(200, json.dumps({
+                "memory": [
+                    {"id": e.id, "text": e.text, "category": e.category,
+                     "created_at": e.created_at, "source": e.source}
+                    for e in entries
+                ],
+                "total_chars": _memory.total_chars(),
+                "limit": MEMORY_CHAR_LIMIT
+            }))
         if u.path == "/api/file/read":
             if self._guard():
                 return
