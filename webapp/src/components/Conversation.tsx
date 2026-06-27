@@ -423,16 +423,42 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     if (activeSessionId) {
       api.sessionTranscript(activeSessionId)
         .then((res) => {
-          const loadedItems = (res.history || [])
-            .filter((m: any) => m.role === "assistant" || (m.role === "user" && !m.content.startsWith("(")))
-            .map((m: any) => ({
+          let loadedItems: any[] = [];
+          if (res.display && res.display.length > 0) {
+            loadedItems = res.display.map((m: any) => ({
               kind: "msg" as const,
               msg: {
                 role: m.role as "user" | "assistant",
-                text: m.content || ""
+                text: m.text || ""
               }
             }));
+          } else {
+            loadedItems = (res.history || [])
+              .filter((m: any) => m.role === "assistant" || (m.role === "user" && m.content && !m.content.startsWith("(")))
+              .map((m: any) => ({
+                kind: "msg" as const,
+                msg: {
+                  role: m.role as "user" | "assistant",
+                  text: m.content || ""
+                }
+              }));
+          }
           setItems(deduplicateConsecutiveAssistantMessages(loadedItems));
+
+          // Restore artifacts for all job IDs associated with this session
+          if (res.job_ids && res.job_ids.length > 0) {
+            res.job_ids.forEach((jid) => {
+              api.artifacts(jid)
+                .then((arts) => {
+                  if (arts && arts.length > 0) {
+                    onArtifacts(arts);
+                  }
+                })
+                .catch((err) => {
+                  console.error("Failed to fetch artifacts for job", jid, err);
+                });
+            });
+          }
         })
         .catch(() => {
           setItems([]);

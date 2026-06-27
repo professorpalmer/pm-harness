@@ -293,7 +293,7 @@ export const api = {
   createWorkspace: (name: string, branch?: string) =>
     postJSON("/api/workspaces/create", { name, branch }),
   sessions: () => getJSON<Session[]>("/api/sessions"),
-  sessionTranscript: (session: string) => getJSON<{ history: any[] }>(withToken(`/api/sessions/transcript?session=${encodeURIComponent(session)}`)),
+  sessionTranscript: (session: string) => getJSON<{ history: any[]; display?: any[]; job_ids?: string[] }>(withToken(`/api/sessions/transcript?session=${encodeURIComponent(session)}`)),
   getSessionState: () => getJSON<SessionState>(withToken("/api/session/state")),
   interruptSession: () => postJSON<{ ok: boolean }>("/api/session/interrupt", {}),
   getSwarmResults: () => getJSON<SwarmResultsResponse>(withToken("/api/session/swarm-results")),

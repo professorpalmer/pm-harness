@@ -237,6 +237,10 @@ class ConversationalSession:
             system = system + ws_rules
         # the running transcript with the pilot (conversation memory)
         self._history: list[dict] = [{"role": "system", "content": system}]
+        # parallel clean transcript for rendering in UI
+        self._display_transcript: list[dict] = []
+        # tracking background swarm job IDs for the session
+        self._session_job_ids: list[str] = []
         # optional durable-knowledge integration (portable-llm-wiki)
         self._wiki = WikiClient()
         self._wiki_auto = os.environ.get("HARNESS_WIKI_AUTO", "").strip() in ("1", "true", "yes")
@@ -385,12 +389,31 @@ class ConversationalSession:
             return []
         return [dict(m) for m in self._history[1:]]
 
-    def load_history(self, messages: list) -> None:
+    def export_display_transcript(self) -> list:
+        return list(self._display_transcript)
+
+    def export_transcript_data(self) -> dict:
+        return {
+            "history": self.export_history(),
+            "display": self.export_display_transcript(),
+            "job_ids": list(self._session_job_ids),
+        }
+
+    def load_history(self, messages: Any) -> None:
         """Replaces the conversation turns (keep the freshly-built system prompt at index 0 -- which contains current skills/rules -- then append the loaded user/assistant messages). Do NOT persist the system prompt; only persist the user/assistant turns."""
+        if isinstance(messages, dict):
+            history_list = messages.get("history", [])
+            self._display_transcript = messages.get("display", [])
+            self._session_job_ids = messages.get("job_ids", [])
+        else:
+            history_list = messages
+            self._display_transcript = []
+            self._session_job_ids = []
+
         if not self._history:
             self._history = [{"role": "system", "content": ""}]
         system_prompt = self._history[0]
-        cleaned = [m for m in messages if m.get("role") != "system"]
+        cleaned = [m for m in history_list if m.get("role") != "system"]
         self._history = [system_prompt] + cleaned
 
     def _render_history(self) -> str:
@@ -1062,6 +1085,7 @@ class ConversationalSession:
                                      + "\n\n".join(blocks) + "\n\n---\n" + user_message)
 
         self._history.append({"role": "user", "content": processed_message})
+        self._display_transcript.append({"role": "user", "text": user_message})
         swarms = 0
         action_seq = 0
         demo_swarms = 0  # count swarms that returned the demo substrate
@@ -1258,6 +1282,7 @@ class ConversationalSession:
             if cleaned_say_text:
                 yield ConvEvent("message", {"role": "assistant", "text": cleaned_say_text})
                 turn_prose.append(cleaned_say_text)
+                self._display_transcript.append({"role": "assistant", "text": cleaned_say_text})
             # record the pilot's turn in transcript (prose only -- the conversation)
             if is_native:
                 assistant_msg: dict[str, Any] = {"role": "assistant"}
@@ -1863,6 +1888,7 @@ class ConversationalSession:
                             p.wait(timeout=600)
 
                             if job_id:
+                                self._session_job_ids.append(job_id)
                                 # Submit the await+apply task to the thread pool
                                 future = self._swarm_pool.submit(self._run_swarm_background, job_id, act.goal, None)
                                 with self._swarm_futures_lock:
@@ -1918,6 +1944,7 @@ class ConversationalSession:
                             import uuid
                             short = uuid.uuid4().hex[:8]
                             job_id = f"local-{short}"
+                            self._session_job_ids.append(job_id)
                             
                             # Submit the provider worker task to the thread pool
                             future = self._swarm_pool.submit(self._run_provider_worker_background, job_id, act.goal)
@@ -2092,6 +2119,7 @@ class ConversationalSession:
 
                                 if job_id:
                                     job_ids_collected.append(job_id)
+                                    self._session_job_ids.append(job_id)
                                     
                                     # Submit to background pool.
                                     # Note: state_dir is passed, and _run_swarm_background will clean it up!
@@ -2174,6 +2202,7 @@ class ConversationalSession:
                                 short = uuid.uuid4().hex[:8]
                                 job_id = f"local-{short}"
                                 job_ids_collected.append(job_id)
+                                self._session_job_ids.append(job_id)
                                 
                                 # Submit the provider worker task to the thread pool
                                 future = self._swarm_pool.submit(self._run_provider_worker_background, job_id, sub_goal)
@@ -2312,8 +2341,9 @@ class ConversationalSession:
 
         # Hit the step cap -- close the turn gracefully.
         self._maybe_ingest(user_message, turn_prose, turn_findings)
-        yield ConvEvent("message", {"role": "assistant",
-            "text": "(Reached the investigation step limit for this message.)"})
+        limit_msg = "(Reached the investigation step limit for this message.)"
+        yield ConvEvent("message", {"role": "assistant", "text": limit_msg})
+        self._display_transcript.append({"role": "assistant", "text": limit_msg})
         yield ConvEvent("assistant_done", {"turns": HARD_PILOT_STEPS, "swarms": swarms})
 
     def _add_worker_tokens_from_artifacts(self, artifacts_json: Any) -> tuple[int, int]:

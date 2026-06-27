@@ -23,6 +23,10 @@ export default function App() {
   const [jobsRefresh, setJobsRefresh] = useState(0);
   const [jobCount, setJobCount] = useState(0);
 
+  useEffect(() => {
+    setArtifacts([]);
+  }, [activeSessionId]);
+
   const [leftW, setLeftW] = useState(() => num(LS.left, 248));
   const [rightW, setRightW] = useState(() => Math.max(340, num(LS.right, 340)));
   const [leftOpen, setLeftOpen] = useState(() => bool(LS.leftOpen, true));

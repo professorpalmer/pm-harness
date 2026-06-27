@@ -467,7 +467,7 @@ class Handler(BaseHTTPRequestHandler):
                 _cfg.max_context_tokens = orig_tokens
             after = _pilot._estimate_context_tokens()
             if _sessions.active:
-                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_history())
+                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_transcript_data())
             return self._send(200, json.dumps({
                 "ok": True,
                 "before_tokens": before,
@@ -765,7 +765,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"ok": ok}))
         if path == "/api/sessions/create":
             if _sessions.active:
-                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_history())
+                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_transcript_data())
             title = body.get("title") or "New session"
             repo = _cfg.repo or ""
             branch = ""
@@ -794,7 +794,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(res))
         if path == "/api/sessions/switch":
             if _sessions.active:
-                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_history())
+                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_transcript_data())
             res = _sessions.switch(body.get("id",""))
             if res.get("ok") and _sessions.active:
                 history = load_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active)
@@ -2070,15 +2070,31 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/sessions/transcript":
             q = parse_qs(u.query)
             sid = q.get("session", [None])[0] or _sessions.active or ""
-            history = load_transcript(_cfg.state_dir or _tf.gettempdir(), sid)
-            return self._send(200, json.dumps({"history": history}))
+            data = load_transcript(_cfg.state_dir or _tf.gettempdir(), sid)
+            if isinstance(data, dict):
+                history_list = data.get("history", [])
+                display_list = data.get("display", [])
+                job_ids_list = data.get("job_ids", [])
+            else:
+                history_list = data
+                display_list = []
+                job_ids_list = []
+            return self._send(200, json.dumps({
+                "history": history_list,
+                "display": display_list,
+                "job_ids": job_ids_list
+            }))
         if u.path == "/api/sessions/export":
             q = parse_qs(u.query)
             sid = q.get("session", [None])[0] or _sessions.active or ""
             fmt = q.get("format", ["json"])[0]
             
             meta = next((s for s in _sessions._sessions if s["id"] == sid), None)
-            history = load_transcript(_cfg.state_dir or _tf.gettempdir(), sid)
+            data = load_transcript(_cfg.state_dir or _tf.gettempdir(), sid)
+            if isinstance(data, dict):
+                history = data.get("history", [])
+            else:
+                history = data
             
             title = meta.get("title", "Unknown Session") if meta else "Unknown Session"
             filename_base = meta.get("title") if meta else ""
@@ -2212,7 +2228,7 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             run_hooks("postRun", ctx)
             if _sessions.active:
-                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_history())
+                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_transcript_data())
 
     def _swap_pilot(self, model: str):
         """Hot-swap the pilot model (the whole point: your key -> your pilot)."""
@@ -2399,7 +2415,7 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             run_hooks("postRun", ctx)
             if _sessions.active:
-                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_history())
+                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_transcript_data())
 
 
 def _pilot_preflight():
