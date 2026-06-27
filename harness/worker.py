@@ -195,7 +195,10 @@ class ProviderWorker:
                     events.append(ev)
                     
             # 4. Finalize -> PATCH
-            # Run git add -A
+            # Run git add -A, then unstage common build/agent artifacts so they
+            # never leak into the patch (git add -A otherwise sweeps untracked
+            # __pycache__/*.pyc, .pytest_cache, etc. that the worker created when
+            # it ran tests). Pathspec excludes keep the captured diff to real edits.
             rc_add, out_add, err_add = _git(wt_path, "add", "-A")
             if rc_add != 0:
                 return WorkerResult(
@@ -204,6 +207,15 @@ class ProviderWorker:
                     events=events,
                     worktree=wt_path
                 )
+            # Unstage artifact paths (best-effort; ignore failures when none match).
+            _ARTIFACT_PATHSPECS = [
+                "*.pyc", "*.pyo", "__pycache__", ".pytest_cache",
+                ".mypy_cache", ".ruff_cache", "*.egg-info", ".coverage",
+                "node_modules", ".DS_Store",
+            ]
+            for _spec in _ARTIFACT_PATHSPECS:
+                _git(wt_path, "reset", "-q", "--", f":(glob){_spec}")
+                _git(wt_path, "reset", "-q", "--", f":(glob)**/{_spec}")
                 
             # Run git diff --cached --no-color using subprocess.run directly to preserve formatting/newlines
             p_diff = subprocess.run(
