@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("harnessIPC", {
   getJSON: (path) => ipcRenderer.invoke("harness:getJSON", path),
   postJSON: (path, body) => ipcRenderer.invoke("harness:postJSON", path, body),
   pickFolder: () => ipcRenderer.invoke("harness:pickFolder"),
+  uploadFile: (payload) => ipcRenderer.invoke("harness:uploadFile", payload),
 
   // stream(path, onEvent, onDone, onError) -> cancel()
   stream: (path, onEvent, onDone, onError) => {

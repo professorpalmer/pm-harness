@@ -65,9 +65,15 @@ export function stream(
   return () => es.close();
 }
 
-// Upload a file (multipart). Electron build swaps to a native file path handoff.
+// Upload a file (multipart). In Electron a browser File object cannot cross the
+// IPC boundary, so we read it into bytes and hand {name, type, bytes} to the main
+// process, which POSTs a multipart body to the loopback backend. On the web build
+// (real same-origin server) we use a normal multipart fetch.
 export async function uploadFile(file: File): Promise<{ path: string; name: string }[]> {
-  if (ipc?.uploadFile) return ipc.uploadFile(file);
+  if (ipc?.uploadFile) {
+    const buf = await file.arrayBuffer();
+    return ipc.uploadFile({ name: file.name, type: file.type, bytes: new Uint8Array(buf) });
+  }
   const fd = new FormData();
   fd.append("file", file);
   const r = await fetch("/api/upload", { method: "POST", body: fd, headers: { "X-Harness-Token": authToken() } });

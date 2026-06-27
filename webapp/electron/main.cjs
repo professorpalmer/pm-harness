@@ -179,6 +179,50 @@ function backendRequest(method, apiPath, body) {
 ipcMain.handle("harness:getJSON", (_e, p) => backendRequest("GET", p));
 ipcMain.handle("harness:postJSON", (_e, p, body) => backendRequest("POST", p, body));
 
+// Image upload bridge: the renderer hands us raw bytes (File over IPC can't carry
+// a browser File object), we POST a multipart body to the backend's /api/upload on
+// the loopback port so the saved path matches what the chat/view_image path reads.
+// Without this, transport.uploadFile fell back to a bare fetch("/api/upload") which
+// has no backend origin in the packaged app -> "Image upload failed".
+ipcMain.handle("harness:uploadFile", async (_e, payload) => {
+  try {
+    const { name, type, bytes } = payload || {};
+    if (!bytes) return [];
+    const buf = Buffer.from(bytes); // bytes arrives as an ArrayBuffer/Uint8Array
+    const safeName = (name && String(name)) || `image-${Date.now()}.png`;
+    const boundary = "----MarionetteUpload" + Math.random().toString(16).slice(2);
+    const head = Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${safeName.replace(/"/g, "")}"\r\n` +
+      `Content-Type: ${type || "application/octet-stream"}\r\n\r\n`
+    );
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const body = Buffer.concat([head, buf, tail]);
+    return await new Promise((resolve) => {
+      const req = http.request({
+        host: "127.0.0.1", port: backendPort, path: "/api/upload", method: "POST",
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          "Content-Length": body.length,
+          "X-Harness-Token": authToken(),
+        },
+      }, (res) => {
+        let b = "";
+        res.on("data", (c) => (b += c));
+        res.on("end", () => {
+          try { resolve(JSON.parse(b || "{}").saved || []); }
+          catch { resolve([]); }
+        });
+      });
+      req.on("error", () => resolve([]));
+      req.write(body);
+      req.end();
+    });
+  } catch {
+    return [];
+  }
+});
+
 // Native folder picker (Cursor-style "Open Folder"). Returns absolute path or null.
 ipcMain.handle("harness:pickFolder", async () => {
   const res = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] });
