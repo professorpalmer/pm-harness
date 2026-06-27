@@ -425,13 +425,30 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
         .then((res) => {
           let loadedItems: any[] = [];
           if (res.display && res.display.length > 0) {
-            loadedItems = res.display.map((m: any) => ({
-              kind: "msg" as const,
-              msg: {
-                role: m.role as "user" | "assistant",
-                text: m.text || ""
+            loadedItems = res.display.map((m: any) => {
+              if (m.type === "card") {
+                return {
+                  kind: "card" as const,
+                  card: {
+                    id: m.id,
+                    goal: m.goal,
+                    cwd: m.cwd || null,
+                    kind: m.kind,
+                    running: false,
+                    open: false,
+                    result: m.result || undefined
+                  }
+                };
+              } else {
+                return {
+                  kind: "msg" as const,
+                  msg: {
+                    role: m.role as "user" | "assistant",
+                    text: m.text || ""
+                  }
+                };
               }
-            }));
+            });
           } else {
             loadedItems = (res.history || [])
               .filter((m: any) => m.role === "assistant" || (m.role === "user" && m.content && !m.content.startsWith("(")))
@@ -445,19 +462,55 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
           }
           setItems(deduplicateConsecutiveAssistantMessages(loadedItems));
 
-          // Restore artifacts for all job IDs associated with this session
-          if (res.job_ids && res.job_ids.length > 0) {
-            res.job_ids.forEach((jid) => {
-              api.artifacts(jid)
-                .then((arts) => {
-                  if (arts && arts.length > 0) {
-                    onArtifacts(arts);
+          // Gather all artifacts from (a) card entries in res.display
+          const displayArtifacts: { type: string; headline: string }[] = [];
+          if (res.display && res.display.length > 0) {
+            res.display.forEach((m: any) => {
+              if (m.type === "card" && m.result && Array.isArray(m.result.artifacts)) {
+                m.result.artifacts.forEach((art: any) => {
+                  if (art && art.type && art.headline) {
+                    displayArtifacts.push({ type: art.type, headline: art.headline });
                   }
-                })
-                .catch((err) => {
-                  console.error("Failed to fetch artifacts for job", jid, err);
                 });
+              }
             });
+          }
+
+          // Merge helper to deduplicate by type+headline
+          const mergeAndEmit = (fetchedArts: { type: string; headline: string }[]) => {
+            const seen = new Set<string>();
+            const unique: { type: string; headline: string }[] = [];
+            
+            displayArtifacts.concat(fetchedArts).forEach((art) => {
+              const key = `${art.type}::${art.headline}`;
+              if (!seen.has(key)) {
+                seen.add(key);
+                unique.push(art);
+              }
+            });
+
+            if (unique.length > 0) {
+              onArtifacts(unique);
+            }
+          };
+
+          // Fetch artifacts from (b) res.job_ids
+          if (res.job_ids && res.job_ids.length > 0) {
+            Promise.all(
+              res.job_ids.map((jid: string) =>
+                api.artifacts(jid)
+                  .then((arts) => (Array.isArray(arts) ? arts : []))
+                  .catch((err) => {
+                    console.error("Failed to fetch artifacts for job", jid, err);
+                    return [];
+                  })
+              )
+            ).then((allJobArts) => {
+              const flattened = allJobArts.flat();
+              mergeAndEmit(flattened);
+            });
+          } else {
+            mergeAndEmit([]);
           }
         })
         .catch(() => {

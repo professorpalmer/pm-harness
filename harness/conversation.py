@@ -1073,12 +1073,21 @@ class ConversationalSession:
         try:
             import time
             action_starts = {}
+            pending_cards = {}
             for ev in self._send_locked(user_message, images=images, plan=plan):
                 if ev.kind == "action_start":
                     self._total_tool_calls += 1
                     aid = ev.data.get("id")
                     if aid:
                         action_starts[aid] = time.time()
+                        pending_cards[aid] = {
+                            "type": "card",
+                            "id": aid,
+                            "kind": ev.data.get("kind"),
+                            "goal": ev.data.get("goal"),
+                            "cwd": ev.data.get("cwd"),
+                            "result": None
+                        }
                 elif ev.kind == "action_result":
                     aid = ev.data.get("id")
                     if aid and aid in action_starts:
@@ -1089,6 +1098,16 @@ class ConversationalSession:
                     else:
                         if getattr(self, "_has_tool_failure", False):
                             self._error_then_recovery_seen = True
+                    
+                    if aid and aid in pending_cards:
+                        card = pending_cards[aid]
+                        res_data = {}
+                        for key in ["job_id", "num", "types", "adapter", "artifacts", "error", "duration_ms", "chars"]:
+                            if key in ev.data:
+                                res_data[key] = ev.data[key]
+                        card["result"] = res_data
+                        self._display_transcript.append(card)
+                        del pending_cards[aid]
                 
                 if ev.kind == "assistant_done":
                     self._turn_count += 1
@@ -1129,7 +1148,7 @@ class ConversationalSession:
                                      + "\n\n".join(blocks) + "\n\n---\n" + user_message)
 
         self._history.append({"role": "user", "content": processed_message})
-        self._display_transcript.append({"role": "user", "text": user_message})
+        self._display_transcript.append({"type": "message", "role": "user", "text": user_message})
         swarms = 0
         action_seq = 0
         demo_swarms = 0  # count swarms that returned the demo substrate
@@ -1326,7 +1345,7 @@ class ConversationalSession:
             if cleaned_say_text:
                 yield ConvEvent("message", {"role": "assistant", "text": cleaned_say_text})
                 turn_prose.append(cleaned_say_text)
-                self._display_transcript.append({"role": "assistant", "text": cleaned_say_text})
+                self._display_transcript.append({"type": "message", "role": "assistant", "text": cleaned_say_text})
             # record the pilot's turn in transcript (prose only -- the conversation)
             if is_native:
                 assistant_msg: dict[str, Any] = {"role": "assistant"}
@@ -2387,7 +2406,7 @@ class ConversationalSession:
         self._maybe_ingest(user_message, turn_prose, turn_findings)
         limit_msg = "(Reached the investigation step limit for this message.)"
         yield ConvEvent("message", {"role": "assistant", "text": limit_msg})
-        self._display_transcript.append({"role": "assistant", "text": limit_msg})
+        self._display_transcript.append({"type": "message", "role": "assistant", "text": limit_msg})
         yield ConvEvent("assistant_done", {"turns": HARD_PILOT_STEPS, "swarms": swarms})
 
     def _add_worker_tokens_from_artifacts(self, artifacts_json: Any) -> tuple[int, int]:

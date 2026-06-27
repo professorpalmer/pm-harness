@@ -37,8 +37,8 @@ def test_display_transcript_accumulation():
     # Check that display transcript has correct user message and clean assistant message
     display = session.export_display_transcript()
     assert len(display) == 2
-    assert display[0] == {"role": "user", "text": "how do I build a wooden table?"}
-    assert display[1] == {"role": "assistant", "text": "Sure, I can help you with that."}
+    assert display[0] == {"type": "message", "role": "user", "text": "how do I build a wooden table?"}
+    assert display[1] == {"type": "message", "role": "assistant", "text": "Sure, I can help you with that."}
 
     # Verify that the raw history has the raw pilot output formatting
     history = session.export_history()
