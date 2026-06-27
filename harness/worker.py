@@ -30,6 +30,7 @@ class WorkerResult:
     test_output: str = ""
     error: str = ""
     events: list[ConvEvent] = field(default_factory=list)
+    test_passed: bool = True
 
 
 def is_obviously_destructive(cmd: str) -> bool:
@@ -241,6 +242,7 @@ class ProviderWorker:
                 
             # 5. Optional self-test execution
             test_output = ""
+            test_passed = True
             if self.run_tests:
                 test_timeout = max(10, int(self.budget.max_seconds - self.budget.elapsed))
                 try:
@@ -254,11 +256,14 @@ class ProviderWorker:
                         timeout=test_timeout
                     )
                     test_output = p_test.stdout or ""
+                    test_passed = (p_test.returncode == 0)
                 except subprocess.TimeoutExpired as te:
                     out_str = te.stdout.decode('utf-8', errors='replace') if isinstance(te.stdout, bytes) else (te.stdout or "")
                     test_output = out_str + f"\n\n[Test execution timed out after {test_timeout} seconds]"
+                    test_passed = False
                 except Exception as e:
                     test_output = f"Failed to run tests: {e}"
+                    test_passed = False
                     
             # Determine summary from final events
             last_message = ""
@@ -277,14 +282,21 @@ class ProviderWorker:
             summary = "\n".join(summary_parts) if summary_parts else "No summary available."
             
             success = True
+            error_msg = ""
+            if self.run_tests and not test_passed:
+                first_500 = test_output[:500]
+                error_msg = f"worker tests failed: {first_500}"
+
             return WorkerResult(
-                ok=True,
+                ok=bool(patch) if not self.run_tests else (bool(patch) and test_passed),
                 patch=patch,
                 files_changed=files_changed,
                 summary=summary,
                 worktree=wt_path,
                 test_output=test_output,
-                events=events
+                error=error_msg,
+                events=events,
+                test_passed=test_passed
             )
             
         except Exception as e:

@@ -20,6 +20,7 @@ class HarnessConfig:
     wiki_auto: bool = False          # auto-ingest findings to the wiki (HARNESS_WIKI_AUTO)
     max_context_tokens: int = 96000
     no_delegation: bool = False
+    verify_cmd: str = ""
 
     @classmethod
     def from_env(cls) -> "HarnessConfig":
@@ -58,4 +59,5 @@ class HarnessConfig:
             wiki_auto=str(pick("HARNESS_WIKI_AUTO", "wiki_auto", "")).strip() in ("1","true","yes","True"),
             max_context_tokens=int(pick("HARNESS_MAX_CONTEXT_TOKENS", "max_context_tokens", 96000)),
             no_delegation=str(pick("HARNESS_NO_DELEGATION", "no_delegation", "")).strip() in ("1","true","yes","True"),
+            verify_cmd=pick("HARNESS_VERIFY_CMD", "verify_cmd", ""),
         )

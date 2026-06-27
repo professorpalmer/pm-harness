@@ -2774,6 +2774,66 @@ class ConversationalSession:
             out["rules"] = {"status": "error", "reason": str(e)}
         return out
 
+    def _run_verification(self) -> tuple[bool, str]:
+        import os
+        import subprocess
+        import shlex
+
+        verify_cmd = self.config.verify_cmd
+        if not verify_cmd:
+            return True, ""
+
+        timeout_env = os.environ.get("HARNESS_VERIFY_TIMEOUT", "180")
+        try:
+            timeout = int(timeout_env)
+        except ValueError:
+            timeout = 180
+
+        cwd = self.config.repo or None
+
+        # Operator-provided command is safe to run with shell=True if needed
+        # (e.g., if it has shell metacharacters or piping), but prefer shlex.split
+        # where simple. Operator-provided config, not model-provided.
+        has_meta = any(c in verify_cmd for c in ";&|><$`*?~")
+        
+        try:
+            if has_meta:
+                res = subprocess.run(
+                    verify_cmd,
+                    shell=True,
+                    cwd=cwd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=timeout
+                )
+            else:
+                args = shlex.split(verify_cmd)
+                res = subprocess.run(
+                    args,
+                    shell=False,
+                    cwd=cwd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=timeout
+                )
+            passed = (res.returncode == 0)
+            output = res.stdout or ""
+        except subprocess.TimeoutExpired as te:
+            passed = False
+            out_str = te.stdout or ""
+            if isinstance(out_str, bytes):
+                out_str = out_str.decode('utf-8', errors='replace')
+            output = out_str + f"\n[Verification timed out after {timeout} seconds]"
+        except Exception as e:
+            passed = False
+            output = f"Verification failed to run: {e}"
+
+        if len(output) > 4000:
+            output = output[:4000] + "\n[Output truncated...]"
+        return passed, output
+
     def run_auto(self, objective: str, budget: "AutoBudget" = None,
                  *, require_codegraph: bool = True):
         """FULLY-AUTO (unattended) mode: pursue an objective across many pilot
@@ -2808,6 +2868,8 @@ class ConversationalSession:
                    f"with another swarm; finish with no actions only when the "
                    f"objective is genuinely met or no further progress is possible.)")
 
+        loop_msg = message
+        failed_verifications = 0
         cycle = 0
         self._cancel.clear()
         while True:
@@ -2830,8 +2892,7 @@ class ConversationalSession:
             turn_findings_count = 0
             turn_had_retryable_error = False
             tripped = None
-            for ev in self.send(message if cycle == 1 else
-                                 "(continue toward the objective, or finish if met)"):
+            for ev in self.send(loop_msg):
                 # meter the governor off the stream
                 if ev.kind == "action_result" and not ev.data.get("error"):
                     budget.add_swarm()
@@ -2843,6 +2904,8 @@ class ConversationalSession:
                     _err_txt = str(ev.data.get("error") or "").upper()
                     if "INVALID TOOL CALL" in _err_txt or "REQUIRES A" in _err_txt:
                         turn_had_retryable_error = True
+                    # If verification failed previously, we should clear the failed status if they are fixing it?
+                    # No, the prompt says max_retries limit is for consecutive failure loops. Let's keep it simple.
                 yield ev
                 if ev.kind == "assistant_done":
                     break
@@ -2862,6 +2925,10 @@ class ConversationalSession:
                     yield ConvEvent("distilled", d)
                 self._maybe_ingest(objective, [], [])
                 return
+
+            # Immediately reset loop_msg to default for subsequent cycles, unless overridden by verification failure.
+            loop_msg = "(continue toward the objective, or finish if met)"
+
             # account for stall + emit a governor heartbeat
             budget.note_findings(turn_findings_count)
             # REAL token metering: feed the delta consumed this cycle into the
@@ -2873,13 +2940,47 @@ class ConversationalSession:
             # if the pilot finished a turn with no swarms at all, it considers the
             # objective met -> stop the autonomous loop.
             if turn_findings_count == 0 and budget.idle_steps >= 1 and not turn_had_retryable_error:
-                yield ConvEvent("auto_halt", {"reason": "pilot reports objective met "
-                    "(no further investigation)", "snapshot": budget.snapshot()})
-                d = self._maybe_auto_distill()
-                if d:
-                    yield ConvEvent("distilled", d)
-                self._maybe_ingest(objective, [], [])
-                return
+                if self.config.verify_cmd:
+                    yield ConvEvent("verifying", {"cmd": self.config.verify_cmd})
+                    passed, out = self._run_verification()
+                    yield ConvEvent("verification", {"passed": passed, "output": out[:1000]})
+                    if passed:
+                        yield ConvEvent("auto_halt", {"reason": "objective met and verified (verify_cmd passed)", "snapshot": budget.snapshot()})
+                        d = self._maybe_auto_distill()
+                        if d:
+                            yield ConvEvent("distilled", d)
+                        self._maybe_ingest(objective, [], [])
+                        return
+                    else:
+                        failed_verifications += 1
+                        import os
+                        max_retries_env = os.environ.get("HARNESS_VERIFY_MAX_RETRIES", "2")
+                        try:
+                            max_retries = int(max_retries_env)
+                        except ValueError:
+                            max_retries = 2
+                        
+                        if failed_verifications >= max_retries:
+                            yield ConvEvent("auto_halt", {
+                                "reason": f"objective NOT verified after {max_retries} retries (verify_cmd still failing)",
+                                "snapshot": budget.snapshot(),
+                                "last_output": out
+                            })
+                            d = self._maybe_auto_distill()
+                            if d:
+                                yield ConvEvent("distilled", d)
+                            self._maybe_ingest(objective, [], [])
+                            return
+                        else:
+                            loop_msg = f"Verification command failed. Output:\n{out}\nFix the issue so the verification passes, then finish."
+                else:
+                    yield ConvEvent("auto_halt", {"reason": "pilot reports objective met "
+                        "(no further investigation)", "snapshot": budget.snapshot()})
+                    d = self._maybe_auto_distill()
+                    if d:
+                        yield ConvEvent("distilled", d)
+                    self._maybe_ingest(objective, [], [])
+                    return
 
 
 def _slugify(s: str) -> str:
