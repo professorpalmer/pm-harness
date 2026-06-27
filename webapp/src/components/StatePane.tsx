@@ -38,6 +38,17 @@ export default function StatePane({ artifacts }: {
   useEffect(() => {
     fetchCg();
     fetchWiki();
+    // Re-fetch CodeGraph + Wiki when the active project/workspace changes, so
+    // the panel reflects the newly-opened repo instead of showing stale stats.
+    // (Backend re-points + re-indexes CodeGraph on /api/workspace/open; the
+    // panel must re-poll to see it.) Mirrors FileTree's refresh wiring.
+    const onChange = () => { fetchCg(); fetchWiki(); };
+    window.addEventListener("harness-config-changed", onChange);
+    window.addEventListener("harness-new-session", onChange);
+    return () => {
+      window.removeEventListener("harness-config-changed", onChange);
+      window.removeEventListener("harness-new-session", onChange);
+    };
   }, []);
 
   // Poll /api/codegraph every 10s while indexing

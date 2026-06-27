@@ -248,15 +248,35 @@ def _parse_bool(val) -> bool:
 _codegraph_status = "unsupported"
 _codegraph_status_reason = None
 
+# Short-TTL cache for the /api/codegraph status payload, keyed by repo path.
+# Reading codegraph status spawns a `puppetmaster codegraph status --json`
+# subprocess (interpreter cold-start + DB read) on every poll, which is the
+# source of the panel's load lag. The graph only changes on (re)index, so we
+# serve a cached payload for a few seconds and only re-spawn when stale. The
+# cache is bypassed entirely while status == "indexing" (that path never hits
+# the subprocess), so a fresh index is reflected as soon as it finishes.
+_codegraph_status_cache = {}  # repo -> (monotonic_expiry, payload_dict)
+_CODEGRAPH_STATUS_TTL = 30.0  # seconds
+
+# Short-TTL cache for the /api/wiki/graph payload. Each fetch is an HTTP round
+# trip to the wiki host (up to an 8s timeout when slow/unreachable), and the
+# wiki graph changes rarely, so a brief cache removes the repeated stall on the
+# panel without making the data meaningfully stale.
+_wiki_graph_cache = {}  # base_url -> (monotonic_expiry, payload_dict)
+_WIKI_GRAPH_TTL = 60.0  # seconds
+
 
 def _index_codegraph_bg(repo_path: str):
-    global _codegraph_status, _codegraph_status_reason
+    global _codegraph_status, _codegraph_status_reason, _codegraph_status_cache
     if not _puppetmaster_available():
         _codegraph_status = "unsupported"
         _codegraph_status_reason = "puppetmaster not found -- codegraph/swarm unavailable"
         return
     _codegraph_status = "indexing"
     _codegraph_status_reason = None
+    # Invalidate any cached status for this repo so the panel does not show
+    # stale "ready" stats while a fresh (re)index is running.
+    _codegraph_status_cache.pop(repo_path, None)
     try:
         import subprocess
         proc = subprocess.Popen(
@@ -1603,6 +1623,13 @@ class Handler(BaseHTTPRequestHandler):
                     "repo": repo
                 }))
 
+            # Serve a recent cached payload instead of re-spawning the status
+            # subprocess on every poll (the main source of panel load lag).
+            import time as _time
+            cached = _codegraph_status_cache.get(repo)
+            if cached and cached[0] > _time.monotonic():
+                return self._send(200, json.dumps(cached[1]))
+
             try:
                 import subprocess
                 proc = subprocess.run(
@@ -1636,7 +1663,7 @@ class Handler(BaseHTTPRequestHandler):
                         except Exception:
                             pass
 
-                    return self._send(200, json.dumps({
+                    _cg_payload = {
                         "indexed": initialized,
                         "status": status_val,
                         "nodes": data.get("nodeCount"),
@@ -1645,7 +1672,10 @@ class Handler(BaseHTTPRequestHandler):
                         "languages": data.get("languages"),
                         "last_indexed": last_indexed,
                         "repo": repo
-                    }))
+                    }
+                    _codegraph_status_cache[repo] = (
+                        _time.monotonic() + _CODEGRAPH_STATUS_TTL, _cg_payload)
+                    return self._send(200, json.dumps(_cg_payload))
                 else:
                     return self._send(200, json.dumps({
                         "indexed": False,
@@ -1705,6 +1735,10 @@ class Handler(BaseHTTPRequestHandler):
                     "edges": [],
                     "base_url": ""
                 }))
+            import time as _time
+            _wiki_cached = _wiki_graph_cache.get(client.base_url)
+            if _wiki_cached and _wiki_cached[0] > _time.monotonic():
+                return self._send(200, json.dumps(_wiki_cached[1]))
             try:
                 res = client.graph()
             except Exception as e:
@@ -1738,13 +1772,16 @@ class Handler(BaseHTTPRequestHandler):
                     "error": res["error"],
                     "base_url": client.base_url
                 }))
-            return self._send(200, json.dumps({
+            _wiki_payload = {
                 "configured": True,
                 "status": "ok",
                 "nodes": res.get("nodes") or [],
                 "edges": res.get("edges") or [],
                 "base_url": client.base_url
-            }))
+            }
+            _wiki_graph_cache[client.base_url] = (
+                _time.monotonic() + _WIKI_GRAPH_TTL, _wiki_payload)
+            return self._send(200, json.dumps(_wiki_payload))
         if u.path == "/api/settings":
             return self._send(200, json.dumps(_get_settings_dict()))
         if u.path == "/api/reviews":
