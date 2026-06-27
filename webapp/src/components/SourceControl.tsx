@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { GitBranch, FileCode, RefreshCw, X } from "lucide-react";
+import { GitBranch, FileCode, RefreshCw, X, Plus, Minus } from "lucide-react";
 import { nativeGit, isDesktop } from "../lib/transport";
 import { api } from "../lib/api";
 
@@ -23,9 +23,16 @@ export default function SourceControl() {
 
   // Diff states
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [viewingStagedDiff, setViewingStagedDiff] = useState<boolean>(false);
   const [diffText, setDiffText] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
+
+  // Commit states
+  const [commitMessage, setCommitMessage] = useState("");
+  const [commitLoading, setCommitLoading] = useState(false);
+  const [commitError, setCommitError] = useState<string | null>(null);
+  const [commitStatus, setCommitStatus] = useState<string | null>(null);
 
   const loadGitStatus = async (path: string) => {
     setLoading(true);
@@ -71,13 +78,14 @@ export default function SourceControl() {
     return () => { active = false; };
   }, []);
 
-  const handleFileClick = async (file: string) => {
-    setSelectedFile(file);
+  const refreshDiff = async (file: string, isStaged: boolean) => {
     setDiffLoading(true);
     setDiffError(null);
     setDiffText(null);
     try {
-      const res = await nativeGit.diff(repoPath, file);
+      const res = isStaged
+        ? await nativeGit.diffStaged(repoPath, file)
+        : await nativeGit.diff(repoPath, file);
       if (res.ok) {
         setDiffText(res.out || "No changes / empty diff");
       } else {
@@ -85,6 +93,139 @@ export default function SourceControl() {
       }
     } catch (err: any) {
       setDiffError(err.message || "Error generating diff");
+    } finally {
+      setDiffLoading(false);
+    }
+  };
+
+  const handleFileClick = async (file: string, isStaged: boolean) => {
+    setSelectedFile(file);
+    setViewingStagedDiff(isStaged);
+    await refreshDiff(file, isStaged);
+  };
+
+  const handleStageFile = async (e: React.MouseEvent, file: string) => {
+    e.stopPropagation();
+    setError(null);
+    try {
+      const res = await nativeGit.stageFile(repoPath, file);
+      if (res.ok) {
+        await loadGitStatus(repoPath);
+        if (selectedFile === file) {
+          await handleFileClick(file, true);
+        }
+      } else {
+        setError(res.error || "Failed to stage file");
+      }
+    } catch (err: any) {
+      setError(err.message || "Error staging file");
+    }
+  };
+
+  const handleUnstageFile = async (e: React.MouseEvent, file: string) => {
+    e.stopPropagation();
+    setError(null);
+    try {
+      const res = await nativeGit.unstageFile(repoPath, file);
+      if (res.ok) {
+        await loadGitStatus(repoPath);
+        if (selectedFile === file) {
+          await handleFileClick(file, false);
+        }
+      } else {
+        setError(res.error || "Failed to unstage file");
+      }
+    } catch (err: any) {
+      setError(err.message || "Error unstaging file");
+    }
+  };
+
+  const handleStageAll = async () => {
+    setError(null);
+    try {
+      const res = await nativeGit.stageAll(repoPath);
+      if (res.ok) {
+        await loadGitStatus(repoPath);
+        if (selectedFile) {
+          await handleFileClick(selectedFile, true);
+        }
+      } else {
+        setError(res.error || "Failed to stage all files");
+      }
+    } catch (err: any) {
+      setError(err.message || "Error staging all files");
+    }
+  };
+
+  const handleUnstageAll = async () => {
+    setError(null);
+    try {
+      const res = await nativeGit.unstageAll(repoPath);
+      if (res.ok) {
+        await loadGitStatus(repoPath);
+        if (selectedFile) {
+          await handleFileClick(selectedFile, false);
+        }
+      } else {
+        setError(res.error || "Failed to unstage all files");
+      }
+    } catch (err: any) {
+      setError(err.message || "Error unstaging all files");
+    }
+  };
+
+  const handleCommit = async () => {
+    if (!commitMessage.trim()) return;
+    setCommitLoading(true);
+    setCommitError(null);
+    setCommitStatus("Committing...");
+    try {
+      const res = await nativeGit.commit(repoPath, commitMessage);
+      if (res.ok) {
+        setCommitMessage("");
+        setCommitStatus("Committed successfully");
+        setSelectedFile(null);
+        setDiffText(null);
+        await loadGitStatus(repoPath);
+        setTimeout(() => setCommitStatus(null), 4000);
+      } else {
+        setCommitError(res.error || "Failed to commit");
+        setCommitStatus(null);
+      }
+    } catch (err: any) {
+      setCommitError(err.message || "Error running commit");
+      setCommitStatus(null);
+    } finally {
+      setCommitLoading(false);
+    }
+  };
+
+  const handleApplyHunk = async (hunk: any, isStaged: boolean) => {
+    if (!selectedFile) return;
+    setError(null);
+    setDiffLoading(true);
+    try {
+      const lines = diffText ? diffText.split("\n") : [];
+      const firstHunkIndex = lines.findIndex(l => l.startsWith("@@"));
+      if (firstHunkIndex === -1) {
+        setDiffError("Cannot reconstruct patch: no hunk index");
+        setDiffLoading(false);
+        return;
+      }
+      const headerText = lines.slice(0, firstHunkIndex).join("\n") + "\n";
+      const hunkText = hunk.lines.join("\n") + "\n";
+      const patch = headerText + hunkText;
+
+      const reverse = isStaged;
+      const res = await nativeGit.applyHunk(repoPath, patch, reverse);
+      if (res.ok) {
+        await loadGitStatus(repoPath);
+        await refreshDiff(selectedFile, isStaged);
+      } else {
+        setDiffError(res.error || "Failed to apply hunk patch");
+      }
+    } catch (err: any) {
+      setDiffError(err.message || "Error applying hunk patch");
     } finally {
       setDiffLoading(false);
     }
@@ -126,6 +267,62 @@ export default function SourceControl() {
     const parts = pathStr.split(/[/\\]/);
     return parts[parts.length - 1] || pathStr;
   };
+
+  const stagedFiles: ChangedFile[] = [];
+  const unstagedFiles: ChangedFile[] = [];
+
+  changedFiles.forEach((file) => {
+    const x: any = file.status.charAt(0);
+    const y: any = file.status.charAt(1);
+
+    // Staged: X is not space, and not '?' (untracked), and not empty
+    if (x !== " " && x !== "?" && x !== "") {
+      stagedFiles.push({
+        path: file.path,
+        status: x,
+      });
+    }
+
+    // Unstaged/Changes: Y is not space and not empty, or it's untracked ("??")
+    if ((y !== " " && y !== "") || (x === "?" && y === "?")) {
+      unstagedFiles.push({
+        path: file.path,
+        status: (x === "?" && y === "?") ? "??" : y,
+      });
+    }
+  });
+
+  // Hunk parser
+  let headerLines: string[] = [];
+  let hunks: { header: string; lines: string[] }[] = [];
+  let hasHunks = false;
+
+  if (diffText) {
+    const lines = diffText.split("\n");
+    const firstHunkIndex = lines.findIndex((l) => l.startsWith("@@"));
+    if (firstHunkIndex !== -1) {
+      hasHunks = true;
+      headerLines = lines.slice(0, firstHunkIndex);
+      let currentHunk: { header: string; lines: string[] } | null = null;
+      for (let i = firstHunkIndex; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith("@@")) {
+          if (currentHunk) {
+            hunks.push(currentHunk);
+          }
+          currentHunk = {
+            header: line,
+            lines: [line],
+          };
+        } else if (currentHunk) {
+          currentHunk.lines.push(line);
+        }
+      }
+      if (currentHunk) {
+        hunks.push(currentHunk);
+      }
+    }
+  }
 
   if (!isDesktop) {
     return (
@@ -178,49 +375,150 @@ export default function SourceControl() {
           </div>
         </div>
 
-        <div className="flex-1 flex flex-col min-h-[120px]">
-          <div className="text-[9px] uppercase tracking-wider text-muted mb-1.5 font-semibold flex items-center justify-between">
-            <span>Changed Files ({changedFiles.length})</span>
-          </div>
-          <div className="flex-1 overflow-y-auto border border-edge/30 rounded bg-panel2/30 flex flex-col divide-y divide-edge/20">
-            {changedFiles.length === 0 && !loading && (
-              <div className="text-[11px] text-muted italic p-3 text-center">
-                No changes detected
-              </div>
-            )}
-            {changedFiles.map((file) => {
-              const style = getStatusStyle(file.status);
-              return (
-                <div
-                  key={file.path}
-                  onClick={() => handleFileClick(file.path)}
-                  className={`flex items-center justify-between p-2 cursor-pointer transition hover:bg-panel2/60 ${
-                    selectedFile === file.path ? "bg-panel2/80 text-accent" : "text-txt"
-                  }`}
+        <div className="flex-1 flex flex-col min-h-[120px] overflow-y-auto gap-4 pr-1">
+          {/* Staged Group */}
+          <div className="flex flex-col">
+            <div className="text-[9px] uppercase tracking-wider text-muted mb-1.5 font-semibold flex items-center justify-between">
+              <span>Staged ({stagedFiles.length})</span>
+              {stagedFiles.length > 0 && (
+                <button
+                  onClick={handleUnstageAll}
+                  className="text-[9px] text-muted hover:text-accent font-medium uppercase tracking-wider transition"
                 >
-                  <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <FileCode size={12} className="text-muted shrink-0" />
-                    <span className="text-[11px] truncate" title={file.path}>
-                      {file.path}
-                    </span>
-                  </div>
-                  <span
-                    className={`text-[9px] font-mono font-semibold px-1 rounded border uppercase ${style.text}`}
-                    title={style.label}
-                  >
-                    {file.status}
-                  </span>
+                  Unstage all
+                </button>
+              )}
+            </div>
+            <div className="border border-edge/30 rounded bg-panel2/30 flex flex-col divide-y divide-edge/20 max-h-[160px] overflow-y-auto">
+              {stagedFiles.length === 0 && (
+                <div className="text-[10px] text-muted italic p-2 text-center select-none">
+                  No staged changes
                 </div>
-              );
-            })}
+              )}
+              {stagedFiles.map((file) => {
+                const style = getStatusStyle(file.status);
+                const isSelected = selectedFile === file.path && viewingStagedDiff;
+                return (
+                  <div
+                    key={`staged-${file.path}`}
+                    onClick={() => handleFileClick(file.path, true)}
+                    className={`flex items-center justify-between p-2 cursor-pointer transition hover:bg-panel2/60 group ${
+                      isSelected ? "bg-panel2/80 text-accent" : "text-txt"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <FileCode size={12} className="text-muted shrink-0" />
+                      <span className="text-[11px] truncate" title={file.path}>
+                        {file.path}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={(e) => handleUnstageFile(e, file.path)}
+                        className="opacity-0 group-hover:opacity-100 transition p-0.5 hover:bg-panel3 border border-edge/30 rounded text-muted hover:text-risk"
+                        title="Unstage file"
+                      >
+                        <Minus size={10} />
+                      </button>
+                      <span
+                        className={`text-[9px] font-mono font-semibold px-1 rounded border uppercase ${style.text}`}
+                        title={style.label}
+                      >
+                        {file.status}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Unstaged Group */}
+          <div className="flex flex-col">
+            <div className="text-[9px] uppercase tracking-wider text-muted mb-1.5 font-semibold flex items-center justify-between">
+              <span>Changes ({unstagedFiles.length})</span>
+              {unstagedFiles.length > 0 && (
+                <button
+                  onClick={handleStageAll}
+                  className="text-[9px] text-muted hover:text-accent font-medium uppercase tracking-wider transition"
+                >
+                  Stage all
+                </button>
+              )}
+            </div>
+            <div className="border border-edge/30 rounded bg-panel2/30 flex flex-col divide-y divide-edge/20 max-h-[160px] overflow-y-auto">
+              {unstagedFiles.length === 0 && (
+                <div className="text-[10px] text-muted italic p-2 text-center select-none">
+                  No unstaged changes
+                </div>
+              )}
+              {unstagedFiles.map((file) => {
+                const style = getStatusStyle(file.status);
+                const isSelected = selectedFile === file.path && !viewingStagedDiff;
+                return (
+                  <div
+                    key={`unstaged-${file.path}`}
+                    onClick={() => handleFileClick(file.path, false)}
+                    className={`flex items-center justify-between p-2 cursor-pointer transition hover:bg-panel2/60 group ${
+                      isSelected ? "bg-panel2/80 text-accent" : "text-txt"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <FileCode size={12} className="text-muted shrink-0" />
+                      <span className="text-[11px] truncate" title={file.path}>
+                        {file.path}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={(e) => handleStageFile(e, file.path)}
+                        className="opacity-0 group-hover:opacity-100 transition p-0.5 hover:bg-panel3 border border-edge/30 rounded text-muted hover:text-good"
+                        title="Stage file"
+                      >
+                        <Plus size={10} />
+                      </button>
+                      <span
+                        className={`text-[9px] font-mono font-semibold px-1 rounded border uppercase ${style.text}`}
+                        title={style.label}
+                      >
+                        {file.status}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
+      </div>
+
+      <div className="border-t border-edge/30 p-3 bg-panel/50 flex flex-col gap-2 shrink-0">
+        <textarea
+          value={commitMessage}
+          onChange={(e) => setCommitMessage(e.target.value)}
+          placeholder="Commit message... (no emojis)"
+          rows={2}
+          className="w-full text-[11px] bg-bg border border-edge/40 rounded p-1.5 focus:outline-none focus:border-accent/50 resize-none text-txt placeholder:text-muted"
+        />
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-muted truncate max-w-[60%]">
+            {commitStatus || (stagedFiles.length > 0 ? `${stagedFiles.length} files staged` : "Nothing staged")}
+          </span>
+          <button
+            onClick={handleCommit}
+            disabled={!commitMessage.trim() || stagedFiles.length === 0 || commitLoading}
+            className="px-3 py-1 bg-panel2 border border-edge hover:border-accent/40 hover:text-accent disabled:opacity-50 disabled:hover:text-muted disabled:hover:border-edge rounded text-[11px] font-medium text-txt transition flex items-center gap-1 shrink-0"
+          >
+            {commitLoading ? "Committing..." : "Commit"}
+          </button>
+        </div>
+        {commitError && <div className="text-[10px] text-risk mt-1">{commitError}</div>}
       </div>
 
       <div className="h-1/2 border-t border-edge flex flex-col overflow-hidden bg-panel2 shrink-0">
         <div className="flex items-center justify-between px-3 py-1.5 border-b border-edge bg-panel select-none shrink-0">
           <span className="text-[10px] text-muted uppercase tracking-wider truncate max-w-[80%]">
-            {selectedFile ? `Diff: ${getFileName(selectedFile)}` : "No diff loaded"}
+            {selectedFile ? `Diff: ${getFileName(selectedFile)} ${viewingStagedDiff ? "(staged)" : "(unstaged)"}` : "No diff loaded"}
           </span>
           {selectedFile && (
             <button
@@ -241,11 +539,44 @@ export default function SourceControl() {
             <div className="text-[11px] text-muted">Generating diff view...</div>
           )}
           {diffError && <div className="text-[11px] text-risk">{diffError}</div>}
-          {!diffLoading && !diffError && diffText !== null && (
+          
+          {!diffLoading && !diffError && diffText !== null && !hasHunks && (
             <div className="space-y-0.5 select-text">
               {diffText.split("\n").map((line, idx) => renderDiffLine(line, idx))}
             </div>
           )}
+
+          {!diffLoading && !diffError && diffText !== null && hasHunks && (
+            <div className="space-y-4">
+              {headerLines.length > 0 && (
+                <div className="p-1.5 bg-panel2/30 border border-edge/10 rounded text-muted font-mono text-[10px] select-text">
+                  {headerLines.map((line, idx) => (
+                    <div key={idx} className="truncate">{line}</div>
+                  ))}
+                </div>
+              )}
+
+              {hunks.map((hunk, hunkIdx) => (
+                <div key={hunkIdx} className="border border-edge/20 rounded overflow-hidden bg-bg/50 group/hunk">
+                  <div className="flex items-center justify-between px-2 py-1 bg-panel border-b border-edge/20 select-none">
+                    <span className="text-[10px] font-mono text-accent font-semibold">
+                      {hunk.header}
+                    </span>
+                    <button
+                      onClick={() => handleApplyHunk(hunk, viewingStagedDiff)}
+                      className="opacity-0 group-hover/hunk:opacity-100 transition px-2 py-0.5 bg-panel2 border border-edge/60 hover:border-accent/40 rounded text-[9px] text-muted hover:text-accent font-medium"
+                    >
+                      {viewingStagedDiff ? "Unstage hunk" : "Stage hunk"}
+                    </button>
+                  </div>
+                  <div className="p-2 space-y-0.5">
+                    {hunk.lines.slice(1).map((line, idx) => renderDiffLine(line, idx))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {!diffLoading && !diffError && diffText === null && (
             <div className="text-[11px] text-muted italic">
               Select a changed file above to view its diff

@@ -89,6 +89,20 @@ export const nativeGit = {
     ipc?.git?.diff ? ipc.git.diff(repo, file) : Promise.resolve({ ok: false, error: "web build" }),
   branches: (repo: string): Promise<any> =>
     ipc?.git?.branches ? ipc.git.branches(repo) : Promise.resolve({ ok: false, error: "web build" }),
+  stageFile: (repo: string, file: string): Promise<any> =>
+    ipc?.git?.stageFile ? ipc.git.stageFile(repo, file) : Promise.resolve({ ok: false, error: "web build" }),
+  unstageFile: (repo: string, file: string): Promise<any> =>
+    ipc?.git?.unstageFile ? ipc.git.unstageFile(repo, file) : Promise.resolve({ ok: false, error: "web build" }),
+  stageAll: (repo: string): Promise<any> =>
+    ipc?.git?.stageAll ? ipc.git.stageAll(repo) : Promise.resolve({ ok: false, error: "web build" }),
+  unstageAll: (repo: string): Promise<any> =>
+    ipc?.git?.unstageAll ? ipc.git.unstageAll(repo) : Promise.resolve({ ok: false, error: "web build" }),
+  commit: (repo: string, message: string): Promise<any> =>
+    ipc?.git?.commit ? ipc.git.commit(repo, message) : Promise.resolve({ ok: false, error: "web build" }),
+  diffStaged: (repo: string, file?: string): Promise<any> =>
+    ipc?.git?.diffStaged ? ipc.git.diffStaged(repo, file) : Promise.resolve({ ok: false, error: "web build" }),
+  applyHunk: (repo: string, patchText: string, reverse?: boolean): Promise<any> =>
+    ipc?.git?.applyHunk ? ipc.git.applyHunk(repo, patchText, reverse) : Promise.resolve({ ok: false, error: "web build" }),
 };
 
 export const isDesktop = !!ipc;

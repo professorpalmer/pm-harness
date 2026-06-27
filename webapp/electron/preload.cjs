@@ -37,6 +37,13 @@ contextBridge.exposeInMainWorld("harnessIPC", {
     status: (repo) => ipcRenderer.invoke("git:status", repo),
     diff: (repo, file) => ipcRenderer.invoke("git:diff", repo, file),
     branches: (repo) => ipcRenderer.invoke("git:branches", repo),
+    stageFile: (repo, file) => ipcRenderer.invoke("git:stageFile", repo, file),
+    unstageFile: (repo, file) => ipcRenderer.invoke("git:unstageFile", repo, file),
+    stageAll: (repo) => ipcRenderer.invoke("git:stageAll", repo),
+    unstageAll: (repo) => ipcRenderer.invoke("git:unstageAll", repo),
+    commit: (repo, message) => ipcRenderer.invoke("git:commit", repo, message),
+    diffStaged: (repo, file) => ipcRenderer.invoke("git:diffStaged", repo, file),
+    applyHunk: (repo, patchText, reverse) => ipcRenderer.invoke("git:applyHunk", repo, patchText, reverse),
   },
   isDesktop: true,
 });
