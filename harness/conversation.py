@@ -197,6 +197,8 @@ class ConversationalSession:
     def __init__(self, config: HarnessConfig) -> None:
         self.config = config
         import tempfile
+        from harness.context_budget import BudgetConfig
+        self.context_budget_config = BudgetConfig()
         self.state_dir = config.state_dir or tempfile.mkdtemp(prefix="pilot-")
         # Provider-aware pilot: 'provider:model' spans any provider whose key is
         # set; a bare model resolves against available providers, else OpenRouter.
@@ -730,10 +732,21 @@ class ConversationalSession:
             "summarized_messages": len(middle_block)
         })
 
+    @property
+    def _state_dir_or_tempdir(self) -> str:
+        import tempfile
+        return getattr(self, "state_dir", None) or tempfile.gettempdir()
+
     def _append_action_result(self, act: Any, aid: str, content: str, is_native: bool) -> None:
-        clamped_content = _clamp_tool_result(content)
+        tc_id = getattr(act, "tool_call_id", None) or aid
+        from harness.context_budget import maybe_persist_result
+        clamped_content = maybe_persist_result(
+            content=content,
+            result_id=tc_id,
+            state_dir=self._state_dir_or_tempdir,
+            config=self.context_budget_config,
+        )
         if is_native:
-            tc_id = getattr(act, "tool_call_id", None) or aid
             self._history.append({"role": "tool", "tool_call_id": tc_id, "content": clamped_content})
         else:
             self._history.append({"role": "user", "content": clamped_content})
@@ -751,11 +764,51 @@ class ConversationalSession:
                 raise FileNotFoundError(f"File not found: {act.path}")
             if os.path.isdir(target_path):
                 raise IsADirectoryError(f"Path is a directory: {act.path}")
+            
             with open(target_path, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read(200 * 1024)
-            is_truncated = os.path.getsize(target_path) > 200 * 1024
-            if is_truncated:
-                content += "\n\n... (file truncated to 200KB) ..."
+                lines = f.readlines()
+            
+            total_lines = len(lines)
+            raw_text = "".join(lines)
+            
+            start_line_raw = getattr(act, "start_line", None)
+            limit_raw = getattr(act, "limit", None)
+            
+            start_line = None
+            if start_line_raw is not None:
+                try:
+                    start_line = int(start_line_raw)
+                except ValueError:
+                    pass
+            
+            limit = None
+            if limit_raw is not None:
+                try:
+                    limit = int(limit_raw)
+                except ValueError:
+                    pass
+            
+            if (len(raw_text) > 100000 or total_lines > 2000) and start_line is None and limit is None:
+                head_lines = lines[:100]
+                content = "".join(head_lines)
+                content += f"\n\n[file is large ({total_lines} lines); re-read with start_line and limit to see specific sections]"
+            else:
+                if start_line is not None or limit is not None:
+                    s_line = start_line if start_line is not None else 1
+                    s_idx = max(0, s_line - 1)
+                    if limit is not None:
+                        e_idx = min(total_lines, s_idx + limit)
+                    else:
+                        e_idx = total_lines
+                    
+                    sliced_lines = lines[s_idx:e_idx]
+                    content = f"[lines {s_idx + 1}-{e_idx} of {total_lines}]\n" + "".join(sliced_lines)
+                else:
+                    content = raw_text
+
+            if len(content) > 200 * 1024:
+                content = content[:200 * 1024] + "\n\n... (file truncated to 200KB) ..."
+                
             return True, "success", content
         except Exception as e:
             return False, "exception", str(e)
@@ -1405,6 +1458,7 @@ class ConversationalSession:
                     for idx, res in results:
                         prefetch[idx] = res
 
+            history_len_before_actions = len(self._history)
             for idx, act in enumerate(turn.actions):
                 if idx > 0:
                     yield from self._check_and_inject_steer()
@@ -2401,6 +2455,16 @@ class ConversationalSession:
                         yield ConvEvent("action_result", {"id": aid, "error": str(e)})
                         self._append_action_result(act, aid, f"(memory tool execution failed: {e})", is_native)
                     continue
+
+            # Enforce turn budget on the newly appended actions
+            from harness.context_budget import enforce_turn_budget
+            new_messages = self._history[history_len_before_actions:]
+            enforce_turn_budget(
+                tool_messages=new_messages,
+                state_dir=self._state_dir_or_tempdir,
+                config=self.context_budget_config,
+            )
+            self._history[history_len_before_actions:] = new_messages
 
         # Hit the step cap -- close the turn gracefully.
         self._maybe_ingest(user_message, turn_prose, turn_findings)

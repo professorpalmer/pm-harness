@@ -63,6 +63,8 @@ class PilotAction:
     memory_content: str = ""
     memory_id: str = ""
     memory_category: str = "general"
+    start_line: Optional[int] = None
+    limit: Optional[int] = None
 
     def validate(self) -> "PilotAction":
         if self.kind not in VALID_ACTION_KINDS:
@@ -177,11 +179,13 @@ def build_tools_schema(mcp_tools: Optional[list] = None, no_delegation: bool = F
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "read a file's contents from the workspace. Requires `path`.",
+            "description": "Read a file's contents. For large files, use start_line and limit. Prefer search_codegraph/search_files to explore code structure.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Absolute or relative path to the file to read"}
+                    "path": {"type": "string", "description": "Absolute or relative path to the file to read"},
+                    "start_line": {"type": "integer", "description": "1-based starting line number to read"},
+                    "limit": {"type": "integer", "description": "Maximum number of lines to read"}
                 },
                 "required": ["path"]
             }
@@ -554,6 +558,18 @@ def _tool_name_to_action(name: str, args: dict, tool_call_id: str = "") -> Pilot
         memory_content = args.get("content") or args.get("text") or ""
         memory_id = args.get("entry_id") or args.get("id") or ""
         memory_category = args.get("category") or "general"
+        start_line = args.get("start_line")
+        if start_line is not None:
+            try:
+                start_line = int(start_line)
+            except ValueError:
+                pass
+        limit = args.get("limit")
+        if limit is not None:
+            try:
+                limit = int(limit)
+            except ValueError:
+                pass
 
         return PilotAction(
             kind=kind,
@@ -574,6 +590,8 @@ def _tool_name_to_action(name: str, args: dict, tool_call_id: str = "") -> Pilot
             memory_content=memory_content,
             memory_id=memory_id,
             memory_category=memory_category,
+            start_line=start_line,
+            limit=limit,
             arguments=args,
             tool_call_id=tool_call_id
         ).validate()
@@ -820,7 +838,7 @@ PILOT_SYSTEM = """You are the pilot of a Puppetmaster-orchestrated coding harnes
 You talk directly with the user like a senior engineer pairing with them.
 
 You have direct access to a local CodeGraph-indexed workspace and can explore/edit it using these real actions:
-- `read_file`: read a file's contents from the workspace. Requires `path`.
+- `read_file`: read a file's contents from the workspace. Requires `path`, with optional `start_line` and `limit` for large files.
 - `edit_file`: make a targeted edit to an existing file by replacing an exact substring. Requires `path`, `old_str`, and `new_str`. STRONGLY PREFERRED over write_file for editing existing files.
 - `write_file`: write/create a file atomically. Requires `path` and `content`. Use ONLY to create brand-new files.
 - `run_command`: run a terminal shell command. Requires `command`.
@@ -871,7 +889,7 @@ PLAN_SYSTEM_SUFFIX = """PLAN MODE: Do NOT call run_implement, run_parallel, writ
 WORKER_SYSTEM = """You are an implementation worker. Be FAST and DECISIVE. Your job is to EDIT FILES to complete the task, not to investigate. Read ONLY the specific file(s) you must change (read_file once per file), then make the edit immediately with edit_file, then FINISH. To change an existing file, ALWAYS use edit_file with a small old_str/new_str snippet -- do NOT use write_file to rewrite an existing file (that wastes tokens and can truncate). Use write_file ONLY to create a brand-new file. Do NOT explore the wider codebase. Do NOT call search_codegraph (this workspace has no code index; it returns nothing and wastes time). Do NOT re-read a file you already read. Ideal small change = read target file once, edit the change, done. As soon as all required edits are made, STOP. Do not do extra investigation rounds.
 
 You have direct access to the workspace and can explore/edit it using these real actions:
-- `read_file`: read a file's contents from the workspace. Requires `path`.
+- `read_file`: read a file's contents from the workspace. Requires `path`, with optional `start_line` and `limit` for large files.
 - `edit_file`: make a targeted edit to an existing file by replacing an exact substring. Requires `path`, `old_str`, and `new_str`. STRONGLY PREFERRED over write_file for editing existing files.
 - `write_file`: write/create a file atomically. Requires `path` and `content`. Use ONLY to create brand-new files.
 - `run_command`: run a terminal shell command. Requires `command`.

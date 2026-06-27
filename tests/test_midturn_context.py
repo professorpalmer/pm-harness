@@ -85,7 +85,8 @@ def test_append_action_result_clamped():
         
         last_history_entry = session._history[-1]
         assert last_history_entry["role"] == "tool"
-        assert "truncated" in last_history_entry["content"]
+        from harness.context_budget import PERSISTED_OUTPUT_TAG
+        assert PERSISTED_OUTPUT_TAG in last_history_entry["content"]
         assert len(last_history_entry["content"]) < 30000
 
 
