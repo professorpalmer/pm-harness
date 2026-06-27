@@ -1432,6 +1432,61 @@ class Handler(BaseHTTPRequestHandler):
                 if len(files_list) >= 2000:
                     break
             return self._send(200, json.dumps({"files": sorted(files_list)}))
+
+        if u.path == "/api/workspace/symbols":
+            if self._guard():
+                return
+            qtok = parse_qs(u.query).get("token", [""])[0]
+            if qtok != _TOKEN and self.headers.get("X-Harness-Token", "") != _TOKEN:
+                return self._send(403, json.dumps({"error": "missing or bad token"}))
+            
+            repo = _cfg.repo
+            cg_status = _get_codegraph_status(repo) if repo else "unsupported"
+            
+            if not repo or not os.path.isdir(repo):
+                return self._send(200, json.dumps({"symbols": [], "status": cg_status}))
+            
+            try:
+                import puppetmaster.codegraph as cg
+                if not cg.codegraph_available() or not cg.codegraph_ready(repo):
+                    return self._send(200, json.dumps({"symbols": [], "status": cg_status}))
+            except Exception:
+                return self._send(200, json.dumps({"symbols": [], "status": "unsupported"}))
+            
+            q = parse_qs(u.query).get("q", [""])[0].strip()
+            if len(q) < 1:
+                return self._send(200, json.dumps({"symbols": [], "status": "ready"}))
+            
+            try:
+                import puppetmaster.codegraph as cg
+                res = cg.codegraph_query(search=q, cwd=repo, limit=20)
+                symbols_list = []
+                if res.get("ok") and res.get("stdout"):
+                    try:
+                        data = json.loads(res["stdout"])
+                        if isinstance(data, list):
+                            for item in data:
+                                node = item.get("node")
+                                if not node:
+                                    continue
+                                name = node.get("name")
+                                kind = node.get("kind")
+                                file_path = node.get("filePath")
+                                start_line = node.get("startLine")
+                                if name and file_path and start_line is not None:
+                                    symbols_list.append({
+                                        "name": str(name),
+                                        "kind": str(kind or "unknown"),
+                                        "path": str(file_path),
+                                        "line": int(start_line)
+                                    })
+                                if len(symbols_list) >= 20:
+                                    break
+                    except Exception:
+                        pass
+                return self._send(200, json.dumps({"symbols": symbols_list, "status": "ready"}))
+            except Exception as e:
+                return self._send(200, json.dumps({"symbols": [], "error": str(e), "status": cg_status}))
         if u.path == "/api/workspace":
             repo = _cfg.repo
             is_git = False
@@ -2111,39 +2166,98 @@ class Handler(BaseHTTPRequestHandler):
             from .sessions import derive_title
             _sessions.set_title_if_default(_sessions.active, derive_title(message))
 
-        # Resolve @-file mentions in message
-        resolved_context = []
+        # Resolve @-file and @symbol mentions in message
+        resolved_files = []
+        resolved_symbols = []
         total_size = 0
         repo = _cfg.repo
         if repo and os.path.isdir(repo) and message:
             import re
-            tokens = re.findall(r'@([a-zA-Z0-9_\-\.\/]+)', message)
+            tokens = re.findall(r'@([a-zA-Z0-9_\-\.\/:]+)', message)
             seen_tokens = set()
             for token in tokens:
                 if token in seen_tokens:
                     continue
                 seen_tokens.add(token)
                 
-                full_path = os.path.abspath(os.path.join(repo, token))
-                repo_real = os.path.realpath(repo)
-                full_real = os.path.realpath(full_path)
+                is_symbol_prefix = token.startswith("symbol:")
+                symbol_name = token[7:] if is_symbol_prefix else token
                 
-                try:
-                    common = os.path.commonpath([repo_real, full_real])
-                    if common == repo_real and os.path.isfile(full_real):
-                        size = os.path.getsize(full_real)
+                is_file = False
+                file_to_read = None
+                if not is_symbol_prefix:
+                    full_path = os.path.abspath(os.path.join(repo, token))
+                    repo_real = os.path.realpath(repo)
+                    full_real = os.path.realpath(full_path)
+                    try:
+                        common = os.path.commonpath([repo_real, full_real])
+                        if common == repo_real and os.path.isfile(full_real):
+                            is_file = True
+                            file_to_read = full_real
+                    except Exception:
+                        pass
+                
+                if is_file and file_to_read:
+                    try:
+                        size = os.path.getsize(file_to_read)
                         read_size = min(size, 50 * 1024)
                         if total_size + read_size <= 150 * 1024:
-                            with open(full_real, 'r', encoding='utf-8', errors='replace') as f:
+                            with open(file_to_read, 'r', encoding='utf-8', errors='replace') as f:
                                 content = f.read(read_size)
-                            resolved_context.append(f"--- File: {token} ---\n{content}\n")
+                            resolved_files.append(f"--- File: {token} ---\n{content}\n")
                             total_size += len(content.encode('utf-8'))
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        import puppetmaster.codegraph as cg
+                        if cg.codegraph_available() and cg.codegraph_ready(repo):
+                            res = cg.codegraph_query(search=symbol_name, cwd=repo, limit=1)
+                            if res.get("ok") and res.get("stdout"):
+                                data = json.loads(res["stdout"])
+                                if isinstance(data, list) and len(data) > 0:
+                                    node = data[0].get("node")
+                                    if node:
+                                        file_path = node.get("filePath")
+                                        start_line = node.get("startLine")
+                                        end_line = node.get("endLine")
+                                        name = node.get("name")
+                                        
+                                        if file_path and start_line is not None:
+                                            sym_full_path = os.path.abspath(os.path.join(repo, file_path))
+                                            repo_real = os.path.realpath(repo)
+                                            sym_full_real = os.path.realpath(sym_full_path)
+                                            common = os.path.commonpath([repo_real, sym_full_real])
+                                            if common == repo_real and os.path.isfile(sym_full_real):
+                                                with open(sym_full_real, 'r', encoding='utf-8', errors='replace') as f:
+                                                    lines = f.readlines()
+                                                
+                                                start_idx = max(0, int(start_line) - 1)
+                                                if end_line is not None:
+                                                    end_idx = min(len(lines), int(end_line))
+                                                else:
+                                                    end_idx = min(len(lines), start_idx + 60)
+                                                
+                                                snippet_lines = lines[start_idx:end_idx]
+                                                snippet = "".join(snippet_lines)
+                                                if len(snippet.encode('utf-8')) > 8 * 1024:
+                                                    snippet = snippet.encode('utf-8')[:8 * 1024].decode('utf-8', errors='ignore')
+                                                
+                                                read_size = len(snippet.encode('utf-8'))
+                                                if total_size + read_size <= 150 * 1024:
+                                                    resolved_symbols.append(f"--- Symbol: {name} ({file_path}:{start_line}) ---\n{snippet}\n")
+                                                    total_size += read_size
+                    except Exception:
+                        pass
             
-            if resolved_context:
-                context_block = "Referenced files:\n" + "\n".join(resolved_context) + "\n"
-                message = context_block + message
+            context_blocks = []
+            if resolved_files:
+                context_blocks.append("Referenced files:\n" + "\n".join(resolved_files))
+            if resolved_symbols:
+                context_blocks.append("Referenced symbols:\n" + "\n".join(resolved_symbols))
+            
+            if context_blocks:
+                message = "\n\n".join(context_blocks) + "\n\n" + message
  
         pre = _pilot_preflight()
         if pre:

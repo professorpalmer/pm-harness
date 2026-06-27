@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, ChevronUp, GripVertical, Trash2, GitBranch, ListChecks, Play, Copy, Check, Pencil, RefreshCw, FileText, History, X } from "lucide-react";
+import { ChevronRight, Loader2, Send, Zap, Square, Folder, ChevronDown, ChevronUp, GripVertical, Trash2, GitBranch, ListChecks, Play, Copy, Check, Pencil, RefreshCw, FileText, History, X, Code } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -229,6 +229,8 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   const [mentionIndex, setMentionIndex] = useState<number>(-1);
   const [filteredFiles, setFilteredFiles] = useState<string[]>([]);
   const [selectedFileIndex, setSelectedFileIndex] = useState<number>(0);
+  const [symbolResults, setSymbolResults] = useState<{ name: string; kind: string; path: string; line: number }[]>([]);
+  const [codegraphStatus, setCodegraphStatus] = useState<string | null>(null);
 
   const [slashSearch, setSlashSearch] = useState<string | null>(null);
   const [selectedSlashIndex, setSelectedSlashIndex] = useState<number>(0);
@@ -500,6 +502,39 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     }
   }, [mentionSearch, allFiles]);
 
+  // Fetch symbol suggestions with debounce to avoid hammering
+  useEffect(() => {
+    if (mentionSearch !== null && mentionSearch.trim().length >= 1) {
+      const delayDebounceFn = setTimeout(() => {
+        api.searchSymbols(mentionSearch)
+          .then((res) => {
+            if (res) {
+              setSymbolResults(res.symbols || []);
+              if (res.status) {
+                setCodegraphStatus(res.status);
+              }
+            }
+          })
+          .catch((err) => {
+            console.error("Failed to search symbols:", err);
+            setSymbolResults([]);
+          });
+      }, 150);
+
+      return () => clearTimeout(delayDebounceFn);
+    } else {
+      setSymbolResults([]);
+    }
+  }, [mentionSearch]);
+
+  // Keep selectedFileIndex bounded within combined total mentions count
+  useEffect(() => {
+    const total = filteredFiles.length + symbolResults.length;
+    if (selectedFileIndex >= total && total > 0) {
+      setSelectedFileIndex(total - 1);
+    }
+  }, [filteredFiles, symbolResults, selectedFileIndex]);
+
   const insertMention = (fileName: string) => {
     if (mentionIndex === -1) return;
     const before = input.slice(0, mentionIndex);
@@ -513,6 +548,24 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
       if (taRef.current) {
         taRef.current.focus();
         const cursorPosition = mentionIndex + fileName.length + 2; // +1 for @, +1 for space
+        taRef.current.setSelectionRange(cursorPosition, cursorPosition);
+      }
+    }, 10);
+  };
+
+  const insertSymbol = (symbolName: string) => {
+    if (mentionIndex === -1) return;
+    const before = input.slice(0, mentionIndex);
+    const after = input.slice(taRef.current?.selectionStart || mentionIndex);
+    const completed = before + "@symbol:" + symbolName + " " + after;
+    setInput(completed);
+    setMentionSearch(null);
+    setMentionIndex(-1);
+    
+    setTimeout(() => {
+      if (taRef.current) {
+        taRef.current.focus();
+        const cursorPosition = mentionIndex + symbolName.length + 9; // +1 for @, +7 for symbol:, +1 for space
         taRef.current.setSelectionRange(cursorPosition, cursorPosition);
       }
     }, 10);
@@ -666,19 +719,27 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
       }
     }
 
-    if (mentionSearch !== null && filteredFiles.length > 0) {
+    const totalMentions = filteredFiles.length + symbolResults.length;
+    if (mentionSearch !== null && totalMentions > 0) {
       if (e.key === "ArrowDown") {
-        setSelectedFileIndex((prev) => (prev + 1) % filteredFiles.length);
+        setSelectedFileIndex((prev) => (prev + 1) % totalMentions);
         e.preventDefault();
         return;
       }
       if (e.key === "ArrowUp") {
-        setSelectedFileIndex((prev) => (prev - 1 + filteredFiles.length) % filteredFiles.length);
+        setSelectedFileIndex((prev) => (prev - 1 + totalMentions) % totalMentions);
         e.preventDefault();
         return;
       }
       if (e.key === "Enter") {
-        insertMention(filteredFiles[selectedFileIndex]);
+        if (selectedFileIndex < filteredFiles.length) {
+          insertMention(filteredFiles[selectedFileIndex]);
+        } else {
+          const symIdx = selectedFileIndex - filteredFiles.length;
+          if (symbolResults[symIdx]) {
+            insertSymbol(symbolResults[symIdx].name);
+          }
+        }
         e.preventDefault();
         return;
       }
@@ -1554,27 +1615,73 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
             )}
 
             {/* Mention autocomplete dropdown */}
-            {mentionSearch !== null && filteredFiles.length > 0 && (
-              <div className="absolute left-2 bottom-full mb-1.5 z-50 max-h-[220px] w-[320px] overflow-y-auto bg-panel border border-edge rounded-xl shadow-2xl py-1">
-                <div className="px-2.5 py-1 text-[10px] uppercase font-bold tracking-wider text-faint border-b border-edge/30 select-none">
-                  Files
-                </div>
-                {filteredFiles.map((file, idx) => {
-                  const isSelected = idx === selectedFileIndex;
-                  return (
-                    <div
-                      key={file}
-                      onClick={() => insertMention(file)}
-                      onMouseEnter={() => setSelectedFileIndex(idx)}
-                      className={`flex items-center gap-2 px-3 py-1.5 text-[11.5px] cursor-pointer transition select-none ${
-                        isSelected ? "bg-panel2 text-accent font-medium" : "text-txt/90 hover:bg-panel2/50"
-                      }`}
-                    >
-                      <FileText size={11.5} className="shrink-0 opacity-60" />
-                      <span className="truncate flex-1 font-mono">{file}</span>
+            {mentionSearch !== null && (filteredFiles.length > 0 || symbolResults.length > 0) && (
+              <div className="absolute left-2 bottom-full mb-1.5 z-50 max-h-[250px] w-[340px] overflow-y-auto bg-panel border border-edge rounded-xl shadow-2xl py-1">
+                {filteredFiles.length > 0 && (
+                  <>
+                    <div className="px-2.5 py-1 text-[10px] uppercase font-bold tracking-wider text-faint border-b border-edge/30 select-none">
+                      Files
                     </div>
-                  );
-                })}
+                    {filteredFiles.map((file, idx) => {
+                      const isSelected = idx === selectedFileIndex;
+                      return (
+                        <div
+                          key={file}
+                          onClick={() => insertMention(file)}
+                          onMouseEnter={() => setSelectedFileIndex(idx)}
+                          className={`flex items-center gap-2 px-3 py-1.5 text-[11.5px] cursor-pointer transition select-none ${
+                            isSelected ? "bg-panel2 text-accent font-medium" : "text-txt/90 hover:bg-panel2/50"
+                          }`}
+                        >
+                          <FileText size={11.5} className="shrink-0 opacity-60" />
+                          <span className="truncate flex-1 font-mono">{file}</span>
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+
+                {symbolResults.length > 0 && (
+                  <>
+                    <div className="px-2.5 py-1 text-[10px] uppercase font-bold tracking-wider text-faint border-b border-edge/30 mt-1 select-none flex items-center justify-between">
+                      <span>Symbols</span>
+                      {codegraphStatus === "indexing" && (
+                        <span className="text-[9px] text-muted normal-case font-normal animate-pulse">indexing...</span>
+                      )}
+                    </div>
+                    {symbolResults.map((sym, idx) => {
+                      const globalIdx = filteredFiles.length + idx;
+                      const isSelected = globalIdx === selectedFileIndex;
+                      return (
+                        <div
+                          key={`${sym.path}:${sym.line}:${sym.name}`}
+                          onClick={() => insertSymbol(sym.name)}
+                          onMouseEnter={() => setSelectedFileIndex(globalIdx)}
+                          className={`flex flex-col gap-0.5 px-3 py-1.5 text-[11.5px] cursor-pointer transition select-none ${
+                            isSelected ? "bg-panel2 text-accent" : "text-txt/90 hover:bg-panel2/50"
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <Code size={11.5} className="shrink-0 opacity-60" />
+                            <span className="font-mono font-medium truncate flex-1 text-left">{sym.name}</span>
+                            <span className="text-[9px] font-mono px-1 py-0.2 bg-edge/30 rounded text-muted shrink-0 lowercase">
+                              {sym.kind}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-muted font-mono truncate pl-5 text-left">
+                            {sym.path}:{sym.line}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+
+                {filteredFiles.length > 0 && symbolResults.length === 0 && codegraphStatus === "indexing" && (
+                  <div className="px-3 py-1 text-[10px] text-muted/60 select-none italic text-right">
+                    symbols indexing...
+                  </div>
+                )}
               </div>
             )}
 

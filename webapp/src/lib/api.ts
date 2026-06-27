@@ -317,6 +317,7 @@ export const api = {
   openWorkspace: (path: string) => postJSON<{ ok: boolean; repo: string; branch: string; is_git: boolean; codegraph: "indexing" | "ready" | "unsupported" }>("/api/workspace/open", { path }),
   getWorkspace: () => getJSON<{ repo: string; branch: string; is_git: boolean; codegraph_status: string; recents?: string[] }>("/api/workspace"),
   getWorkspaceFiles: () => getJSON<{ files: string[] }>(withToken("/api/workspace/files")),
+  searchSymbols: (q: string) => getJSON<{ symbols: { name: string; kind: string; path: string; line: number }[]; status?: string }>(withToken("/api/workspace/symbols?q=" + encodeURIComponent(q))),
   readFile: (path: string) => getJSON<{ ok: boolean; path: string; content: string; truncated: boolean; error?: string; binary?: boolean }>("/api/file/read?path=" + encodeURIComponent(path)),
   writeFile: (path: string, content: string) => postJSON<{ ok: boolean; bytes?: number; error?: string }>("/api/file/write", { path, content }),
   inlineEdit: (path: string, selection: string, instruction: string, prefix: string, suffix: string, language: string) => postJSON<{ ok: boolean; edit?: string; error?: string }>("/api/inline-edit", { path, selection, instruction, prefix, suffix, language }),
