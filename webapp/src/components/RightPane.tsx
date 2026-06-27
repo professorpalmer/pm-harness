@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment } from "react";
-import { Database, Globe, FolderTree, GitBranch, GitFork, Plug, Settings, SquareTerminal, Columns, Rows, Split, X, History, GitPullRequest } from "lucide-react";
+import { Database, Globe, FolderTree, GitBranch, GitFork, Plug, Settings, SquareTerminal, Columns, Rows, Split, X, History, GitPullRequest, Network } from "lucide-react";
 import StatePane from "./StatePane";
 import BrowserPane from "./BrowserPane";
 import FileTree from "./FileTree";
@@ -10,9 +10,10 @@ import SettingsPane from "./SettingsPane";
 import TerminalPane from "./TerminalPane";
 import CheckpointsPane from "./CheckpointsPane";
 import DiffReviewPane from "./DiffReviewPane";
+import SwarmPane from "./SwarmPane";
 import { api, type PendingReview } from "../lib/api";
 
-type Tab = "state" | "files" | "git" | "worktrees" | "terminal" | "browser" | "mcp" | "settings" | "checkpoints" | "review";
+type Tab = "state" | "files" | "git" | "worktrees" | "terminal" | "browser" | "mcp" | "settings" | "checkpoints" | "review" | "swarm";
 
 const TAB_CONFIG: Record<Tab, { label: string; icon: React.ReactNode }> = {
   state: { label: "State", icon: <Database size={12} /> },
@@ -25,6 +26,7 @@ const TAB_CONFIG: Record<Tab, { label: string; icon: React.ReactNode }> = {
   settings: { label: "Settings", icon: <Settings size={12} /> },
   checkpoints: { label: "History", icon: <History size={12} /> },
   review: { label: "Review", icon: <GitPullRequest size={12} /> },
+  swarm: { label: "Swarm", icon: <Network size={12} /> },
 };
 
 // Visual grouping for the tab bar: Workspace | Changes | Tools, with Settings pinned last.
@@ -33,7 +35,7 @@ const TAB_CONFIG: Record<Tab, { label: string; icon: React.ReactNode }> = {
 const TAB_GROUPS: { group: string; tabs: Tab[] }[] = [
   { group: "workspace", tabs: ["state", "files", "git", "worktrees", "terminal"] },
   { group: "changes", tabs: ["review", "checkpoints"] },
-  { group: "tools", tabs: ["browser", "mcp"] },
+  { group: "tools", tabs: ["browser", "mcp", "swarm"] },
 ];
 // Settings is intentionally separated and rendered last (after a flex spacer).
 const PINNED_LAST: Tab = "settings";
@@ -118,7 +120,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        const validTabs: Tab[] = ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings", "checkpoints", "review"];
+        const validTabs: Tab[] = ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings", "checkpoints", "review", "swarm"];
         const primaryTab = validTabs.includes(parsed.primaryTab) ? parsed.primaryTab : "state";
         const secondaryTab = validTabs.includes(parsed.secondaryTab) ? parsed.secondaryTab : "terminal";
         return {
@@ -172,7 +174,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
     const onFocusTab = (e: any) => {
       if (e?.detail) {
         const targetTab = e.detail as Tab;
-        const validTabs: Tab[] = ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings"];
+        const validTabs: Tab[] = ["state", "files", "git", "worktrees", "terminal", "browser", "mcp", "settings", "swarm"];
         if (validTabs.includes(targetTab)) {
           updateSplitState({ primaryTab: targetTab });
         }
@@ -256,6 +258,8 @@ export default function RightPane({ artifacts, onOpenWizard }: {
         return <SettingsPane onOpenWizard={onOpenWizard} />;
       case "checkpoints":
         return <CheckpointsPane />;
+      case "swarm":
+        return <SwarmPane />;
       case "review":
         return <DiffReviewPane reviews={reviews} onRefresh={fetchReviews} />;
       default:

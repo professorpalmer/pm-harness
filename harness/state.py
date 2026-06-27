@@ -20,12 +20,38 @@ class DurableState:
         out = []
         for j in jobs:
             arts = self.store.count_artifacts(j.id)
+            role = ""
+            adapter = ""
+            task_count = 0
+            try:
+                tasks = self.store.list_tasks(j.id)
+                task_count = len(tasks)
+                if tasks:
+                    for t in tasks:
+                        if getattr(t, "role", ""):
+                            role = t.role
+                            break
+                    if not role:
+                        role = getattr(tasks[0], "role", "")
+                    for t in tasks:
+                        if getattr(t, "adapter", ""):
+                            adapter = t.adapter
+                            break
+                    if not adapter:
+                        adapter = getattr(tasks[0], "adapter", "")
+            except Exception:
+                pass
+            role = getattr(j, "role", None) or role
+            adapter = getattr(j, "adapter", None) or adapter
             out.append({
                 "id": j.id,
                 "goal": getattr(j, "goal", ""),
                 "status": str(getattr(j, "status", "")),
                 "artifacts": arts,
                 "created_at": getattr(j, "created_at", None),
+                "role": role,
+                "adapter": adapter,
+                "task_count": task_count,
             })
         return out
 
@@ -42,6 +68,11 @@ class DurableState:
                 "headline": str(headline)[:300],
                 "confidence": getattr(a, "confidence", None),
                 "created_by": getattr(a, "created_by", ""),
+                "model": payload.get("model") or payload.get("model_chosen") or payload.get("driver"),
+                "est_cost_usd": payload.get("estimated_cost_usd") or payload.get("nominal_cost_usd"),
+                "role": payload.get("role") or payload.get("worker_role"),
+                "rejected": payload.get("rejected"),
+                "detail": payload.get("reason") or payload.get("detail"),
             })
         return out
 

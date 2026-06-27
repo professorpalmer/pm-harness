@@ -41,8 +41,47 @@ export type PendingReview = {
   files: PendingReviewFile[];
   created_at: number;
 };
-export type Job = { id: string; goal: string; status: string };
-export type Artifact = { type: string; headline: string; confidence?: number };
+export type Task = {
+  id: string;
+  role: string;
+  instruction: string;
+  status: string;
+  adapter: string;
+  completed_at?: string | null;
+};
+export type Job = {
+  id: string;
+  goal: string;
+  status: string;
+  role?: string;
+  adapter?: string;
+  created_at?: string | null;
+  tokens?: number;
+  est_cost_usd?: number;
+  task_count?: number;
+  tasks?: Task[];
+  artifacts?: Artifact[];
+};
+export type Artifact = {
+  id?: string;
+  type: string;
+  headline: string;
+  confidence?: number;
+  created_by?: string;
+  model?: string;
+  est_cost_usd?: number;
+  role?: string;
+  rejected?: { model: string; reason: string }[];
+  detail?: any;
+};
+export type SwarmLive = {
+  session: {
+    tokens_used: number;
+    est_cost_usd: number;
+    driver?: string;
+  };
+  jobs: Job[];
+};
 export type Workspace = { name: string; branch: string; active: boolean; dirty?: boolean };
 export type Session = { id: string; title: string; created: number; active?: boolean; archived?: boolean; repo?: string; branch?: string };
 
@@ -247,6 +286,7 @@ export const api = {
   settings: () => getJSON<Settings>("/api/settings"),
   updateSettings: (partial: Partial<Settings> & { api_key?: string; clear_api_key?: boolean }) => postJSON<Settings>("/api/settings", partial),
   jobs: () => getJSON<Job[]>("/api/jobs"),
+  swarmLive: () => getJSON<SwarmLive>(withToken("/api/swarm/live")),
   artifacts: (jobId: string) => getJSON<Artifact[]>(`/api/artifacts?job_id=${encodeURIComponent(jobId)}`),
   workspaces: () => getJSON<Workspace[]>("/api/workspaces"),
   switchWorkspace: (name: string) => postJSON("/api/workspaces/switch", { name }),
