@@ -135,7 +135,7 @@ def test_auto_distill_on_completion(tmp_path, monkeypatch):
 
 
 def test_auto_no_distill_when_disabled(tmp_path, monkeypatch):
-    monkeypatch.delenv("HARNESS_AUTO_DISTILL", raising=False)
+    monkeypatch.setenv("HARNESS_AUTO_DISTILL", "false")
     cfg = HarnessConfig(driver="stub-oracle-v2", state_dir=str(tmp_path))
     s = ConversationalSession(cfg)
     s.pilot = _DonePilot()

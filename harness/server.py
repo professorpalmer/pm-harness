@@ -1349,7 +1349,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps([
                 {"slug": sk.slug, "name": sk.name, "description": sk.description,
                  "state": sk.state, "source": sk.source, "used_count": sk.used_count,
-                 "body": sk.body}
+                 "body": sk.body, "supersedes": getattr(sk, "supersedes", "")}
                 for sk in _skills.list()]))
         if u.path == "/api/rules":
             return self._send(200, json.dumps([

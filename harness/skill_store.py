@@ -41,9 +41,12 @@ class Skill:
     created_at: float = field(default_factory=time.time)
     used_count: int = 0
     last_used: float = 0.0
+    supersedes: str = ""
 
     @property
     def slug(self) -> str:
+        if getattr(self, "supersedes", ""):
+            return f"{self.supersedes}-patch"
         return _slug(self.name)
 
     def to_markdown(self) -> str:
@@ -56,9 +59,13 @@ class Skill:
             f"created_at: {self.created_at:.0f}",
             f"used_count: {self.used_count}",
             f"last_used: {self.last_used:.0f}",
+        ]
+        if getattr(self, "supersedes", ""):
+            fm.append(f"supersedes: {self.supersedes}")
+        fm.extend([
             "---",
             "",
-        ]
+        ])
         return "\n".join(fm) + self.body.strip() + "\n"
 
 
@@ -96,6 +103,7 @@ def _parse(text: str) -> Skill:
         created_at=_f("created_at", time.time()),
         used_count=_i("used_count", 0),
         last_used=_f("last_used", 0.0),
+        supersedes=meta.get("supersedes", ""),
     )
 
 
@@ -154,9 +162,39 @@ class SkillStore:
         sk = self.get(slug)
         if not sk:
             return None
+
+        if state == "active" and getattr(sk, "supersedes", ""):
+            orig_slug = sk.supersedes
+            orig_sk = self.get(orig_slug)
+            if orig_sk:
+                orig_sk.body = sk.body
+                orig_sk.description = sk.description
+                orig_sk.name = sk.name
+                orig_sk.source = sk.source
+                self.save(orig_sk)
+                p_patch = self._find(slug)
+                if p_patch:
+                    p_patch.unlink()
+                return orig_sk
+
         sk.state = state
         self.save(sk)
         return sk
+
+    def propose_update(self, slug: str, new_body: str, new_name: str = "", new_description: str = "", source: str = "") -> Skill:
+        existing = self.get(slug)
+        if not existing:
+            raise ValueError(f"Skill not found: {slug}")
+        patch_skill = Skill(
+            name=new_name or existing.name,
+            description=new_description or existing.description,
+            body=new_body,
+            state="pending",
+            source=source or existing.source,
+            supersedes=slug
+        )
+        self.save(patch_skill)
+        return patch_skill
 
     def mark_used(self, slug: str) -> None:
         sk = self.get(slug)

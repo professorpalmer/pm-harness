@@ -111,18 +111,23 @@ def _parse_envelope(text: str) -> Optional[Candidate]:
 
 
 def distill_session(pilot, objective: str, findings: List[dict],
-                    store: SkillStore, source: str = "distilled:session") -> dict:
+                    store: SkillStore, source: str = "distilled:session",
+                    extra_context: str = "") -> dict:
     """Propose a PENDING candidate skill from a finished investigation.
 
-    Returns a status dict: {status: skipped|duplicate|proposed, slug?, reason?}.
+    Returns a status dict: {status: skipped|duplicate|proposed|patch_proposed, slug?, reason?}.
     `pilot` is any object with .complete(prompt, system=...) -> obj with .text.
     """
-    if len([f for f in findings if f.get("type") != "verification"]) < MIN_FINDINGS:
-        return {"status": "skipped", "reason": "insufficient findings"}
+    non_verification_findings = [f for f in findings if f.get("type") != "verification"]
+    if len(non_verification_findings) < MIN_FINDINGS:
+        if not extra_context:
+            return {"status": "skipped", "reason": "insufficient findings"}
+        digest = extra_context
+    else:
+        digest = "\n".join(
+            f"- [{f.get('type','finding')}] {f.get('headline','')}"
+            for f in non_verification_findings)
 
-    digest = "\n".join(
-        f"- [{f.get('type','finding')}] {f.get('headline','')}"
-        for f in findings if f.get("type") != "verification")
     prompt = (f"Objective: {objective}\n\nWhat was learned (findings/decisions):\n"
               f"{digest}\n\nDistill the reusable skill now.")
 
@@ -133,6 +138,32 @@ def distill_session(pilot, objective: str, findings: List[dict],
 
     dup = _is_duplicate(cand, store)
     if dup:
+        existing = store.get(dup)
+        if existing:
+            merge_prompt = (
+                f"We have an existing skill:\n"
+                f"Name: {existing.name}\n"
+                f"Description: {existing.description}\n"
+                f"Body:\n{existing.body}\n\n"
+                f"And a new candidate procedure from a recent session:\n"
+                f"Name: {cand.name}\n"
+                f"Description: {cand.description}\n"
+                f"Body:\n{cand.body}\n\n"
+                f"Please merge these two into a single updated, complete, and cohesive skill procedure. "
+                f"Preserve all useful instructions from both. Output ONE JSON object only, matching the original format:\n"
+                f'{{"name": "<imperative title>", "description": "<one line>", "body": "<merged numbered steps>"}}'
+            )
+            merge_resp = pilot.complete(merge_prompt, system=DISTILL_SYSTEM)
+            merged_cand = _parse_envelope(getattr(merge_resp, "text", "") or "")
+            if merged_cand and merged_cand.body.strip() != existing.body.strip():
+                patch_skill = store.propose_update(
+                    slug=dup,
+                    new_body=merged_cand.body,
+                    new_name=merged_cand.name,
+                    new_description=merged_cand.description,
+                    source=source
+                )
+                return {"status": "patch_proposed", "slug": patch_skill.slug, "supersedes": dup, "name": patch_skill.name}
         return {"status": "duplicate", "slug": dup}
 
     skill = Skill(name=cand.name, description=cand.description, body=cand.body,
@@ -156,15 +187,31 @@ RULES_SYSTEM = (
 
 
 def distill_rules(pilot, objective: str, findings: List[dict],
-                  store: "RuleStore", source: str = "distilled:session") -> dict:
+                  store: "RuleStore", source: str = "distilled:session",
+                  corrections: Optional[List[str]] = None) -> dict:
     """Propose PENDING candidate rules from a finished session. Returns
     {status, proposed: [slugs], duplicates: [slugs]}."""
-    if not findings:
-        return {"status": "skipped", "reason": "no findings"}
-    digest = "\n".join(f"- {f.get('headline','')}" for f in findings
-                       if f.get("type") != "verification")
-    if not digest.strip():
+    if corrections is None:
+        corrections = []
+
+    findings_digest = "\n".join(f"- {f.get('headline','')}" for f in findings
+                                if f.get("type") != "verification")
+
+    corrections_digest = ""
+    if corrections:
+        corrections_digest = "User Corrections/Feedback:\n" + "\n".join(f"- {c}" for c in corrections)
+
+    if not findings_digest.strip() and not corrections_digest.strip():
         return {"status": "skipped", "reason": "no signal"}
+
+    digest_parts = []
+    if findings_digest.strip():
+        digest_parts.append(findings_digest)
+    if corrections_digest.strip():
+        digest_parts.append(corrections_digest)
+
+    digest = "\n\n".join(digest_parts)
+
     prompt = (f"Objective: {objective}\n\nWhat happened:\n{digest}\n\n"
               f"Extract standing conventions now.")
     resp = pilot.complete(prompt, system=RULES_SYSTEM)

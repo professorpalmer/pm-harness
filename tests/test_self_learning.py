@@ -61,7 +61,7 @@ def test_distill_skips_no_lesson(tmp_path):
 
 def test_distill_dedup(tmp_path):
     s = SkillStore(root=str(tmp_path))
-    s.save(Skill(name="Trace SSE streaming bug", description="when SSE hangs in browser", state="active"))
+    s.save(Skill(name="Trace SSE streaming bug", description="when SSE hangs in browser", body="steps", state="active"))
     pilot = _Pilot('{"name":"Trace SSE bug","description":"when SSE hangs","body":"steps"}')
     findings = [{"type": "finding", "headline": "a"}, {"type": "finding", "headline": "b"}]
     r = distill_session(pilot, "obj", findings, s)

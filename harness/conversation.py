@@ -264,8 +264,24 @@ class ConversationalSession:
         # so run_auto halts promptly instead of burning budget for a gone client.
         self._cancel = threading.Event()
         # auto-distill: when on, run_auto proposes PENDING skill/rule candidates on
-        # completion (still human-gated for approval). Off by default.
-        self._auto_distill = os.environ.get("HARNESS_AUTO_DISTILL", "").strip() in ("1", "true", "yes")
+        # completion (still human-gated for approval). On by default.
+        env_val = os.environ.get("HARNESS_AUTO_DISTILL", "").strip().lower()
+        if env_val:
+            self._auto_distill = env_val not in ("0", "false", "no")
+        else:
+            self._auto_distill = True
+
+        # Track tool calls and error recovery for hard task trigger
+        self._total_tool_calls = 0
+        self._error_then_recovery_seen = False
+        self._has_tool_failure = False
+        self._turn_count = 0
+        self._corrections = []
+
+        # High-water marks to avoid duplicate auto-distill on the same signal
+        self._distilled_findings_hwm = 0
+        self._distilled_turns_hwm = 0
+        self._distilled_corrections_hwm = 0
         # diff review: opt-in mode to hold agent edits for approval
         self._review_edits_before_apply = os.environ.get("HARNESS_REVIEW_EDITS_BEFORE_APPLY", "").strip() in ("1", "true", "yes")
         self._pending_reviews = {}
@@ -1029,12 +1045,27 @@ class ConversationalSession:
             else:
                 self._history.append({"role": "user", "content": marker_text})
 
+    def _is_correction(self, text: str) -> bool:
+        t = text.lower()
+        patterns = ["no,", "don't", "dont", "stop", "actually", "wrong", "not like that", "should be", "instead"]
+        for p in patterns:
+            if p in t:
+                return True
+        if getattr(self, "_total_tool_calls", 0) > 0:
+            action_patterns = ["fix", "correct", "incorrect", "error", "failed", "bug", "mistake", "change"]
+            for ap in action_patterns:
+                if ap in t:
+                    return True
+        return False
+
     def send(self, user_message: str, images: Optional[list] = None, plan: bool = False) -> Iterator[ConvEvent]:
         """Process one user message: drive the pilot loop until it yields back."""
         self._cancel.clear()
         if not self._busy.acquire(blocking=False):
             yield ConvEvent("error", {"error": "session busy: another request is in flight"})
             return
+        if self._is_correction(user_message):
+            self._corrections.append(user_message)
         original_sys = self._history[0]["content"]
         if plan:
             from .pilot import PILOT_SYSTEM, PLAN_SYSTEM_SUFFIX
@@ -1044,6 +1075,7 @@ class ConversationalSession:
             action_starts = {}
             for ev in self._send_locked(user_message, images=images, plan=plan):
                 if ev.kind == "action_start":
+                    self._total_tool_calls += 1
                     aid = ev.data.get("id")
                     if aid:
                         action_starts[aid] = time.time()
@@ -1052,6 +1084,18 @@ class ConversationalSession:
                     if aid and aid in action_starts:
                         duration_ms = int((time.time() - action_starts[aid]) * 1000)
                         ev.data["duration_ms"] = duration_ms
+                    if ev.data.get("error"):
+                        self._has_tool_failure = True
+                    else:
+                        if getattr(self, "_has_tool_failure", False):
+                            self._error_then_recovery_seen = True
+                
+                if ev.kind == "assistant_done":
+                    self._turn_count += 1
+                    if self._auto_distill:
+                        d = self._maybe_auto_distill()
+                        if d:
+                            yield ConvEvent("distilled", d)
                 yield ev
         finally:
             self._history[0]["content"] = original_sys
@@ -2995,14 +3039,32 @@ class ConversationalSession:
             pass  # wiki capture is best-effort; never break the conversation
 
 
+    def _build_transcript_digest(self) -> str:
+        lines = []
+        for msg in self.export_display_transcript():
+            role = msg.get("role", "")
+            text = msg.get("text", "")
+            if role and text:
+                lines.append(f"{role.upper()}: {text}")
+        return "\n".join(lines)
+
     def _maybe_auto_distill(self):
-        """If auto-distill is enabled and the run produced findings, propose
+        """If auto-distill is enabled and there is new signal, propose
         PENDING candidates and yield a 'distilled' event. Best-effort."""
         if not self._auto_distill:
             return None
-        real = [f for f in self._session_findings if f.get("type") != "verification"]
-        if len(real) < 2:
+        
+        has_new_findings = len(self._session_findings) > self._distilled_findings_hwm
+        has_new_turns = self._turn_count > self._distilled_turns_hwm
+        has_new_corrections = len(self._corrections) > self._distilled_corrections_hwm
+        
+        if not (has_new_findings or has_new_turns or has_new_corrections):
             return None
+            
+        self._distilled_findings_hwm = len(self._session_findings)
+        self._distilled_turns_hwm = self._turn_count
+        self._distilled_corrections_hwm = len(self._corrections)
+        
         try:
             return self.distill()
         except Exception as e:
@@ -3013,14 +3075,31 @@ class ConversationalSession:
         accumulated findings. Human approval required before either loads into
         context. Returns a combined status dict."""
         out = {}
+        extra_context = ""
+        non_verification_findings = [f for f in self._session_findings if f.get("type") != "verification"]
+        
+        is_hard = (self._total_tool_calls >= 8) or getattr(self, "_error_then_recovery_seen", False)
+        if len(non_verification_findings) < 2 and is_hard:
+            extra_context = self._build_transcript_digest()
+            
         try:
-            out["skill"] = distill_session(self.pilot, self._first_objective or "(session)",
-                                           self._session_findings, self._skills)
+            out["skill"] = distill_session(
+                self.pilot,
+                self._first_objective or "(session)",
+                self._session_findings,
+                self._skills,
+                extra_context=extra_context
+            )
         except Exception as e:
             out["skill"] = {"status": "error", "reason": str(e)}
         try:
-            out["rules"] = distill_rules(self.pilot, self._first_objective or "(session)",
-                                         self._session_findings, self._rules)
+            out["rules"] = distill_rules(
+                self.pilot,
+                self._first_objective or "(session)",
+                self._session_findings,
+                self._rules,
+                corrections=self._corrections
+            )
         except Exception as e:
             out["rules"] = {"status": "error", "reason": str(e)}
         return out
