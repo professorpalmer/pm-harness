@@ -911,15 +911,17 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
       const alreadyHasResult = updated.some(it => it.kind === "swarm_result" && it.job_id === job_id);
       if (alreadyHasResult) return updated;
 
+      const res_obj = d.result || d;
+
       return [
         ...updated,
         {
           kind: "swarm_result" as const,
           job_id: job_id,
-          applied: d.applied,
-          files: d.files || [],
-          summary: d.summary || "",
-          error: d.error || null,
+          applied: res_obj.applied,
+          files: res_obj.files || [],
+          summary: res_obj.summary || "",
+          error: res_obj.error || null,
           objective: finalObjective
         }
       ];
@@ -935,8 +937,39 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
         .then((res) => {
           if (res && res.results && res.results.length > 0) {
             res.results.forEach((evt) => {
-              if (evt.kind === "swarm_result" && evt.data) {
-                handleSwarmResult(evt.data);
+              const anyEvt = evt as any;
+              if (anyEvt.kind === "swarm_result" && anyEvt.data) {
+                handleSwarmResult(anyEvt.data);
+              } else if (anyEvt.kind === "distilled" && anyEvt.data) {
+                const d = anyEvt.data;
+                const parts: string[] = [];
+                if (d.skill && d.skill.status === "proposed") {
+                  const { name } = d.skill;
+                  parts.push(`proposed 1 skill${name ? ` ("${name}")` : ""}`);
+                }
+                if (d.rules) {
+                  const pCount = d.rules.proposed?.length || 0;
+                  if (pCount > 0) {
+                    parts.push(`proposed ${pCount} rule${pCount === 1 ? "" : "s"}`);
+                  }
+                }
+                if (parts.length > 0) {
+                  const notice = `Self-learning: ${parts.join(", ")} - review in Skills tab`;
+                  setDistillNotice(notice);
+                  setTimeout(() => setDistillNotice((cur) => (cur === notice ? null : cur)), 8000);
+                }
+              } else if (anyEvt.kind === "wiki_prepared" && anyEvt.data) {
+                const d = anyEvt.data;
+                const pages = d.pages || [];
+                if (pages.length > 0) {
+                  if (d.auto_ingested) {
+                    setDistillNotice(`Wiki: ${pages.length} page${pages.length === 1 ? "" : "s"} auto-ingested (local orchestration)`);
+                    const notice = `Wiki: ${pages.length} page${pages.length === 1 ? "" : "s"} auto-ingested (local orchestration)`;
+                    setTimeout(() => setDistillNotice((cur) => (cur === notice ? null : cur)), 8000);
+                  } else {
+                    setWikiPrepared({ pages, autoIngested: false });
+                  }
+                }
               }
             });
           }

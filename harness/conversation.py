@@ -1215,21 +1215,32 @@ class ConversationalSession:
                 
                 if ev.kind == "assistant_done":
                     self._turn_count += 1
-                    if self._auto_distill:
-                        d = self._maybe_auto_distill()
-                        if d:
-                            yield ConvEvent("distilled", d)
-                    # Local-model wiki orchestration at the natural checkpoint:
-                    # structure this session's digest into entity/concept/decision
-                    # pages with the cheap pilot, then (default) surface them for
-                    # approval or (opt-in auto) ingest immediately.
-                    if self._wiki_orchestrate:
-                        try:
-                            w = self.prepare_wiki_pages()
-                            if w and w.get("status") == "prepared" and w.get("pages"):
-                                yield ConvEvent("wiki_prepared", w)
-                        except Exception:
-                            pass
+                    if self._auto_mode:
+                        # Full-auto mode: run synchronously to ensure sequential consistency
+                        if self._auto_distill:
+                            d = self._maybe_auto_distill()
+                            if d:
+                                yield ConvEvent("distilled", d)
+                        if self._wiki_orchestrate:
+                            try:
+                                w = self.prepare_wiki_pages()
+                                if w and w.get("status") == "prepared" and w.get("pages"):
+                                    yield ConvEvent("wiki_prepared", w)
+                            except Exception:
+                                pass
+                    else:
+                        # Interactive mode: background the work to keep the UI completely responsive
+                        if self._auto_distill or self._wiki_orchestrate:
+                            future = self._swarm_pool.submit(self._run_distill_and_wiki_background, user_message)
+                            with self._swarm_futures_lock:
+                                self._swarm_futures.add(future)
+                            
+                            def make_cleanup(fut):
+                                def _cleanup(f):
+                                    with self._swarm_futures_lock:
+                                        self._swarm_futures.discard(f)
+                                return _cleanup
+                            future.add_done_callback(make_cleanup(future))
                 yield ev
         finally:
             self._history[0]["content"] = original_sys
@@ -2985,6 +2996,29 @@ class ConversationalSession:
             summary = f"{summary}\n{apply_summary}" if summary else apply_summary
 
         error = f"PATCH DID NOT APPLY: {apply_msg}" if (has_patch_art and not applied and not held_for_review) else None
+        
+        # Check if any preflight or verification task failed before a patch could be generated
+        if not error:
+            blocked_or_failed_verifications = [
+                a for a in artifacts if isinstance(a, dict) and a.get("type") == "verification" and a.get("result") in ("blocked", "failed")
+            ]
+            if blocked_or_failed_verifications:
+                v = blocked_or_failed_verifications[0]
+                v_payload = v.get("payload") or {}
+                fail_type = v_payload.get("failure") or "unknown_failure"
+                fail_msg = v_payload.get("message") or ""
+                if not fail_msg:
+                    raw_err = v_payload.get("stderr") or v_payload.get("stdout") or ""
+                    err_lines = []
+                    for line in raw_err.splitlines():
+                        if any(term in line.lower() for term in ["error", "exception", "unauthorized", "fail", "401", "403", "denied", "invalid"]):
+                            err_lines.append(line.strip())
+                    if err_lines:
+                        fail_msg = " | ".join(err_lines[:3])
+                    else:
+                        fail_msg = raw_err[:200]
+                
+                error = f"{fail_type}: {fail_msg}" if fail_msg else fail_type
 
         return {
             "job_id": job_id,
@@ -3164,6 +3198,42 @@ class ConversationalSession:
                 "state_dir": None
             })
 
+    def _run_distill_and_wiki_background(self, objective: str) -> None:
+        try:
+            # 1. Run auto distill
+            if self._auto_distill:
+                try:
+                    d = self._maybe_auto_distill()
+                    if d:
+                        self._swarm_results.put({
+                            "job_id": f"distill-{self._turn_count}",
+                            "objective": objective,
+                            "result": {
+                                "kind": "distilled",
+                                "data": d
+                            }
+                        })
+                except Exception:
+                    pass
+
+            # 2. Run wiki orchestrate
+            if self._wiki_orchestrate:
+                try:
+                    w = self.prepare_wiki_pages()
+                    if w and w.get("status") == "prepared" and w.get("pages"):
+                        self._swarm_results.put({
+                            "job_id": f"wiki-{self._turn_count}",
+                            "objective": objective,
+                            "result": {
+                                "kind": "wiki_prepared",
+                                "data": w
+                            }
+                        })
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _run_swarm_background(self, job_id: str, objective: str, state_dir: Optional[str] = None) -> None:
         try:
             # CORRECTNESS: Do NOT touch self._history here to maintain single-writer invariant.
@@ -3220,6 +3290,11 @@ class ConversationalSession:
                 job_id = item["job_id"]
                 objective = item["objective"]
                 res_job = item["result"]
+                
+                if isinstance(res_job, dict) and res_job.get("kind") in ("distilled", "wiki_prepared"):
+                    yield ConvEvent(res_job["kind"], res_job["data"])
+                    self._swarm_results.task_done()
+                    continue
                 
                 # Append a labeled follow-up assistant message to self._history (SINGLE-WRITER held via _busy lock!)
                 applied = res_job["applied"]

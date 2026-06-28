@@ -172,9 +172,9 @@ def test_queue_drains_while_swarm_pending(tmp_path):
         
         # Drain results
         drain_events = list(session.drain_swarm_results())
-        assert len(drain_events) == 1
-        assert drain_events[0].kind == "swarm_result"
-        assert drain_events[0].data["job_id"] == "job_123456789012"
+        swarm_results = [e for e in drain_events if e.kind == "swarm_result"]
+        assert len(swarm_results) == 1
+        assert swarm_results[0].data["job_id"] == "job_123456789012"
         
         # Check that history has exactly one follow-up assistant message for the result
         follow_ups = [m for m in session._history if "[swarm result for:" in m.get("content", "")]
