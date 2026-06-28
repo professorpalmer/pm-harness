@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 
 DEFAULT_TIMEOUT = 120
@@ -111,3 +112,93 @@ def classify_command(command: str) -> CommandVerdict:
         if m:
             return CommandVerdict(True, cat, reason, m.group(0)[:80])
     return CommandVerdict(False, "", "", "")
+
+
+def run_cancellable(
+    command: str,
+    *,
+    cwd: str | None = None,
+    timeout: int | None = None,
+    cancel_event=None,
+    poll_interval: float = 0.1,
+):
+    """Run a shell command that can be KILLED mid-flight by a cancel event.
+
+    The stdlib subprocess.run(timeout=...) blocks the calling thread
+    uninterruptibly: a user Stop sets a flag but the process keeps running until
+    it exits or times out. With timeouts now optionally unbounded, that means
+    Stop could not kill a long/infinite command. This runner instead launches the
+    process in its OWN process group and polls cancel_event (and the deadline)
+    while waiting, killing the whole group (so shell=True children die too, not
+    just the parent shell) the moment either fires.
+
+    Returns (output: str, exit_code: int, status: str) where status is one of
+    "ok" | "cancelled" | "timeout" | "error". Never raises.
+    """
+    import signal
+    import time as _time
+
+    start = _time.monotonic()
+    try:
+        # start_new_session=True puts the child in its own process group so we
+        # can signal the entire tree (shell + everything it spawned).
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+    except Exception as e:
+        return (f"Failed to execute command: {e}", -1, "error")
+
+    def _kill_group():
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        # Give it a moment, then SIGKILL anything that ignored SIGTERM.
+        try:
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+    status = "ok"
+    while True:
+        try:
+            proc.wait(timeout=poll_interval)
+            break  # process finished on its own
+        except subprocess.TimeoutExpired:
+            pass
+        if cancel_event is not None and cancel_event.is_set():
+            _kill_group()
+            status = "cancelled"
+            break
+        if timeout is not None and (_time.monotonic() - start) >= timeout:
+            _kill_group()
+            status = "timeout"
+            break
+
+    try:
+        output = proc.stdout.read() if proc.stdout else ""
+    except Exception:
+        output = ""
+    exit_code = proc.returncode if proc.returncode is not None else -1
+    if status == "cancelled":
+        output = (output or "") + "\n\n[interrupted by user]"
+        exit_code = 130  # conventional SIGINT exit code
+    elif status == "timeout":
+        output = (output or "") + f"\n\n[TimeoutExpired after {timeout} seconds]"
+        exit_code = -1
+    return (output, exit_code, status)

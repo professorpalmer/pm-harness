@@ -1840,25 +1840,17 @@ class ConversationalSession:
                             self._append_action_result(act, aid, f"(run_command {aid} {block_msg})", is_native)
                             continue
                     cmd_timeout = resolve_timeout()
-                    try:
-                        p = subprocess.run(
-                            act.command,
-                            shell=True,
-                            cwd=self.config.repo,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT,
-                            text=True,
-                            timeout=cmd_timeout
-                        )
-                        output = p.stdout or ""
-                        exit_code = p.returncode
-                    except subprocess.TimeoutExpired as te:
-                        out_str = te.stdout.decode('utf-8', errors='replace') if isinstance(te.stdout, bytes) else (te.stdout or "")
-                        output = out_str + f"\n\n[TimeoutExpired after {cmd_timeout} seconds]"
-                        exit_code = -1
-                    except Exception as e:
-                        output = f"Failed to execute command: {e}"
-                        exit_code = -1
+                    # Cancellable run: polls self._cancel and kills the whole
+                    # process group on Stop, so a long/unbounded command can
+                    # actually be interrupted (plain subprocess.run blocks the
+                    # thread uninterruptibly -- Stop could not kill it).
+                    from .command_policy import run_cancellable
+                    output, exit_code, _run_status = run_cancellable(
+                        act.command,
+                        cwd=self.config.repo,
+                        timeout=cmd_timeout,
+                        cancel_event=self._cancel,
+                    )
                     MAX_CAP = 50 * 1024
                     if len(output) > MAX_CAP:
                         output = output[:MAX_CAP] + "\n\n... (output truncated to 50KB) ..."
