@@ -1,343 +1,138 @@
-# pm-harness
+# Marionette
 
-Research rig for the question: **which LLMs can drive Puppetmaster as a native
-harness layer?**
+A desktop AI coding harness where the LLM is a **component inside** the kernel,
+not the platform. Marionette drives any model -- frontier or cheap open-weights --
+through a structured pilot loop over [Puppetmaster](https://github.com/professorpalmer/puppetmaster)
+durable state, with CodeGraph-aware retrieval, a portable cross-session knowledge
+wiki, and multi-worker delegation.
 
-This is Stage 2 of the PM-native harness investigation. Stage 1 proved that a
-native driver can call Puppetmaster's orchestration engine in-process (no MCP,
-no CLI subprocess). Stage 2 measures **which models can actually do the
-driving** -- emit valid structured orchestration intents and make the right
-call about when to orchestrate vs. answer vs. stop.
+Internal-first research rig and daily-driver app. stdlib-only backend (urllib +
+sqlite); Puppetmaster is the one real dependency, installed editable from a local
+checkout.
 
-Internal-first. stdlib-only rig (urllib + sqlite); Puppetmaster is the one real
-dependency, installed editable from the local checkout.
+> Status: v0.4.x, deliberately pre-1.0. Vetted privately before any wider release.
 
-## The thesis it tests
+## What it is
 
-A PM-native harness deletes the frontier-model-as-narrator layer. Instead of a
-model narrating "I'll now call puppetmaster_start_swarm" in prose (paying tokens
-to talk), the driver model emits one compact JSON **DriverIntent** and the
-harness executes it in code. The open question is empirical: can cheap
-open-weights models (Kimi, GLM) hit that structured target reliably enough to
-run the loop, and how close do they get to a frontier control?
+Marionette is a three-pane desktop app (Electron + a stdlib Python backend over
+SSE):
 
-## The seam (Stage 1, proven)
+- **Center -- the pilot loop.** A conversational driver: you talk to it, it emits
+  structured tool calls (read, search, edit, run, delegate), and the harness
+  executes them in code. No "I will now call the tool" narrator tax.
+- **Right -- durable state.** Live CodeGraph stats, the portable wiki graph, and
+  the artifact feed from every action and delegated job.
+- **Left -- workspace.** Projects, git branches/worktrees, sessions (auto-named
+  from the first message), and the Puppetmaster job list.
 
-```
-MCP tools   ─┐
-             ├─→  CLI `run`  ─→  Orchestrator(store).run(...)   ← the real engine
-CLI commands ┘                        ↑
-                       pm-harness calls THIS directly
-```
+The thesis: there is no single best model. Hot-swap the driver by task. A cheap
+local model (e.g. qwen3-coder-30b via OpenRouter, cents per session) handles
+inline work; heavier reasoning and multi-file changes delegate to Puppetmaster
+workers the router selects.
 
-`Orchestrator(store).run(goal, roles=, specs=, worker_mode=, on_job_created=)
--> RunResult(job, artifacts, summary, summary_path, rerouted_tasks, mode)`.
-`run()` blocks; live observation uses the store's event layer
-(`read_events_since` / `event_cursor` / `wait_for_events`).
+## Core capabilities
+
+| Capability | What it does |
+|---|---|
+| **Provider-native pilot** | One driver, every OpenAI-compatible endpoint (OpenRouter or native). Frontier control models (Claude, GPT) and open-weights (GLM, DeepSeek, Kimi, Qwen, MiniMax) drive the same loop. |
+| **CodeGraph-first retrieval** | Per-turn structural context is auto-injected (symbols, defs, call sites) before the model acts, so it leans on the graph instead of dumping whole files. Self-healing: the index detects edits, additions, and deletions and refreshes in the background. |
+| **Puppetmaster delegation** | run_swarm (read-only analysis), run_implement (edit-capable worktree worker), run_parallel (concurrent waves). Heavy/multi-file work runs as durable, auditable jobs. |
+| **Portable LLM Wiki** | Cross-session, cross-LLM durable memory. A local model structures a session digest into entity/concept/decision pages (the "backwards" orchestration) cheaply, then ingests them -- human-approved by default. |
+| **Vision on any model** | Paste or drop a screenshot; a VLM sidecar (Gemini, OpenRouter fallback) transcribes it so even a non-vision driver "sees" the image. |
+| **Full-auto mode** | Unattended objective pursuit bounded by an AutoBudget governor (max swarms / tokens / seconds / idle), with a non-bypassable command safety guard. |
+| **Command safety guard** | In full-auto, irreversible/remote/escalating shell commands (recursive deletes, ssh/scp, curl-pipe-to-shell, force-push, sudo, disk writes, key exfil) are screened and blocked; interactive co-working is untouched. Configurable per-command timeout (default 120s; 0/off = unbounded for long sessions). |
 
 ## Architecture
 
+```
+Electron renderer (React, three panes)
+        |  window.harnessIPC  (IPC bridge: getJSON / postJSON / SSE / upload)
+        v
+stdlib Python backend  (harness/server.py)  --  SSE event stream
+        |
+   ConversationalSession  (harness/conversation.py)  -- the pilot loop
+        |                         |                          |
+  structured tools          CodeGraph context         Puppetmaster
+  (read/search/edit/run)    (per-turn, self-heal)     Orchestrator(store).run(...)
+                                                              |
+                                                       durable SwarmStore
+                                                       (jobs, artifacts, events)
+```
+
 | Module | Role |
 |--------|------|
-| `pmharness/intent.py` | `DriverIntent` contract + strict validator + lenient text->JSON parser. The pure layer; no PM dependency. |
-| `pmharness/bridge.py` | Executes a validated `run_swarm` intent against Puppetmaster's in-process Orchestrator (local adapter; deterministic, free). |
-| `pmharness/drivers/` | `Driver` protocol. `StubDriver` (offline oracle / ceiling). `OpenAICompatDriver` (Kimi, GLM, OpenAI -- one driver, every OpenAI-compatible endpoint). |
-| `pmharness/battery.py` | 10 labeled tasks across three buckets: swarm / answer / stop. |
-| `pmharness/scoring.py` | Deterministic, no LLM-as-judge: json_valid, schema_valid, action_correct, executed_ok, composite score. |
+| `harness/conversation.py` | The pilot loop: prose + structured tool calls -> execute -> feed real results back. Yields events for the GUI. |
+| `harness/server.py` | stdlib HTTP server streaming Session events over SSE; CodeGraph status, wiki graph, settings, upload, sessions. |
+| `harness/command_policy.py` | Pure, stdlib-only: timeout resolution + danger classification for the full-auto guard. |
+| `harness/wiki_orchestrator.py` | Local-model structuring of a session digest into wiki pages (PM-free, testable). |
+| `harness/state.py` | DurableState: clean read layer over Puppetmaster's SwarmStore (jobs, artifacts, live events). |
+| `harness/config.py` | Swappable driver, reach, budget. |
+| `webapp/` | Electron app (`electron/` main + preload + IPC bridges) and the React renderer (`src/`). |
+
+## The research rig (heritage)
+
+Marionette grew out of an eval that asked: **which LLMs can drive Puppetmaster as
+a native harness layer?** That rig still lives in `pmharness/` and stays green:
+
+| Module | Role |
+|--------|------|
+| `pmharness/intent.py` | DriverIntent contract + strict validator + lenient text->JSON parser. Pure; no PM dependency. |
+| `pmharness/bridge.py` | Executes a validated intent against Puppetmaster's in-process Orchestrator (local adapter; deterministic, free). |
+| `pmharness/drivers/` | Driver protocol: StubDriver (offline oracle), OpenAICompatDriver, plus Anthropic/Gemini drivers. |
+| `pmharness/scoring.py` | Deterministic, no LLM-as-judge: json_valid, schema_valid, action_correct, executed_ok, composite. |
 | `pmharness/ledger.py` | Append-only SQLite record of every attempt. |
-| `pmharness/runner.py` + `scripts/run_eval.py` | Run the battery per model, persist, print the table. |
 
-## Design decision: driver eval vs. worker eval
-
-The eval grades **driving**, not **working**. Swarm intents execute on
-Puppetmaster's free **local adapter** so ground truth is deterministic and
-key-free. "Is Kimi a good *worker*?" is a separate study (it would route Kimi
-into the swarm itself). Conflating the two would poison the cost thesis, so the
-rig keeps them apart by construction.
-
-## Metrics
-
-- **json_valid** -- driver output parsed to a JSON object at all
-- **schema_valid** -- parsed object is a real `DriverIntent`
-- **action_correct** -- decision matched the task's ground-truth label
-- **executed_ok** -- for swarm cases, Puppetmaster returned >= 1 artifact
-- **score** -- composite 0..1 (schema floor 0.40, decision 0.40, execution 0.20)
-- plus tokens_out and latency per model (the cost-thesis columns)
-
-## Model registry (the research artifact)
-
-`pmharness/catalog.json` is the data-driven list of harness-driver candidates,
-verified on Hugging Face + provider pricing (2026-06-24). Each entry carries
-license and native $/Mtok so the eval reports cost alongside driver score.
-
-| Tier | Models | Why |
-|------|--------|-----|
-| **flagship** | glm-5.2 (MIT), kimi-k2.6, minimax-m2.7, deepseek-v4-pro (MIT) | Can drive the top-level loop |
-| **value** | deepseek-v4-flash (MIT), glm-4.7-flash (MIT), qwen3-coder-30b (Apache-2.0), minimax-m2.5-highspeed | Cheap fodder the PM router sends bulk sub-tasks to |
-| **frontier_control** | gpt, claude | The ceiling the open-weights rows are judged against |
-
-License note: GLM / DeepSeek / Qwen are clean MIT/Apache; Kimi / MiniMax ship
-under `license:other` (provider's own license). Irrelevant to driver scoring,
-but load-bearing for the enterprise self-host pitch.
-
-## Reach: one key vs. native
-
-- **`--reach openrouter`** (default): the entire field through one
-  OpenAI-compatible endpoint with one key (`OPENROUTER_API_KEY`). Best for
-  breadth -- study everyone fast.
-- **`--reach native`**: each provider's own endpoint + key
-  (`ZAI_API_KEY`, `MOONSHOT_API_KEY`, `MINIMAX_API_KEY`, `DEEPSEEK_API_KEY`,
-  `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). Use for finalists where the cost
-  receipt must reflect true native pricing, not OpenRouter markup.
-
-Driver-quality measurement is identical regardless of reach.
+Driver eval grades **driving**, not **working**: swarm intents execute on
+Puppetmaster's free local adapter so ground truth is deterministic and key-free.
 
 ## Run it
 
-```bash
-python -m venv .venv && .venv/bin/pip install -e /path/to/Puppetmaster pytest
-.venv/bin/python -m pytest -q                                 # 29 tests, fully offline
-.venv/bin/python scripts/run_eval.py --drivers stub-oracle    # offline, no keys
-
-# Whole open-weights field through OpenRouter (one key):
-export OPENROUTER_API_KEY=***
-.venv/bin/python scripts/run_eval.py --drivers all --reach openrouter
-
-# Flagship tier on native endpoints (cost-accurate):
-.venv/bin/python scripts/run_eval.py --tier flagship --reach native
-```
-
-## Status
-
-- Stage 1 (seam) proven; Stage 2 rig built and green end-to-end offline (29 tests).
-- `stub-oracle` scores 100% (control ceiling) driving real Puppetmaster.
-- Registry covers 10 current models across 3 tiers; open-weights + frontier rows
-  pending API keys.
-
-
-## The Harness (product scaffold)
-
-Beyond the research rig, `harness/` is the productization: a PM-native harness
-with a Cursor 3.0 / Hermes-style three-pane GUI.
-
-- `harness/session.py` -- the driver loop: prompt -> open-weights driver emits a
-  DriverIntent -> real Puppetmaster Orchestrator executes -> REAL artifacts fed
-  back -> budget-bounded -> terminates. Yields structured events for the GUI.
-- `harness/state.py` -- DurableState: clean read layer over SwarmStore (jobs,
-  artifacts, live event stream). What the right pane renders.
-- `harness/config.py` -- swappable driver (default glm-5.2: MIT, efficient,
-  100% on the discriminating eval), reach, budget.
-- `harness/server.py` + `harness/web/` -- stdlib HTTP server streaming Session
-  events over SSE to a three-pane dark UI (left nav + driver card + jobs,
-  center driver-loop conversation, right durable-state artifacts).
+Desktop app (dev, source build with hot-reload):
 
 ```bash
-# live (glm-5.2 driver):
-export OPENROUTER_API_KEY=***
-./scripts/harness_gui.sh                 # http://127.0.0.1:8799
-
-# no-key demo (stub driver, still drives real Puppetmaster):
-HARNESS_DRIVER=stub-oracle-v2 ./scripts/harness_gui.sh
+cd webapp && npm install && npm run electron:dev
 ```
 
-The driver is config -- the research proved the whole open-weights field drives
-at 100% under this harness, so swapping glm-5.2 for kimi/deepseek/qwen is a
-one-line change.
-
-
-## Vision (sidecar -- decoupled from the driver)
-
-The research found the only vision-capable open DRIVER (Kimi) is also the
-weakest driver. So the harness does NOT require a vision-capable driver. Instead
-`harness/vision.py` runs a cheap VLM sidecar that transcribes an attached image
-to TEXT once; that text is prepended to the driver context, so any text-only
-driver (glm-5.2, deepseek, qwen) "sees" the image through the transcription. The
-driver never receives pixels; the image is processed once.
-
-```python
-session.run("What is in this screenshot?", images=["/path/to/shot.png"])
-# -> emits a "vision" event with the transcription, then drives normally
-```
-
-Default sidecar is Gemini's vision endpoint (stand-in); swap base_url/model/key
-for an open VLM (GLM-OCR / Kimi-VL / Qwen-VL) -- same image->text contract.
-Verified live: a screenshot of `AUTH_TOKEN=*** was transcribed and a text-only
-driver correctly answered "abc123" from the text alone.
-
-
-## Headless CLI
-
-The harness runs without a browser:
+Or the one-command launcher (cleans stale processes, then launches):
 
 ```bash
-harness "Investigate auth across this repo and conclude"
-harness --driver glm-5.2 --budget 4 "Audit for the biggest risk"
-harness --image shot.png "What secret is in this screenshot?"   # vision sidecar
-harness --json "..."   # machine-readable event stream
+bash scripts/dev.sh            # or the `marionette` shell alias
 ```
 
-Exit codes: 0 = terminated cleanly (answer/stop), 1 = error, 2 = forced stop
-(budget/turn cap). Streams the driver loop to the terminal (intent / executing /
-artifacts / final), colored on a TTY.
-
-## GUI: uploads, errors, history
-
-The three-pane GUI (`./scripts/harness_gui.sh`) now supports:
-- Image attach (button + drag/drop onto the center pane) -> multipart upload ->
-  the vision sidecar transcribes -> the driver reasons over text. Attachment
-  chips show pending images.
-- Distinct error cards for driver / transport / execute / invalid-intent
-  failures (with the raw model output on a parse error) -- nothing fails silent.
-- Vision events render inline (transcription char count + preview).
-- Job history persists in Puppetmaster's store and reloads on page load; click a
-  job to inspect its artifacts in the right pane.
-
-
-## Reproducible eval + config
+Build a notarized macOS DMG and publish a GitHub release:
 
 ```bash
-harness eval                          # offline oracle smoke (no keys)
-harness eval --driver glm-5.2 --reach openrouter --stage s4   # one live driver
-harness --version
+bash scripts/release.sh 0.4.1 "release notes"
 ```
 
-Config layering (env wins over file wins over defaults): set defaults in
-`~/.harness.json` (`{"driver": "glm-5.2", "budget": 3}`) and override per-run
-with `HARNESS_DRIVER=...`. Missing-key is handled gracefully -- the CLI and GUI
-surface a clear, actionable message (which env var to set, or use the stub
-driver) instead of a stack trace.
-
-
-## Health check
+Research rig (offline, no keys):
 
 ```bash
-harness doctor          # verify seam, store, driver key, vision key -- one shot
-harness doctor --ping   # also make a live 1-token call to the driver
+python3 -m venv .venv && .venv/bin/pip install -e /path/to/Puppetmaster pytest
+.venv/bin/python -m pytest -q                              # full suite, offline
+.venv/bin/python scripts/run_eval.py --drivers stub-oracle # offline oracle ceiling
 ```
 
-Reports ok / warn / fail per check with an actionable hint. The Puppetmaster
-seam and durable store are hard checks (fail -> exit 1); a missing driver or
-vision key is a warning (the harness still loads, stub drivers still work). Run
-this first on a new machine to see exactly what to set.
+## Configuration
 
+The driver and keys are set in the app (Settings pane) or via env. Key vars:
 
-## Fully-open vision (no frontier model anywhere)
+| Env var | Purpose |
+|---|---|
+| `OPENROUTER_API_KEY` | Default reach: the whole field through one endpoint. |
+| `GEMINI_API_KEY` | Vision sidecar (image transcription); OpenRouter VLM fallback. |
+| `HARNESS_DRIVER` | Pilot model id. |
+| `HARNESS_COMMAND_TIMEOUT` | Per-command shell timeout in seconds; 0/off = unbounded. |
+| `HARNESS_AUTO_COMMAND_GUARD` | Full-auto danger guard; default on, off to disable. |
+| `HARNESS_WIKI_ORCHESTRATE` | Local wiki structuring: unset (off), 1/approve (prepare-and-approve), auto (silent ingest). |
+| `HARNESS_AUTO_MAX_SWARMS` / `_TOKENS` / `_SECONDS` / `_MAX_IDLE` | Full-auto budget governor ceilings. |
 
-By default the vision sidecar uses Gemini (a stand-in). Set
-`HARNESS_VLM_REACH=openrouter` to route an OPEN VLM instead -- default
-`qwen/qwen3-vl-30b-a3b-instruct` (Apache-2.0, pairs with the qwen3-coder
-driver), overridable via `HARNESS_VLM_MODEL`. With this, the whole path is open:
-open VLM transcribes -> open driver reasons -> Puppetmaster orchestrates. No
-black box anywhere. Verified live: qwen3-vl transcribed a screenshot (AUTH_TOKEN
-+ a function), the qwen3-coder driver answered correctly from the text alone.
+## Conventions
 
-## Dogfooding notes
-
-Driven live on qwen3-coder-30b against real tasks: trivia -> answer (0 swarms),
-underspecified prompts -> answer (no wasted swarm), open-ended audits -> multi-
-swarm investigation then a grounded conclusion. qwen is thorough on audit-style
-prompts (it investigates multiple angles up to budget); lower `--budget` for a
-snappier loop, raise it for deeper investigation. The GUI thinking-indicators
-keep long multi-swarm runs legible.
-
-
-## Real codebase analysis (read-only)
-
-By default swarms run on a deterministic local substrate (free, no real code
-analysis -- labeled "demo substrate" in output). To analyze a REAL repo:
-
-```
-harness --repo /path/to/repo --swarm-adapter openai \
-        "Investigate how X works here and report findings."
-```
-
-This routes read-only analysis workers (CodeGraph-injected) against the repo via
-OpenRouter (open model, default qwen3-coder-30b; override HARNESS_ANALYSIS_MODEL).
-Safety: triple-guarded read-only -- the openai adapter is not edit-capable, specs
-carry read_only/no_edit/dry_run, and a test asserts the target repo is never
-mutated. Safe even on live-service repos.
-
-Honest limit: a cheap 30B analysis model reads the right files (real file-cited
-evidence) but can fabricate specifics -- findings are directionally useful and
-need verification. Pin a stronger HARNESS_ANALYSIS_MODEL for high-stakes work.
-
-
-## The pilot (conversational UX)
-
-The harness is a conversation, not a raw control loop. You message a PILOT (the
-model you pick), it plans in prose, investigates by firing swarms, and explains
-the findings -- like Cursor/Hermes. Orchestration calls render as Cursor-style
-COLLAPSIBLE cards (collapsed header "Ran swarm: <goal>"; expand for goal, cwd,
-artifacts), so you see the controls without them being the whole output.
-
-- The pilot is SWAPPABLE in the UI (qwen / glm / deepseek / kimi / ... per your
-  keys) -- pick how much to spend on the conversation layer.
-- Transcript lives in the you<->pilot channel only. Swarm workers receive a
-  DISTILLED brief (the pilot's goal) + CodeGraph -- never the transcript. The
-  expensive investigation stays decoupled from the conversation.
-- Set --repo + --swarm-adapter openai for the pilot's swarms to do REAL read-only
-  codebase analysis (else demo substrate; a stall guard stops the pilot grinding
-  on demo artifacts and tells you to enable real analysis).
-
-Endpoints: GET /api/chat?message=... (SSE: message | action_start | action_result
-| assistant_done), GET /api/pilot?model=... (hot-swap the pilot).
-
-
-## Multi-provider pilot (swap across your keys)
-
-The pilot picker spans every provider you have a key for -- Anthropic, OpenAI,
-OpenRouter, Gemini, DeepSeek, Z.AI (GLM), MiniMax, xAI, NVIDIA. It detects which
-providers are usable from the environment and offers `provider:model` specs:
-
-```
-HARNESS_DRIVER=anthropic:claude-opus-4-8 harness gui   # if ANTHROPIC_API_KEY set
-HARNESS_DRIVER=gemini:gemini-flash-latest harness gui   # if GEMINI_API_KEY set
-HARNESS_DRIVER=openrouter:qwen/qwen3-coder-30b-a3b-instruct harness gui
-```
-
-The provider profile DATA (env-var names, base URLs, API modes) is adapted from
-the Hermes Agent project (MIT, Nous Research) -- see NOTICE.md. Only the
-declarative data is borrowed; transport stays the harness's own thin drivers.
-The picker in the GUI lists exactly the providers your keys unlock; swapping the
-pilot is one selection (your conversation layer, your cost choice).
-
-
-## Wiki integration (durable knowledge, out of the box)
-
-The harness can auto-capture investigation findings/decisions to a
-portable-llm-wiki instance -- durable KNOWLEDGE state on top of PM's durable
-EXECUTION state. We INTEGRATE an existing wiki (POST /owner/ingest), not rebuild
-it, so interlinking / share tiers / the /llm handshake all come for free.
-
-```
-export HARNESS_WIKI_URL=http://127.0.0.1:8000
-export HARNESS_WIKI_TOKEN=<owner-token>
-export HARNESS_WIKI_AUTO=1        # auto-ingest findings when a pilot turn ends
-```
-
-Off by default; best-effort (never breaks the conversation); never fires the
-wiki's token-spending orchestrator. `harness doctor` reports wiki connectivity.
-
-
-## Fully-Auto mode (unattended, safety-governed)
-
-Pursue an objective to completion across many investigation rounds WITHOUT
-re-prompting -- bounded by a hard safety governor. Built brakes-first: the
-governor is proven before the autonomy depends on it.
-
-```
-harness auto "Audit this repo for the biggest risks and report." \
-  --repo /path --swarm-adapter openai \
-  --max-swarms 40 --max-seconds 3600 --max-tokens 100000 \
-  --killswitch /tmp/STOP
-```
-
-Hard ceilings (always on): max tokens, max wall-clock, max swarms, and a stall
-detector (consecutive rounds with no new findings). Plus a killswitch file --
-`touch /tmp/STOP` from anywhere to halt an overnight run. Env equivalents:
-HARNESS_AUTO_MAX_TOKENS / _MAX_SECONDS / _MAX_SWARMS / _MAX_IDLE / _KILLSWITCH.
-
-SAFETY REFUSAL: unattended real analysis on a repo with NO CodeGraph index is
-refused (the accuracy benchmark proved unindexed analysis is ~30% blind guessing
--- exactly the confident-garbage you must not run all night). Override with
-`--allow-unindexed` only if you know what you're doing.
+- No emojis or decorative pictographs anywhere (code, docs, commits, output).
+- stdlib-only backend; Puppetmaster is the single real dependency.
+- `pmharness/intent.py` and `harness/command_policy.py` stay PM-free and pure so
+  they unit-test fast and hermetically.
+- Scoring is deterministic -- no LLM-as-judge.
+- Tests before claiming done: `.venv/bin/python -m pytest -q`.
+- Never commit keys or `results/*.sqlite`.
