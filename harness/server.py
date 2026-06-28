@@ -530,6 +530,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/api/mcp/stop", "/api/mcp/call",
                       "/api/skills/distill", "/api/skills/approve",
                       "/api/wiki/ingest-prepared",
+                      "/api/models/toggle", "/api/models/set",
                       "/api/skills/reject", "/api/skills/archive",
                       "/api/rules/approve", "/api/rules/reject",
                       "/api/memory/add", "/api/memory/remove",
@@ -893,6 +894,16 @@ class Handler(BaseHTTPRequestHandler):
             pages = body.get("pages") or []
             count = _pilot.ingest_prepared_pages(pages)
             return self._send(200, json.dumps({"ok": count > 0, "ingested": count}))
+        if path == "/api/models/toggle":
+            from . import model_visibility as _mv
+            spec = body.get("spec", "")
+            on = _parse_bool(body.get("enabled", True))
+            enabled = _mv.toggle(spec, on)
+            return self._send(200, json.dumps({"ok": True, "enabled": enabled}))
+        if path == "/api/models/set":
+            from . import model_visibility as _mv
+            enabled = _mv.set_enabled(body.get("enabled") or [])
+            return self._send(200, json.dumps({"ok": True, "enabled": enabled}))
         if path == "/api/skills/approve":
             sk = _skills.set_state(body.get("slug", ""), "active")
             return self._send(200, json.dumps({"ok": bool(sk)}))
@@ -1180,7 +1191,14 @@ class Handler(BaseHTTPRequestHandler):
 
             driver = body.get("driver")
             if driver is not None:
-                av = _available_pilots()
+                # Validate against the FULL available catalog (every model from a
+                # keyed provider), not just the enabled picker subset -- a user may
+                # set a driver that is valid but not currently toggled into the
+                # dropdown. _available_pilots() is the curated picker list; the
+                # catalog is the superset of what can actually be built.
+                from . import model_visibility as _mv
+                catalog_specs = {c["spec"] for c in _mv.catalog(available_only=True)}
+                av = set(_available_pilots()) | catalog_specs
                 if driver not in av:
                     return self._send(400, json.dumps({"error": f"Unknown or unavailable driver: {driver}"}))
                 if driver != _cfg.driver:
@@ -1741,6 +1759,18 @@ class Handler(BaseHTTPRequestHandler):
                 "is_git": is_git,
                 "codegraph_status": cg_status,
                 "recents": recents
+            }))
+        if u.path == "/api/models/catalog":
+            if self._guard():
+                return
+            qtok = parse_qs(u.query).get("token", [""])[0]
+            if qtok != _TOKEN and self.headers.get("X-Harness-Token", "") != _TOKEN:
+                return self._send(403, json.dumps({"error": "missing or bad token"}))
+            from . import model_visibility as _mv
+            return self._send(200, json.dumps({
+                "catalog": _mv.catalog(available_only=True),
+                "all": _mv.catalog(available_only=False),
+                "enabled": _mv.get_enabled(),
             }))
         if u.path == "/api/codegraph":
             if self._guard():
@@ -2677,9 +2707,12 @@ def _available_pilots():
     environment. Spans Anthropic/OpenAI/OpenRouter/Gemini/DeepSeek/Z.AI/... -- the
     user picks from whatever they actually have keys for. The current driver is
     always first so the picker shows it selected."""
-    from . import providers as prov
+    from . import model_visibility as _mv
     cur = _cfg.driver
-    pilots = prov.available_pilots()
+    # The picker shows the user's ENABLED model set (curated per provider in
+    # Settings -> Models), filtered to providers that actually have a key. If
+    # nothing is curated yet, this falls back to every available model.
+    pilots = _mv.enabled_pilots()
     # ensure the current driver appears first (it may already be in the list)
     ordered = [cur] + [p for p in pilots if p != cur]
     return ordered or [cur]

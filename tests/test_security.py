@@ -205,8 +205,13 @@ def test_settings_rejected_when_pilot_busy():
     httpd, port, srv = _server()
     import harness.providers
     orig_av = harness.providers.available_pilots
+    orig_srv_av = srv._available_pilots
     try:
         harness.providers.available_pilots = lambda: ["qwen3-coder-30b", "glm-5.2"]
+        # Validation reads the picker list via server._available_pilots(); make
+        # qwen3-coder-30b a valid target so the test exercises the busy-409 gate
+        # rather than the driver-validation 400.
+        srv._available_pilots = lambda: ["qwen3-coder-30b", "glm-5.2"]
 
         # Set current driver to glm-5.2 so that swapping to qwen3-coder-30b triggers a rebuild
         srv._cfg.driver = "glm-5.2"
@@ -257,6 +262,7 @@ def test_settings_rejected_when_pilot_busy():
         
     finally:
         harness.providers.available_pilots = orig_av
+        srv._available_pilots = orig_srv_av
         httpd.shutdown()
 
 
