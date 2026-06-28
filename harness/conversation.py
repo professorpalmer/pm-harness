@@ -26,6 +26,7 @@ Events yielded (for GUI/CLI):
 """
 
 import os
+import hashlib
 import threading
 import time
 import subprocess
@@ -297,6 +298,16 @@ class ConversationalSession:
         self._review_edits_before_apply = os.environ.get("HARNESS_REVIEW_EDITS_BEFORE_APPLY", "").strip() in ("1", "true", "yes")
         self._pending_reviews = {}
         self._pending_reviews_lock = threading.Lock()
+        # Command safety guard for FULL-AUTO mode: when running unattended, screen
+        # each shell command for irreversible/remote/escalating patterns and pause
+        # for human approval on a DANGER verdict (the safety an autonomous loop
+        # lacks vs interactive co-working, where the human sees every command).
+        # HARNESS_AUTO_COMMAND_GUARD=off disables it (NOT recommended with SSH
+        # reachable + timeouts off). Default ON.
+        self._auto_command_guard = os.environ.get("HARNESS_AUTO_COMMAND_GUARD", "").strip().lower() not in ("0", "false", "no", "off")
+        self._auto_mode = False  # set True only for the duration of run_auto()
+        self._pending_command_approvals = {}
+        self._approved_commands = set()  # command hashes the user one-click approved
         self._state = "idle"
         
         import queue
@@ -1763,6 +1774,31 @@ class ConversationalSession:
                         yield ConvEvent("action_result", {"id": aid, "error": error_msg})
                         self._append_action_result(act, aid, f"(run_command {aid} failed: {error_msg})", is_native)
                         continue
+                    from .command_policy import resolve_timeout, classify_command
+                    # FULL-AUTO safety guard: screen the command before running it
+                    # unattended. On a DANGER verdict, refuse this turn and feed the
+                    # reason back so the model picks a safer path or the user can
+                    # re-run interactively. Interactive co-working is unaffected (the
+                    # human already sees every command). A command the user explicitly
+                    # approved this session is allowed through.
+                    if self._auto_mode and self._auto_command_guard:
+                        verdict = classify_command(act.command or "")
+                        cmd_hash = hashlib.sha256((act.command or "").encode()).hexdigest()
+                        if verdict.danger and cmd_hash not in self._approved_commands:
+                            block_msg = (
+                                f"BLOCKED in full-auto: command matches '{verdict.category}' "
+                                f"({verdict.reason}; matched: {verdict.matched}). Autonomous "
+                                f"execution of irreversible/remote/escalating commands is gated. "
+                                f"Choose a safer approach, or the operator can run this manually."
+                            )
+                            yield ConvEvent("command_blocked", {
+                                "id": aid, "command": act.command,
+                                "category": verdict.category, "reason": verdict.reason,
+                                "matched": verdict.matched,
+                            })
+                            self._append_action_result(act, aid, f"(run_command {aid} {block_msg})", is_native)
+                            continue
+                    cmd_timeout = resolve_timeout()
                     try:
                         p = subprocess.run(
                             act.command,
@@ -1771,13 +1807,13 @@ class ConversationalSession:
                             stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT,
                             text=True,
-                            timeout=120
+                            timeout=cmd_timeout
                         )
                         output = p.stdout or ""
                         exit_code = p.returncode
                     except subprocess.TimeoutExpired as te:
                         out_str = te.stdout.decode('utf-8', errors='replace') if isinstance(te.stdout, bytes) else (te.stdout or "")
-                        output = out_str + f"\n\n[TimeoutExpired after 120 seconds]"
+                        output = out_str + f"\n\n[TimeoutExpired after {cmd_timeout} seconds]"
                         exit_code = -1
                     except Exception as e:
                         output = f"Failed to execute command: {e}"
@@ -3361,6 +3397,18 @@ class ConversationalSession:
         return passed, output
 
     def run_auto(self, objective: str, budget: "AutoBudget" = None,
+                 *, require_codegraph: bool = True):
+        """FULL-AUTO entry point. Thin wrapper that marks unattended mode for the
+        duration of the run (so run_command applies the safety guard) and always
+        resets it, even on exception or early return, so the next interactive
+        command is never wrongly gated."""
+        self._auto_mode = True
+        try:
+            yield from self._run_auto_inner(objective, budget, require_codegraph=require_codegraph)
+        finally:
+            self._auto_mode = False
+
+    def _run_auto_inner(self, objective: str, budget: "AutoBudget" = None,
                  *, require_codegraph: bool = True):
         """FULLY-AUTO (unattended) mode: pursue an objective across many pilot
         turns WITHOUT user re-prompting, bounded by an AutoBudget governor. Yields

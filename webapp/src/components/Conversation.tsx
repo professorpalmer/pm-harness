@@ -33,6 +33,7 @@ type Item =
   | { kind: "checkpoint"; id: string; label: string; trigger: string }
   | { kind: "compaction"; before_tokens: number; after_tokens: number }
   | { kind: "codegraph_context"; symbols: number; query: string }
+  | { kind: "command_blocked"; command: string; category: string; reason: string; matched: string }
   | { kind: "steer"; text: string };
 
 type GroupedItem =
@@ -43,6 +44,7 @@ type GroupedItem =
   | { kind: "checkpoint"; id: string; label: string; trigger: string }
   | { kind: "compaction"; before_tokens: number; after_tokens: number }
   | { kind: "codegraph_context"; symbols: number; query: string }
+  | { kind: "command_blocked"; command: string; category: string; reason: string; matched: string }
   | { kind: "steer"; text: string }
   | { kind: "activity_group"; items: ( { kind: "card"; card: Card } | { kind: "thinking"; text: string } | { kind: "codegraph_context"; symbols: number; query: string } | { kind: "msg"; msg: Msg } )[] };
 
@@ -158,7 +160,7 @@ function groupAgentActivity(items: Item[]): GroupedItem[] {
         flush();
         grouped.push(item);
       }
-    } else if (item.kind === "swarm_pending" || item.kind === "swarm_result" || item.kind === "checkpoint" || item.kind === "compaction" || item.kind === "steer") {
+    } else if (item.kind === "swarm_pending" || item.kind === "swarm_result" || item.kind === "checkpoint" || item.kind === "compaction" || item.kind === "command_blocked" || item.kind === "steer") {
       flush();
       grouped.push(item);
     } else if (item.kind === "card" || item.kind === "thinking" || item.kind === "codegraph_context") {
@@ -972,6 +974,8 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
       const d = ev.data || {};
       if (ev.kind === "compacting") {
         setCompactingStatus(d.message || "Summarizing chat context");
+      } else if (ev.kind === "command_blocked") {
+        setItems((p) => [...p, { kind: "command_blocked" as const, command: d.command || "", category: d.category || "", reason: d.reason || "", matched: d.matched || "" }]);
       } else if (ev.kind === "wiki_prepared") {
         const pages = d.pages || [];
         if (pages.length > 0) {
@@ -1477,6 +1481,16 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                   <div key={i} className="flex items-center gap-1.5 py-0.5 text-[10px] text-accent/70 w-fit my-0.5 select-none" title={it.query ? `CodeGraph consulted for: ${it.query}` : "CodeGraph consulted"}>
                     <Share2 size={9} className="text-accent/70" />
                     <span>CodeGraph consulted{it.symbols > 0 ? ` -- ${it.symbols} symbols` : ""}</span>
+                  </div>
+                );
+              } else if (it.kind === "command_blocked") {
+                return (
+                  <div key={i} className="flex items-start gap-1.5 py-1.5 px-3 rounded-lg bg-red-500/8 border border-red-500/30 text-[11px] text-red-300/90 w-fit max-w-full my-1 select-none" title={it.matched ? `matched: ${it.matched}` : undefined}>
+                    <span className="font-medium shrink-0">Blocked in full-auto:</span>
+                    <span className="min-w-0">
+                      <span className="text-red-300/70">{it.reason}</span>
+                      {it.command ? <code className="block mt-0.5 text-[10px] text-faint/80 font-mono truncate">{it.command}</code> : null}
+                    </span>
                   </div>
                 );
               } else if (it.kind === "compaction") {

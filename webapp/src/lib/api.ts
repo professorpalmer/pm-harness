@@ -13,6 +13,8 @@ export type Settings = {
   models: string[];
   auto_distill: boolean;
   reviewEditsBeforeApply?: boolean;
+  autoCommandGuard?: boolean;
+  commandTimeout?: string;
   wiki_auto?: boolean;
   state_dir: string;
   repo: string;

@@ -1128,6 +1128,20 @@ class Handler(BaseHTTPRequestHandler):
                 rev_val = _parse_bool(body["reviewEditsBeforeApply"])
                 _pilot._review_edits_before_apply = rev_val
                 os.environ["HARNESS_REVIEW_EDITS_BEFORE_APPLY"] = "true" if rev_val else "false"
+            if "autoCommandGuard" in body:
+                g_val = _parse_bool(body["autoCommandGuard"])
+                _pilot._auto_command_guard = g_val
+                os.environ["HARNESS_AUTO_COMMAND_GUARD"] = "true" if g_val else "off"
+            if "commandTimeout" in body:
+                # seconds; "0"/"off"/"none" = unbounded. Validate before storing.
+                raw = str(body["commandTimeout"]).strip().lower()
+                if raw in ("0", "off", "none", "unbounded"):
+                    os.environ["HARNESS_COMMAND_TIMEOUT"] = "0"
+                else:
+                    try:
+                        os.environ["HARNESS_COMMAND_TIMEOUT"] = str(max(1, int(raw)))
+                    except (ValueError, TypeError):
+                        return self._send(400, json.dumps({"error": "Invalid commandTimeout"}))
 
             return self._send(200, json.dumps(_get_settings_dict()))
 
@@ -2577,6 +2591,8 @@ def _get_settings_dict():
         "auto_distill": getattr(_pilot, "_auto_distill", False),
         "reviewEditsBeforeApply": getattr(_pilot, "_review_edits_before_apply", False),
         "wiki_auto": getattr(_cfg, "wiki_auto", False),
+        "autoCommandGuard": getattr(_pilot, "_auto_command_guard", True),
+        "commandTimeout": (os.environ.get("HARNESS_COMMAND_TIMEOUT", "").strip() or "120"),
         "state_dir": _session.state_dir,
         "repo": _cfg.repo,
         "has_api_key": status["has_key"],

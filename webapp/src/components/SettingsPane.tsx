@@ -364,6 +364,50 @@ export default function SettingsPane({ onOpenWizard }: { onOpenWizard: () => voi
           </p>
         </div>
 
+        {/* Full-Auto Safety: command guard + timeout */}
+        <div className="space-y-1.5">
+          <label className="block uppercase tracking-wider text-[10px] text-faint font-semibold">
+            Full-Auto Safety
+          </label>
+          <button
+            onClick={() => update({ autoCommandGuard: !(settings.autoCommandGuard ?? true) })}
+            disabled={saving}
+            className={`w-full flex items-center justify-between px-3 py-2 rounded border transition text-left ${
+              (settings.autoCommandGuard ?? true)
+                ? "bg-accent/10 border-accent/30 text-accent"
+                : "bg-panel2 border-edge text-muted"
+            } disabled:opacity-50`}
+          >
+            <span className="font-medium text-[11px]">Guard dangerous commands in full-auto</span>
+            <span className="text-[10px] uppercase font-bold tracking-wider">
+              {(settings.autoCommandGuard ?? true) ? "on" : "off"}
+            </span>
+          </button>
+          <p className="text-[10px] text-muted">
+            In unattended (full-auto) mode, irreversible/remote/escalating shell commands
+            (rm -rf, ssh, curl pipe-to-shell, force-push, sudo, disk writes) are blocked
+            and reported instead of running. Interactive co-working is unaffected.
+          </p>
+          <div className="flex items-center gap-2 pt-1">
+            <label className="text-[11px] text-muted shrink-0">Command timeout (s)</label>
+            <input
+              type="text"
+              defaultValue={settings.commandTimeout || "120"}
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                if (v !== (settings.commandTimeout || "120")) update({ commandTimeout: v });
+              }}
+              disabled={saving}
+              className="flex-1 px-2 py-1 rounded border border-edge bg-panel2 text-[11px] text-txt disabled:opacity-50"
+              placeholder="120"
+            />
+          </div>
+          <p className="text-[10px] text-muted">
+            Per-command shell timeout. Use 0 or "off" for unbounded (needed for long SSH
+            sessions or builds). Unbounded plus full-auto is why the guard above matters.
+          </p>
+        </div>
+
         {/* API Key Section */}
         <div className="space-y-1.5 border-t border-edge pt-3">
           <label className="block uppercase tracking-wider text-[10px] text-faint font-semibold">
