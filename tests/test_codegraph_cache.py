@@ -1,0 +1,83 @@
+"""Tests for the per-message CodeGraph slice cache that avoids re-running the
+blocking codegraph_context subprocess on every step of a multi-step turn."""
+import tempfile
+
+from harness.config import HarnessConfig
+from harness.conversation import ConversationalSession
+
+
+def test_codegraph_cache_fields_initialized():
+    cfg = HarnessConfig(driver="stub-oracle-v2", state_dir=tempfile.mkdtemp())
+    s = ConversationalSession(cfg)
+    assert s._cg_cache_key is None
+    assert s._cg_cache_section == ""
+    assert s._cg_cache_symbols == 0
+
+
+def test_codegraph_cache_reused_for_same_message(monkeypatch):
+    """The codegraph_context subprocess must run at most once per user message,
+    even across many pilot steps in the same turn."""
+    cfg = HarnessConfig(driver="stub-oracle-v2", state_dir=tempfile.mkdtemp())
+    cfg.repo = tempfile.mkdtemp()
+    s = ConversationalSession(cfg)
+
+    calls = {"n": 0}
+
+    def fake_context(task, cwd, **kw):
+        calls["n"] += 1
+        return "- **sym_a** something\n#### Header\nrelated"
+
+    import puppetmaster.codegraph as cg
+    monkeypatch.setattr(cg, "codegraph_context", fake_context)
+    monkeypatch.setattr(cg, "codegraph_prompt_section", lambda s: "SECTION\n" + s)
+
+    # Emulate the per-step cache lookup the turn loop performs.
+    def step_get(user_message):
+        if s._cg_cache_key == user_message:
+            return "cache"
+        from puppetmaster.codegraph import codegraph_context, codegraph_prompt_section
+        sl = codegraph_context(task=user_message, cwd=s.config.repo)
+        sec = ""
+        sym = 0
+        if sl:
+            sym = sl.count("- **") + sl.count("#### ")
+            sec = "AUTH\n" + codegraph_prompt_section(sl)
+        s._cg_cache_key = user_message
+        s._cg_cache_section = sec
+        s._cg_cache_symbols = sym
+        return "compute"
+
+    msg = "do a multi-step task"
+    sources = [step_get(msg) for _ in range(5)]
+    assert calls["n"] == 1, "subprocess should run exactly once for repeated steps"
+    assert sources[0] == "compute"
+    assert all(src == "cache" for src in sources[1:])
+    assert s._cg_cache_symbols == 2
+
+
+def test_codegraph_cache_recomputes_for_new_message(monkeypatch):
+    cfg = HarnessConfig(driver="stub-oracle-v2", state_dir=tempfile.mkdtemp())
+    cfg.repo = tempfile.mkdtemp()
+    s = ConversationalSession(cfg)
+
+    calls = {"n": 0}
+
+    def fake_context(task, cwd, **kw):
+        calls["n"] += 1
+        return "- **x** y"
+
+    import puppetmaster.codegraph as cg
+    monkeypatch.setattr(cg, "codegraph_context", fake_context)
+    monkeypatch.setattr(cg, "codegraph_prompt_section", lambda s: s)
+
+    def step_get(user_message):
+        if s._cg_cache_key == user_message:
+            return
+        from puppetmaster.codegraph import codegraph_context
+        codegraph_context(task=user_message, cwd=s.config.repo)
+        s._cg_cache_key = user_message
+
+    step_get("message one")
+    step_get("message one")
+    step_get("message two")
+    assert calls["n"] == 2, "a new message must recompute the slice"

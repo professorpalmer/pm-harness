@@ -319,6 +319,14 @@ class ConversationalSession:
         self._swarm_futures: set[concurrent.futures.Future] = set()
         self._swarm_futures_lock = threading.Lock()
         self._interrupted_swarms = False
+        # Per-message CodeGraph slice cache. The codegraph_context() call is a
+        # blocking Node subprocess (~270-500ms) -- recomputing it on every step
+        # of a multi-step turn (same query) is pure dead time stacked in front of
+        # the first token. Cache the slice keyed by the user message so it is
+        # computed at most once per turn and reused across all steps.
+        self._cg_cache_key = None
+        self._cg_cache_section = ""
+        self._cg_cache_symbols = 0
 
     def state(self) -> str:
         if self._state == "thinking":
@@ -1307,35 +1315,49 @@ class ConversationalSession:
             _no_deleg = getattr(self.config, "no_delegation", False)
             cg_symbol_count = 0
             if self.config.repo and not _no_deleg:
-                try:
-                    from puppetmaster.codegraph import codegraph_context, codegraph_prompt_section
-                    cg_slice = codegraph_context(task=user_message, cwd=self.config.repo)
-                    if cg_slice:
-                        # Count located symbols (entry points + related symbols) so the
-                        # UI can show that CodeGraph was consulted this turn.
-                        cg_symbol_count = cg_slice.count("- **") + cg_slice.count("#### ")
-                        # Prepend an AUTHORITATIVE directive so the model leans on the
-                        # already-injected CodeGraph slice instead of redundantly raw-reading
-                        # whole files (qwen tends to dump files even with context present).
-                        authoritative = (
-                            "CODEGRAPH HAS ALREADY BEEN QUERIED FOR THIS TASK. The relevant "
-                            "symbols, definitions, and code are provided in the section below. "
-                            "USE THIS as your primary source. Do NOT re-read entire files that "
-                            "already appear here -- only read_file specific additional lines you "
-                            "still need (with start_line + limit), or call search_codegraph to "
-                            "widen the graph. Whole-file dumps when the answer is already below "
-                            "are wasteful and wrong.\n"
-                        )
-                        cg_section = authoritative + codegraph_prompt_section(cg_slice)
-                        # Visibility: tell the UI CodeGraph was consulted (only when the
-                        # interactive pilot actually got context, first attempt of the step).
-                        if not _no_deleg:
+                # Cache the CodeGraph slice per user message: the underlying
+                # codegraph_context() is a blocking Node subprocess (~270-500ms).
+                # Recomputing it on every step of a multi-step turn (identical
+                # query) just stacks dead time in front of the model. Compute it
+                # once on the first step, reuse it for the rest of this turn.
+                if self._cg_cache_key == user_message:
+                    cg_section = self._cg_cache_section
+                    cg_symbol_count = self._cg_cache_symbols
+                else:
+                    try:
+                        from puppetmaster.codegraph import codegraph_context, codegraph_prompt_section
+                        cg_slice = codegraph_context(task=user_message, cwd=self.config.repo)
+                        if cg_slice:
+                            # Count located symbols (entry points + related symbols) so the
+                            # UI can show that CodeGraph was consulted this turn.
+                            cg_symbol_count = cg_slice.count("- **") + cg_slice.count("#### ")
+                            # Prepend an AUTHORITATIVE directive so the model leans on the
+                            # already-injected CodeGraph slice instead of redundantly raw-reading
+                            # whole files (qwen tends to dump files even with context present).
+                            authoritative = (
+                                "CODEGRAPH HAS ALREADY BEEN QUERIED FOR THIS TASK. The relevant "
+                                "symbols, definitions, and code are provided in the section below. "
+                                "USE THIS as your primary source. Do NOT re-read entire files that "
+                                "already appear here -- only read_file specific additional lines you "
+                                "still need (with start_line + limit), or call search_codegraph to "
+                                "widen the graph. Whole-file dumps when the answer is already below "
+                                "are wasteful and wrong.\n"
+                            )
+                            cg_section = authoritative + codegraph_prompt_section(cg_slice)
+                        # Cache the result (even an empty slice) so we never re-run
+                        # the subprocess for the same message this turn.
+                        self._cg_cache_key = user_message
+                        self._cg_cache_section = cg_section
+                        self._cg_cache_symbols = cg_symbol_count
+                        # Visibility: tell the UI CodeGraph was consulted -- only on
+                        # the first compute, so the chip shows once per turn.
+                        if cg_section and not _no_deleg:
                             yield ConvEvent("codegraph_context", {
                                 "symbols": cg_symbol_count,
                                 "query": (user_message or "")[:120],
                             })
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
 
             resp = None
             for attempt in range(2):
