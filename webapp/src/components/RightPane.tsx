@@ -6,7 +6,7 @@ import FileTree from "./FileTree";
 import SourceControl from "./SourceControl";
 import WorktreesPane from "./WorktreesPane";
 import McpPane from "./McpPane";
-import SettingsPane from "./SettingsPane";
+import SettingsShell from "./SettingsShell";
 import TerminalPane from "./TerminalPane";
 import CheckpointsPane from "./CheckpointsPane";
 import DiffReviewPane from "./DiffReviewPane";
@@ -255,7 +255,18 @@ export default function RightPane({ artifacts, onOpenWizard }: {
       case "mcp":
         return <McpPane />;
       case "settings":
-        return <SettingsPane onOpenWizard={onOpenWizard} />;
+        return (
+          <SettingsShell
+            onOpenWizard={onOpenWizard}
+            onClose={() =>
+              setSplitState((prev) => {
+                const next = { ...prev, primaryTab: "state" as Tab };
+                localStorage.setItem("pmharness.splitState", JSON.stringify(next));
+                return next;
+              })
+            }
+          />
+        );
       case "checkpoints":
         return <CheckpointsPane />;
       case "swarm":

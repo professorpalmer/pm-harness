@@ -241,6 +241,21 @@ export type CheckpointDiff = {
   error?: string;
 };
 
+export type ModelCatalogEntry = {
+  provider: string;
+  provider_display: string;
+  model: string;
+  spec: string;
+  available: boolean;
+  enabled: boolean;
+};
+
+export type ModelCatalogResponse = {
+  catalog: ModelCatalogEntry[];
+  all: ModelCatalogEntry[];
+  enabled: string[];
+};
+
 export type CodegraphStatus = {
   indexed: boolean;
   status: "ready" | "indexing" | "unsupported" | "none";
@@ -339,6 +354,9 @@ export const api = {
   skills: () => getJSON<any[]>("/api/skills"),
   skillDistill: () => postJSON<{ skill?: any; rules?: any }>("/api/skills/distill", {}),
   wikiIngestPrepared: (pages: any[]) => postJSON<{ ok: boolean; ingested: number }>("/api/wiki/ingest-prepared", { pages }),
+  modelCatalog: () => getJSON<ModelCatalogResponse>("/api/models/catalog"),
+  toggleModel: (spec: string, enabled: boolean) => postJSON<{ ok: boolean; enabled: string[] }>("/api/models/toggle", { spec, enabled }),
+  setEnabledModels: (enabled: string[]) => postJSON<{ ok: boolean; enabled: string[] }>("/api/models/set", { enabled }),
   rules: () => getJSON<any[]>("/api/rules"),
   ruleApprove: (slug: string) => postJSON<{ ok: boolean }>("/api/rules/approve", { slug }),
   ruleReject: (slug: string) => postJSON<{ ok: boolean }>("/api/rules/reject", { slug }),
