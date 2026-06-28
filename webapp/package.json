@@ -101,6 +101,26 @@
       "x64ArchFiles": "Contents/Resources/pmharness-backend"
     },
     "asar": true,
-    "afterSign": "build/notarize.cjs"
+    "afterSign": "build/notarize.cjs",
+    "dmg": {
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 180,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 180,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "iconSize": 100
+    }
   }
 }
