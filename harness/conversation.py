@@ -262,6 +262,7 @@ class ConversationalSession:
         import collections
         self._steer_queue = collections.deque()
         self._steer_lock = threading.Lock()
+        self._steer_pending = False
         # self-learning: accumulate this session's real findings for distillation
         self._session_findings: list = []
         self._first_objective: str = ""
@@ -1099,24 +1100,54 @@ class ConversationalSession:
             return items
 
     def _check_and_inject_steer(self) -> Iterator[ConvEvent]:
+        """Drain pending steers and surface them to the model WITHOUT breaking
+        message role alternation or injecting a synthetic user turn mid-loop.
+
+        Mirrors the Hermes design (agent/conversation_loop.py pre-API steer
+        drain): a steer is appended to the LAST tool-result message's content,
+        so the model sees it as part of the tool output on its next iteration.
+        A synthetic user message mid-loop (what this used to do) breaks strict
+        user/assistant alternation -- providers like Moonshot reject it and
+        return empty content, wedging the loop. If there is no tool/result
+        message to piggyback on yet, the steer is put back as pending for the
+        next drain rather than forced in.
+
+        Sets self._steer_pending so the action loop can stop the current spree
+        and re-ask the model, which now sees the steer in the tool output.
+        """
         steers = self.drain_steer()
         if not steers:
             return
         for steer in steers:
             marker_text = (
-                "[OUT-OF-BAND USER MESSAGE - a direct message from the user, delivered mid-turn; not tool output]\n"
-                f"{steer}\n"
-                "[/OUT-OF-BAND USER MESSAGE]"
+                "\n\n[OUT-OF-BAND USER MESSAGE - a direct message from the user, "
+                "delivered mid-turn; not tool output. Stop your current line of work, "
+                "address THIS now, and do not resume the previous task unless the user "
+                f"asks.]\n{steer}\n[/OUT-OF-BAND USER MESSAGE]"
             )
             yield ConvEvent("steer", {"text": steer})
-            if self._history:
-                last_msg = self._history[-1]
-                if last_msg.get("role") == "user":
-                    last_msg["content"] = (last_msg.get("content") or "") + "\n\n" + marker_text
-                else:
-                    self._history.append({"role": "user", "content": marker_text})
+            # Inject into the last result-bearing message (tool role for native
+            # tool-calling, or the user-role result the JSON-envelope path appends).
+            injected = False
+            for i in range(len(self._history) - 1, -1, -1):
+                m = self._history[i]
+                role = m.get("role")
+                if role == "tool" or (role == "user" and i > 0):
+                    m["content"] = (m.get("content") or "") + marker_text
+                    injected = True
+                    break
+                if role == "assistant":
+                    # Hit an assistant turn before any tool result -- nothing to
+                    # piggyback on this iteration; put the steer back as pending.
+                    break
+            if injected:
+                self._steer_pending = True
             else:
-                self._history.append({"role": "user", "content": marker_text})
+                # No result message to inject into yet -- keep it pending so the
+                # next drain (after a tool batch) picks it up. Never force a
+                # synthetic user turn.
+                with self._steer_lock:
+                    self._steer_queue.appendleft(steer)
 
     def _is_correction(self, text: str) -> bool:
         t = text.lower()
@@ -1246,7 +1277,11 @@ class ConversationalSession:
                 yield ConvEvent("interrupted", {"reason": "session interrupted"})
                 return
 
+            # Consume any pending steer at the start of the step: it's now in
+            # history and the model will see it this iteration, so clear the flag.
+            self._steer_pending = False
             yield from self._check_and_inject_steer()
+            self._steer_pending = False
 
             yield from self._maybe_compact_history()
 
@@ -1526,6 +1561,12 @@ class ConversationalSession:
             for idx, act in enumerate(turn.actions):
                 if idx > 0:
                     yield from self._check_and_inject_steer()
+                    if self._steer_pending:
+                        # A user steer arrived mid-spree. Abandon the REMAINING queued
+                        # actions and loop back to re-ask the model, which now sees the
+                        # steer as its current instruction. This is what makes a steer
+                        # actually interrupt instead of being ignored until the spree ends.
+                        break
                 if self._cancel.is_set():
                     yield ConvEvent("interrupted", {"reason": "session interrupted"})
                     return
