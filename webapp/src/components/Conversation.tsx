@@ -133,33 +133,17 @@ function groupAgentActivity(items: Item[]): GroupedItem[] {
     }
   };
 
-  // True if a tool card appears at index > i before the next user message.
-  const cardFollowsInTurn = (i: number): boolean => {
-    for (let j = i + 1; j < items.length; j++) {
-      const it = items[j];
-      if (it.kind === "msg" && (it as { kind: "msg"; msg: Msg }).msg.role === "user") return false;
-      if (it.kind === "card") return true;
-    }
-    return false;
-  };
-
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (item.kind === "thinking" && (!item.text || !item.text.trim())) continue;
 
     if (item.kind === "msg") {
-      const isUser = item.msg.role === "user";
-      // User messages and the final assistant answer break out as standalone
-      // prose; per-step assistant narration (a card still follows) folds in.
-      if (isUser) {
-        flush();
-        grouped.push(item);
-      } else if (cardFollowsInTurn(i)) {
-        currentGroup.push(item);
-      } else {
-        flush();
-        grouped.push(item);
-      }
+      // ALL assistant/user prose breaks out as standalone text -- never folded
+      // inside a tool-call collapse. This keeps the flow readable as
+      // text -> collapsed tool calls -> text, so narration is always visible and
+      // its markdown formatting never breaks inside the box.
+      flush();
+      grouped.push(item);
     } else if (item.kind === "swarm_pending" || item.kind === "swarm_result" || item.kind === "checkpoint" || item.kind === "compaction" || item.kind === "command_blocked" || item.kind === "steer") {
       flush();
       grouped.push(item);

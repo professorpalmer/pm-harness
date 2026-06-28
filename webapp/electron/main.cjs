@@ -17,6 +17,53 @@ const fs = require("node:fs");
 const os = require("node:os");
 
 const isDev = !!process.env.PMHARNESS_DEV_SERVER;
+
+// ---- login-shell environment capture (macOS Finder/Dock launch fix) --------
+// When a packaged app is launched from Finder/Dock (not a terminal), macOS gives
+// it a MINIMAL launchd environment: it is missing the user's real PATH, their
+// ssh-agent socket (SSH_AUTH_SOCK), and anything set in ~/.zprofile/.zshrc/etc.
+// That is exactly why `ssh <host>` (and tools resolved off PATH) behave
+// differently inside the app than in a real terminal -- the agent keys and
+// ~/.ssh host aliases resolve against a stripped env. We fix this the same way
+// VS Code / Hyper do: run the user's LOGIN+INTERACTIVE shell once, dump its
+// environment, and merge the missing vars in. Cached for the process lifetime.
+let _shellEnvCache = null;
+function loginShellEnv() {
+  if (_shellEnvCache !== null) return _shellEnvCache;
+  _shellEnvCache = {};
+  // Only needed on macOS/Linux GUI launches; on Windows the env is already full.
+  if (process.platform === "win32") return _shellEnvCache;
+  try {
+    const { execFileSync } = require("node:child_process");
+    const shellPath = process.env.SHELL || "/bin/zsh";
+    // A unique marker brackets the `env` dump so we can parse it cleanly even if
+    // the user's rc files print banners. -l (login) + -i (interactive) so
+    // ~/.zprofile AND ~/.zshrc both run, matching a real terminal.
+    const marker = "__PMH_ENV_" + Date.now() + "__";
+    const script = `printf '%s\n' '${marker}'; /usr/bin/env; printf '%s\n' '${marker}'`;
+    const out = execFileSync(shellPath, ["-l", "-i", "-c", script], {
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const parts = out.split(marker);
+    if (parts.length >= 3) {
+      const body = parts[1];
+      for (const line of body.split("\n")) {
+        const eq = line.indexOf("=");
+        if (eq <= 0) continue;
+        const key = line.slice(0, eq);
+        const val = line.slice(eq + 1);
+        if (key) _shellEnvCache[key] = val;
+      }
+    }
+  } catch (e) {
+    // Any failure -> empty merge; the app still works with the launchd env.
+    _shellEnvCache = {};
+  }
+  return _shellEnvCache;
+}
+
 let backend = null;
 let backendPort = 8799;
 let win = null;
@@ -92,7 +139,13 @@ async function startBackend() {
 
   const _dbg = (msg) => { try { fs.appendFileSync(path.join(os.homedir(), ".pmharness", "electron.log"), `${new Date().toISOString()} ${msg}\n`); } catch {} };
 
-  const customEnv = { ...process.env, HARNESS_REPO: process.env.HARNESS_REPO || repoRoot };
+  // Merge the user's real login-shell environment UNDER process.env so the
+  // backend (and every run_command it spawns -- ssh, git, etc.) sees the same
+  // PATH, ssh-agent socket, and profile vars it would in a terminal. process.env
+  // still wins for anything the app set deliberately. Only fills in when a GUI
+  // launch left those vars stripped.
+  const _shellEnv = app.isPackaged ? loginShellEnv() : {};
+  const customEnv = { ..._shellEnv, ...process.env, HARNESS_REPO: process.env.HARNESS_REPO || repoRoot };
 
   // codegraph self-containment: only safe with a REAL bundled `node` binary.
   // The electron-as-node trick (ELECTRON_RUN_AS_NODE) does NOT work for codegraph because
@@ -119,7 +172,7 @@ async function startBackend() {
       const nodeShimPath = path.join(shimDir, "node");
       fs.writeFileSync(nodeShimPath, `#!/bin/sh\nexec "${bundledNode}" "$@"\n`, "utf8");
       fs.chmodSync(nodeShimPath, 0o755);
-      customEnv.PATH = shimDir + path.delimiter + (process.env.PATH || "");
+      customEnv.PATH = shimDir + path.delimiter + (customEnv.PATH || process.env.PATH || "");
       customEnv.PUPPETMASTER_CODEGRAPH_NO_NPX = "1";
       _dbg(`codegraph self-contained via bundled node at ${bundledNode}`);
     } else {
