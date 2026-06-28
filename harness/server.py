@@ -1846,12 +1846,18 @@ class Handler(BaseHTTPRequestHandler):
 
             try:
                 import subprocess
+                # 20s (not 5s): codegraph status on a large indexed repo
+                # (e.g. 60k+ nodes) takes ~5s in the packaged/frozen binary --
+                # right at a 5s limit, which intermittently tripped a timeout
+                # and showed "UNSUPPORTED" in the panel even though the repo is
+                # fully indexed. The 30s status cache means this slower call is
+                # only paid on a cache miss, so the panel stays responsive.
                 proc = subprocess.run(
                     _puppetmaster_cmd("codegraph", "status", "--json"),
                     cwd=repo,
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=20
                 )
                 if proc.returncode == 0:
                     data = json.loads(proc.stdout)
