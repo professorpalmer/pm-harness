@@ -158,16 +158,12 @@ def available_pilots() -> list:
         for m in p.pilot_models:
             entries.append(f"{p.name}:{m}")
 
-    # MoA virtual model presets
-    if os.environ.get("OPENROUTER_API_KEY", "").strip():
-        try:
-            from pmharness.registry import load_catalog
-            moa_presets = load_catalog().get("moa_presets", {})
-            for name in moa_presets:
-                # surface MoA presets with the "moa:" convention build_pilot understands
-                entries.append(f"moa:{name}")
-        except Exception:
-            pass
+    # NOTE: MoA presets are deliberately NOT offered as pilots. MoA is a
+    # planner/review virtual model (Mixture-of-Agents) and cannot act as the
+    # tool-calling executor -- selecting it as the pilot produced a hard runtime
+    # error ("MoA is a planner/review virtual-model and cannot be used as the
+    # tool-calling executor"). It remains usable where a planner/reviewer fits,
+    # just not as the interactive driver.
     return entries
 
 

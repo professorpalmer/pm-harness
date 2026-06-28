@@ -28,10 +28,14 @@ def test_moa_reachability(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-or-key")
 
     pilots = prov.available_pilots()
-    # picker surfaces MoA presets once, with the "moa:" convention
-    assert "moa:moa-planner" in pilots
-    assert "moa-planner" not in pilots  # deduped: only the moa: form is listed
+    # MoA is a planner/review virtual model and CANNOT act as the tool-calling
+    # executor (selecting it as the pilot produced a hard runtime error), so it
+    # is deliberately NOT offered in the pilot picker.
+    assert "moa:moa-planner" not in pilots
+    assert "moa-planner" not in pilots
 
+    # It is still CONSTRUCTIBLE for planner/review use -- build_pilot accepts the
+    # moa spec and returns a MoADriver; it just is not an interactive driver.
     d1 = prov.build_pilot("moa-planner")
     assert isinstance(d1, MoADriver)
     assert d1.name == "moa-planner"

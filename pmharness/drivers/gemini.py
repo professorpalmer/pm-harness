@@ -156,12 +156,19 @@ class GeminiDriver:
                         args = raw_args
                     if tc_id and name:
                         tool_id_to_name[tc_id] = name
-                    parts.append({
+                    fc_part = {
                         "functionCall": {
                             "name": name,
                             "args": args
                         }
-                    })
+                    }
+                    # Echo back the thoughtSignature Gemini gave us for this call
+                    # (required by Gemini 3+ or the request 400s). Stored on the
+                    # tool_call when we parsed the model's response.
+                    sig = tc.get("thought_signature")
+                    if sig:
+                        fc_part["thoughtSignature"] = sig
+                    parts.append(fc_part)
                 gemini_role = "model"
 
             elif role == "tool":
@@ -278,14 +285,22 @@ class GeminiDriver:
                             name = fc.get("name") or ""
                             args = fc.get("args") or {}
                             tc_id = f"call_{name}_{i}"
-                            tool_calls.append({
+                            tc_entry = {
                                 "id": tc_id,
                                 "type": "function",
                                 "function": {
                                     "name": name,
                                     "arguments": json.dumps(args)
                                 }
-                            })
+                            }
+                            # Gemini 3+ returns a thoughtSignature with each
+                            # functionCall and REQUIRES it echoed back in the next
+                            # turn's history, or the API rejects the request with
+                            # HTTP 400 "missing thought_signature". Carry it through.
+                            sig = p.get("thoughtSignature") or fc.get("thoughtSignature")
+                            if sig:
+                                tc_entry["thought_signature"] = sig
+                            tool_calls.append(tc_entry)
                 full_text = "".join(text_pieces)
             except (AttributeError, TypeError, IndexError):
                 return DriverResponse(
