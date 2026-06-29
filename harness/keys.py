@@ -127,6 +127,10 @@ def scrub_disconnected_env() -> None:
 
 
 def get_api_key_status(reach: str) -> dict:
+    # An explicitly-disconnected provider always reports no key, even if a key is
+    # still stored or shell-exported -- the disconnect is authoritative.
+    if reach in get_disconnected():
+        return {"has_key": False, "masked": ""}
     keys = _read_keys()
     key = keys.get(reach, "")
     if not key:

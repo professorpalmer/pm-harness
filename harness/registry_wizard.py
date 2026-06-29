@@ -25,6 +25,14 @@ def get_models_file_path() -> str:
 
 # Helpers for provider keys
 def get_provider_key(p: Provider) -> Optional[str]:
+    # p.key() already returns None for an explicitly-disconnected provider; mirror
+    # that for the stored-keys fallback so a disconnect is honored everywhere.
+    try:
+        from .keys import get_disconnected
+        if p.name in get_disconnected():
+            return None
+    except Exception:
+        pass
     k = p.key()
     if k:
         return k

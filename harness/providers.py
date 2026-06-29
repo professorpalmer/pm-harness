@@ -36,8 +36,25 @@ class Provider:
     # curated pilot-capable models shown when a live catalog fetch isn't done.
     pilot_models: tuple = ()
 
+    def _is_disconnected(self) -> bool:
+        """True if the user explicitly disconnected this provider. Authoritative
+        over the environment -- so a shell-exported key (re-injected by the
+        desktop app's login-shell env capture) cannot resurrect a provider the
+        user turned off. This is the single source of truth, checked at the key
+        lookup itself so every downstream consumer (.available, get_provider_key,
+        get_api_key_status, the picker) honors it regardless of scrub timing."""
+        try:
+            from .keys import get_disconnected
+            return self.name in get_disconnected()
+        except Exception:
+            return False
+
     def key(self) -> Optional[str]:
-        """The first present, non-empty key value across env_vars, or None."""
+        """The first present, non-empty key value across env_vars, or None.
+        Returns None for an explicitly-disconnected provider even when its key
+        is present in the environment."""
+        if self._is_disconnected():
+            return None
         for ev in self.env_vars:
             v = os.environ.get(ev, "").strip()
             if v:
@@ -45,6 +62,8 @@ class Provider:
         return None
 
     def key_env(self) -> Optional[str]:
+        if self._is_disconnected():
+            return None
         for ev in self.env_vars:
             if os.environ.get(ev, "").strip():
                 return ev

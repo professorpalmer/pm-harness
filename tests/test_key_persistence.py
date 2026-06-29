@@ -74,3 +74,35 @@ def test_workspace_driver_skips_temp_dirs(monkeypatch):
     tmp = tempfile.mkdtemp()  # under /tmp -> must NOT be persisted
     srv._save_workspace_driver(tmp, "x:y")
     assert srv._get_workspace_driver(tmp) is None
+
+
+def test_disconnect_authoritative_over_stored_and_env_key(monkeypatch):
+    """The killer case: a disconnected provider with BOTH a stored key and a
+    shell-exported env key must read as fully disconnected across every accessor,
+    and survive a restart. This is the race-proof gate at Provider.key()."""
+    monkeypatch.setenv("HARNESS_STATE_DIR", tempfile.mkdtemp())
+    import importlib
+    from harness import keys as K
+    importlib.reload(K)
+    from harness import providers as prov
+    importlib.reload(prov)
+    from harness import registry_wizard as rw
+    importlib.reload(rw)
+
+    # Stored key + shell-exported env key both present.
+    K.set_api_key("openrouter", "sk-or-stored-1234")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-shell-5678")
+
+    # Disconnect.
+    K.clear_api_key("openrouter")
+
+    p = prov.get_provider("openrouter")
+    assert p.key() is None
+    assert p.available is False
+    assert rw.get_provider_key(p) is None
+    assert K.get_api_key_status("openrouter")["has_key"] is False
+    assert "openrouter" not in {x.name for x in prov.available_providers()}
+
+    # Simulate restart: shell re-exports the key; disconnect must still hold.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-shell-5678")
+    assert p.available is False

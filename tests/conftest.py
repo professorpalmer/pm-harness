@@ -86,3 +86,14 @@ def _clear_wiki_env(monkeypatch):
     monkeypatch.delenv("WIKI_OWNER_TOKEN", raising=False)
     monkeypatch.delenv("HARNESS_WIKI_URL", raising=False)
     monkeypatch.delenv("HARNESS_WIKI_TOKEN", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_provider_state(monkeypatch, tmp_path_factory):
+    """Isolate provider keys + disconnect state from the developer's real
+    ~/.pmharness so tests never inherit a live disconnected.json / keys.json
+    (which would make a keyed provider read as unavailable). Tests that set their
+    own HARNESS_STATE_DIR override this; otherwise every test gets a clean dir."""
+    if not os.environ.get("HARNESS_STATE_DIR"):
+        d = tmp_path_factory.mktemp("pmstate")
+        monkeypatch.setenv("HARNESS_STATE_DIR", str(d))
