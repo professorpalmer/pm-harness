@@ -2639,18 +2639,19 @@ function Bubble({
     );
   }
 
-  if (isIntermediate) {
-    return null;
-  }
-
+  // NOTE: intermediate narration (assistant prose followed by a tool card or
+  // more prose in the same turn) MUST stay visible -- hiding it (the old
+  // `return null`) is exactly what made streamed text vanish the moment a tool
+  // fired. We keep the full text -> tool -> text -> tool thought chain on screen;
+  // `isIntermediate` now only tones styling down slightly, never hides.
   const showExecuteButton = msg.isPlan && !executed && onExecutePlan;
 
   return (
-    <div className="flex flex-col items-start gap-0.5 my-1 w-full group relative">
+    <div className={`flex flex-col items-start gap-0.5 my-1 w-full group relative${isIntermediate ? " pl-2 border-l border-edge/40" : ""}`}>
       {showLabel && (
         <span className="text-[10px] uppercase tracking-wider text-faint px-0.5 select-none font-semibold mt-1">pilot</span>
       )}
-      <div className="text-[13px] leading-relaxed break-words max-w-[95%] text-txt/95 py-0.5 w-full relative pr-14">
+      <div className={`text-[13px] leading-relaxed break-words max-w-[95%] py-0.5 w-full relative pr-14 ${isIntermediate ? "text-txt/75" : "text-txt/95"}`}>
         <Markdown text={displayedText} />
         
         {/* Assistant copy & regenerate buttons */}
