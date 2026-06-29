@@ -146,6 +146,58 @@ _WEB = Path(__file__).resolve().parent / "web"
 _state_dir = os.environ.get("HARNESS_STATE_DIR", "")
 _cfg = HarnessConfig.from_env()
 _WORKSPACE_JSON = os.path.expanduser("~/.pmharness/workspace.json")
+_WORKSPACE_DRIVERS_JSON = os.path.expanduser("~/.pmharness/workspace_drivers.json")
+
+
+def _workspace_drivers_path() -> str:
+    state_dir = os.environ.get("HARNESS_STATE_DIR")
+    if state_dir:
+        return os.path.join(state_dir, "workspace_drivers.json")
+    return _WORKSPACE_DRIVERS_JSON
+
+
+def _save_workspace_driver(repo: str, driver: str) -> None:
+    """Remember which model the user last used in a given workspace, so opening
+    that dir later restores it (use opus-4-8 in repo A, gpt-5.5 in repo B, and
+    each comes back correctly on switch)."""
+    if not repo or not driver:
+        return
+    import tempfile as _tf
+    # Never persist ephemeral temp dirs (test state leaks otherwise).
+    if os.path.realpath(repo).startswith(os.path.realpath(_tf.gettempdir())):
+        return
+    path = _workspace_drivers_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data = {}
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data[os.path.realpath(repo)] = driver
+        from .registry_wizard import write_json_atomic
+        write_json_atomic(path, data)
+    except Exception:
+        pass
+
+
+def _get_workspace_driver(repo: str):
+    """The model last used in this workspace, or None if never set."""
+    if not repo:
+        return None
+    path = _workspace_drivers_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data.get(os.path.realpath(repo))
+    except Exception:
+        return None
 
 def _record_recent_workspace(target_repo: str) -> list:
     import json
@@ -951,6 +1003,19 @@ class Handler(BaseHTTPRequestHandler):
 
             _cfg.repo = target_repo
             os.environ["HARNESS_REPO"] = target_repo
+
+            # Restore the model last used in this workspace (if any + still
+            # available), so each dir remembers its model across switches.
+            try:
+                saved_driver = _get_workspace_driver(target_repo)
+                if saved_driver and saved_driver != _cfg.driver:
+                    from . import model_visibility as _mv
+                    avail = {row["spec"] for row in _mv.catalog(available_only=True)}
+                    if saved_driver in avail or not avail:
+                        _cfg.driver = saved_driver
+                        _apply_model_context_window()
+            except Exception:
+                pass
 
             try:
                 recents = _record_recent_workspace(target_repo)
@@ -2738,6 +2803,9 @@ class Handler(BaseHTTPRequestHandler):
                 _pilot._history = old_history
             _pilot._auto_distill = old_auto_distill
             _pilot._mcp = _mcp
+            # Remember this model for the current workspace so switching dirs and
+            # coming back restores it.
+            _save_workspace_driver(_cfg.repo, model)
             return self._send(200, json.dumps({"ok": True, "driver": model}))
         except Exception as e:
             return self._send(500, json.dumps({"error": str(e)}))
@@ -2946,16 +3014,32 @@ def _available_pilots():
     """Pilot 'provider:model' specs for every provider whose key is set in the
     environment. Spans Anthropic/OpenAI/OpenRouter/Gemini/DeepSeek/Z.AI/... -- the
     user picks from whatever they actually have keys for. The current driver is
-    always first so the picker shows it selected."""
+    always first so the picker shows it selected.
+
+    The picker shows the FULL live-merged catalog for keyed providers (so newly
+    released models like gpt-5.5 appear automatically), with the user's curated
+    `enabled` set used only to ORDER it (enabled specs first). Previously a stale
+    `enabled` set hid every model not in it -- which is why new live models never
+    showed up. Curation/hiding lives in Settings -> Models, not here."""
     from . import model_visibility as _mv
     cur = _cfg.driver
-    # The picker shows the user's ENABLED model set (curated per provider in
-    # Settings -> Models), filtered to providers that actually have a key. If
-    # nothing is curated yet, this falls back to every available model.
-    pilots = _mv.enabled_pilots()
-    # ensure the current driver appears first (it may already be in the list)
-    ordered = [cur] + [p for p in pilots if p != cur]
-    return ordered or [cur]
+    # Full available catalog (live fetch merged with curated fallback) for every
+    # provider that currently has a key.
+    full = [row["spec"] for row in _mv.catalog(available_only=True)]
+    enabled = [s for s in _mv.get_enabled() if s in set(full)]
+    enabled_set = set(enabled)
+    # Order: current driver, then enabled (curated) specs, then everything else
+    # available -- so curated favorites stay on top but new models are visible.
+    rest = [s for s in full if s not in enabled_set and s != cur]
+    ordered = [cur] + [s for s in enabled if s != cur] + rest
+    # De-dup while preserving order.
+    seen = set()
+    out = []
+    for s in ordered:
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out or [cur]
 
 
 def _get_settings_dict():

@@ -48,6 +48,84 @@ def _read_keys() -> dict:
     except Exception:
         return {}
 
+_DISCONNECTED_FILE = os.path.join(os.path.expanduser("~/.pmharness"), "disconnected.json")
+
+
+def _disconnected_file_path() -> str:
+    state_dir = os.environ.get("HARNESS_STATE_DIR")
+    if state_dir:
+        return os.path.join(state_dir, "disconnected.json")
+    return _DISCONNECTED_FILE
+
+
+def get_disconnected() -> set:
+    """Providers the user EXPLICITLY disconnected. Authoritative over the
+    environment: even when the user's shell exports e.g. OPENROUTER_API_KEY
+    (re-injected by the desktop app's login-shell env capture), a provider in
+    this set is treated as disconnected and its env vars are scrubbed. Lets a
+    deliberate disconnect survive app restarts instead of silently reconnecting."""
+    path = _disconnected_file_path()
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return set(data) if isinstance(data, list) else set()
+    except Exception:
+        return set()
+
+
+def _write_disconnected(names: set) -> None:
+    path = _disconnected_file_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path), prefix="disc_")
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(sorted(names), f)
+        os.replace(tmp_path, path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def mark_disconnected(reach: str) -> None:
+    names = get_disconnected()
+    names.add(reach)
+    _write_disconnected(names)
+
+
+def unmark_disconnected(reach: str) -> None:
+    names = get_disconnected()
+    if reach in names:
+        names.discard(reach)
+        _write_disconnected(names)
+
+
+def _scrub_provider_env(reach: str) -> None:
+    """Remove a provider's env vars from os.environ (so a shell-exported key
+    cannot make a deliberately-disconnected provider appear available)."""
+    from .providers import get_provider
+    p = get_provider(reach)
+    vars_to_clear = list(p.env_vars) if p and p.env_vars else []
+    env_var = get_env_var_for_reach(reach)
+    if env_var not in vars_to_clear:
+        vars_to_clear.append(env_var)
+    for ev in vars_to_clear:
+        if ev in os.environ:
+            del os.environ[ev]
+
+
+def scrub_disconnected_env() -> None:
+    """Scrub env vars for every disconnected provider. Called at startup AFTER
+    the login-shell env is merged in, so explicit disconnects win over the
+    shell environment."""
+    for name in get_disconnected():
+        _scrub_provider_env(name)
+
+
 def get_api_key_status(reach: str) -> dict:
     keys = _read_keys()
     key = keys.get(reach, "")
@@ -68,6 +146,8 @@ def set_api_key(reach: str, value: str):
         _write_keys(keys)
         env_var = get_env_var_for_reach(reach)
         os.environ[env_var] = value
+        # Reconnecting clears the explicit-disconnect flag.
+        unmark_disconnected(reach)
     else:
         clear_api_key(reach)
 
@@ -76,15 +156,10 @@ def clear_api_key(reach: str):
     if reach in keys:
         del keys[reach]
         _write_keys(keys)
-    from .providers import get_provider
-    p = get_provider(reach)
-    vars_to_clear = list(p.env_vars) if p and p.env_vars else []
-    env_var = get_env_var_for_reach(reach)
-    if env_var not in vars_to_clear:
-        vars_to_clear.append(env_var)
-    for ev in vars_to_clear:
-        if ev in os.environ:
-            del os.environ[ev]
+    _scrub_provider_env(reach)
+    # Record the disconnect so it survives restarts even when the user's shell
+    # exports this provider's key (which the login-shell env capture re-injects).
+    mark_disconnected(reach)
 
 def load_api_keys_on_startup(reach: str):
     _keyfile = os.environ.get("HARNESS_KEY_FILE", "")
@@ -101,3 +176,5 @@ def load_api_keys_on_startup(reach: str):
     if key:
         env_var = get_env_var_for_reach(reach)
         os.environ[env_var] = key
+    # Honor explicit disconnects over any shell-exported keys.
+    scrub_disconnected_env()

@@ -138,11 +138,19 @@ def get_provider(name: str) -> Optional[Provider]:
 
 
 def available_providers() -> list:
-    """Providers with a usable key in the current environment."""
+    """Providers with a usable key in the current environment, EXCLUDING any the
+    user explicitly disconnected (authoritative over a shell-exported key)."""
+    try:
+        from .keys import get_disconnected
+        disconnected = get_disconnected()
+    except Exception:
+        disconnected = set()
     seen = set()
     out = []
     for p in PROVIDERS:
         if p.name in seen:
+            continue
+        if p.name in disconnected:
             continue
         if p.available:
             out.append(p)
