@@ -202,13 +202,28 @@ class WikiClient:
                 "tags": p.get("tags"),
             })
 
-        # 2. edges via the per-slug graph neighborhood (1 hop), de-duplicated + undirected-deduped
+        # 2. edges via the per-slug graph neighborhood (1 hop), de-duplicated +
+        # undirected-deduped. The manifest already proved the wiki is reachable
+        # (nodes are populated), so edges are BEST-EFFORT: we use a short per-call
+        # timeout and a hard time budget so a large wiki can't make Refresh hang
+        # or time out and look "disconnected". Partial edges are fine.
+        import time as _t
         edges = []
         seen = set()
         node_ids = set(slugs)
+        _edge_deadline = _t.monotonic() + min(float(self.timeout), 6.0)
+        _edge_timeout = 2.5  # per-request; keep one slow page from stalling refresh
         for slug in slugs:
+            if _t.monotonic() > _edge_deadline:
+                break  # time budget spent -> return what we have (still "ok")
             try:
-                g = _get(f"/wiki/graph/{urllib.parse.quote(slug)}?hops=1")
+                url = f"{self.base_url}/wiki/graph/{urllib.parse.quote(slug)}?hops=1"
+                headers = {"Accept": "application/json"}
+                if self.token:
+                    headers["Authorization"] = f"Bearer {self.token}"
+                req = urllib.request.Request(url, method="GET", headers=headers)
+                with urllib.request.urlopen(req, timeout=_edge_timeout) as r:
+                    g = json.loads(r.read().decode("utf-8", "replace")) if r.status == 200 else {}
             except Exception:
                 continue
             for e in (g.get("edges", []) if isinstance(g, dict) else []):

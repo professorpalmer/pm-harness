@@ -2308,7 +2308,13 @@ class Handler(BaseHTTPRequestHandler):
                     "connection error", "urlopen error", "getaddrinfo",
                     "no route to host", "network is unreachable", "[errno",
                 ))
-                if _unreachable:
+                # If the wiki was NEVER configured (no base_url/token), an
+                # unreachable result is just "not set up" -> neutral. But if a
+                # base_url IS configured, a transient failure must NOT wipe the
+                # connection -- keep configured + base_url and report a retryable
+                # error so Refresh recovers instead of showing "not connected".
+                _is_configured = bool(client.base_url)
+                if _unreachable and not _is_configured:
                     return self._send(200, json.dumps({
                         "configured": False,
                         "status": "not_configured",
@@ -2321,7 +2327,9 @@ class Handler(BaseHTTPRequestHandler):
                     "status": "error",
                     "nodes": [],
                     "edges": [],
-                    "error": res["error"],
+                    "error": ("Wiki temporarily unreachable -- click Refresh to retry."
+                              if _unreachable else res["error"]),
+                    "retryable": True,
                     "base_url": client.base_url
                 }))
             _wiki_payload = {
