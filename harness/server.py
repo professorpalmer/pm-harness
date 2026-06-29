@@ -340,6 +340,52 @@ from .keys import load_api_keys_on_startup, get_api_key_status, get_env_var_for_
 from .wiki_config import load_wiki_config_on_startup, get_wiki_config, set_wiki_config
 load_api_keys_on_startup(_cfg.reach)
 load_wiki_config_on_startup()
+
+
+def _driver_provider_available(spec: str) -> bool:
+    """True if the provider backing a driver spec currently has a usable key.
+    A bare name (e.g. 'qwen3-coder-30b') routes through the reach provider
+    (OpenRouter); a 'provider:model' spec is backed by that provider."""
+    from . import providers as _prov
+    if not spec:
+        return False
+    if ":" in spec:
+        prov_name = spec.split(":", 1)[0]
+        p = _prov.get_provider(prov_name)
+        return bool(p and p.available)
+    # Bare catalog name -> uses the reach provider (default openrouter).
+    p = _prov.get_provider(_cfg.reach)
+    return bool(p and p.available)
+
+
+def _resolve_available_driver():
+    """If the configured driver's provider is unavailable (e.g. OpenRouter was
+    disconnected but the saved driver still routes through it), fall back to the
+    first available enabled model so the app never defaults to a dead driver."""
+    global _cfg
+    try:
+        if _driver_provider_available(_cfg.driver):
+            return
+        # Pick the first available pilot (enabled set, key-filtered).
+        from . import model_visibility as _mv
+        candidates = _mv.enabled_pilots()
+        for spec in candidates:
+            if _driver_provider_available(spec):
+                _cfg.driver = spec
+                # Recompute the context window inline (the _apply_model_context_window
+                # helper is defined later in this module; avoid a forward reference).
+                if "HARNESS_MAX_CONTEXT_TOKENS" not in os.environ:
+                    try:
+                        from pmharness.registry import context_window
+                        _cfg.max_context_tokens = context_window(_cfg.driver, default=200000)
+                    except Exception:
+                        pass
+                return
+    except Exception:
+        pass
+
+
+_resolve_available_driver()
 _session = Session(_cfg)
 _pilot = ConversationalSession(_cfg)
 import tempfile as _tf
@@ -1512,10 +1558,14 @@ class Handler(BaseHTTPRequestHandler):
             action = str(body.get("action", "")).strip().lower()
             if action == "clear" or body.get("clear") is True:
                 clear_api_key(p.name)
-                # If we just disconnected the ACTIVE driver's provider, the pilot
-                # can no longer run -- rebuild so it rebinds (or surfaces no-key).
+                # If the active driver's provider is no longer available (we just
+                # disconnected the provider backing it -- whether a 'provider:model'
+                # spec OR a bare name routed through the reach), re-resolve to the
+                # first available enabled model and rebuild, so the app never sits
+                # on a dead driver.
                 try:
-                    if _cfg.driver and _cfg.driver.split(":", 1)[0] == p.name:
+                    if not _driver_provider_available(_cfg.driver):
+                        _resolve_available_driver()
                         _rebuild_pilot_and_session()
                 except Exception:
                     pass
