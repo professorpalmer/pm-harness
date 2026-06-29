@@ -753,6 +753,8 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   const handleComposerDragOver = (e: React.DragEvent) => {
     if (e.dataTransfer.types.includes("Files")) {
       e.preventDefault();
+      e.stopPropagation();
+      try { e.dataTransfer.dropEffect = "copy"; } catch {}
       setIsDragOver(true);
     }
   };
@@ -763,35 +765,76 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
 
   const handleComposerDrop = async (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragOver(false);
     const files = Array.from(e.dataTransfer.files);
-    const imageFiles = files.filter((f) => f.type.startsWith("image/"));
-    if (imageFiles.length === 0) return;
+    if (files.length === 0) return;
 
     setUploadError(null);
+    const repo = (config?.repo || "").replace(/\/+$/, "");
+    const mentions: string[] = [];
     let addedCount = attachedImages.length;
-    for (const file of imageFiles) {
-      if (addedCount >= 8) {
-        setUploadError("Maximum 8 images allowed per message");
-        break;
+
+    for (const file of files) {
+      const isImage = file.type.startsWith("image/");
+      // Electron exposes the real OS path on dropped files; the browser does not.
+      const osPath: string = (file as any).path || "";
+
+      if (isImage) {
+        // Images attach as visual context (upload + thumbnail), as before.
+        if (addedCount >= 8) {
+          setUploadError("Maximum 8 images allowed per message");
+          continue;
+        }
+        try {
+          const previewUrl = URL.createObjectURL(file);
+          const uploaded = await api.uploadImage(file);
+          setAttachedImages((prev) => {
+            if (prev.length >= 8) return prev;
+            return [...prev, { path: uploaded.path, name: uploaded.name, previewUrl }];
+          });
+          addedCount++;
+        } catch (err) {
+          console.error("Failed to upload dropped image:", err);
+          setUploadError("Image upload failed");
+        }
+        continue;
+      }
+
+      // Non-image files become an @-mention the agent reads. If the file lives
+      // INSIDE the open workspace, use a plain repo-relative @path (the backend
+      // resolves it directly). Otherwise upload it into the workspace-readable
+      // store and reference the uploaded path -- so external drops work too.
+      const insideRepo = osPath && repo && (osPath === repo || osPath.startsWith(repo + "/"));
+      if (insideRepo) {
+        const rel = osPath.slice(repo.length + 1);
+        // The backend mention regex matches @<path> tokens without spaces; a path
+        // with spaces is uploaded instead so it resolves reliably.
+        if (!/\s/.test(rel)) {
+          mentions.push(`@${rel}`);
+          continue;
+        }
       }
       try {
-        const previewUrl = URL.createObjectURL(file);
-        const uploaded = await api.uploadImage(file);
-        setAttachedImages((prev) => {
-          if (prev.length >= 8) {
-            return prev;
-          }
-          return [
-            ...prev,
-            { path: uploaded.path, name: uploaded.name, previewUrl }
-          ];
-        });
-        addedCount++;
+        const uploaded = await api.uploadImage(file); // generic file upload endpoint
+        // uploaded.path is absolute; the backend reads it back for the mention.
+        const rel = repo && uploaded.path.startsWith(repo + "/")
+          ? uploaded.path.slice(repo.length + 1)
+          : uploaded.path;
+        if (!/\s/.test(rel)) mentions.push(`@${rel}`);
+        else setUploadError("Dropped file path has spaces -- rename and retry");
       } catch (err) {
-        console.error("Failed to upload dropped image:", err);
-        setUploadError("Image upload failed");
+        console.error("Failed to upload dropped file:", err);
+        setUploadError("File upload failed");
       }
+    }
+
+    if (mentions.length > 0) {
+      setInput((prev) => {
+        const sep = prev && !prev.endsWith(" ") ? " " : "";
+        return prev + sep + mentions.join(" ") + " ";
+      });
+      setTimeout(() => taRef.current?.focus(), 10);
     }
   };
 

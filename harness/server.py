@@ -2825,6 +2825,20 @@ class Handler(BaseHTTPRequestHandler):
                             file_to_read = full_real
                     except Exception:
                         pass
+                    # Also accept files dropped from OUTSIDE the workspace: the
+                    # composer uploads those into the trusted upload dir and
+                    # references them by absolute path. Allow reading that path
+                    # too (drag-and-drop of external files).
+                    if not is_file:
+                        try:
+                            upload_real = os.path.realpath(_UPLOAD_DIR)
+                            abs_token = os.path.realpath(os.path.abspath(token))
+                            if (os.path.commonpath([upload_real, abs_token]) == upload_real
+                                    and os.path.isfile(abs_token)):
+                                is_file = True
+                                file_to_read = abs_token
+                        except Exception:
+                            pass
                 
                 if is_file and file_to_read:
                     try:

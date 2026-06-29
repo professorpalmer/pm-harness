@@ -38,6 +38,24 @@ export default function App() {
     api.config().then(setConfig).catch(() => {});
   };
 
+  // Prevent the Electron window from navigating to a file dropped anywhere
+  // outside an explicit drop target (the default would replace the whole app
+  // with the file). Composer + message drop zones stopPropagation, so they keep
+  // working; this is the safety net for drops that miss those targets.
+  useEffect(() => {
+    const prevent = (e: DragEvent) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("dragover", prevent);
+    window.addEventListener("drop", prevent);
+    return () => {
+      window.removeEventListener("dragover", prevent);
+      window.removeEventListener("drop", prevent);
+    };
+  }, []);
+
   useEffect(() => { fetchConfig(); }, []);
   useEffect(() => {
     window.addEventListener("harness-config-changed", fetchConfig);
