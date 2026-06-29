@@ -431,7 +431,24 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     }
   }, [status]);
 
-  useEffect(() => { feedRef.current?.scrollTo(0, feedRef.current.scrollHeight); }, [items]);
+  // Auto-scroll to the bottom ONLY when the transcript grows (new
+  // messages/tool rows) or when the user is already pinned near the bottom --
+  // NOT on in-place mutations like expanding a tool card. Toggling a card open
+  // calls setItems (to flip card.open), which used to yank the view to the
+  // bottom and force the user to scroll back up to read what they just opened.
+  const prevItemCountRef = useRef(0);
+  useEffect(() => {
+    const el = feedRef.current;
+    if (!el) return;
+    const grew = items.length > prevItemCountRef.current;
+    prevItemCountRef.current = items.length;
+    // Distance from the bottom; if the user is within ~120px we keep them
+    // pinned (live streaming), otherwise we leave their scroll position alone.
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (grew || nearBottom) {
+      el.scrollTo(0, el.scrollHeight);
+    }
+  }, [items]);
 
   const fetchContextUsage = () => {
     if (!activeSessionId) return;
@@ -1424,7 +1441,16 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   };
 
   return (
-    <main className="flex flex-col h-full min-w-0 bg-bg">
+    <main
+      className="flex flex-col h-full min-w-0 bg-bg"
+      style={{
+        // Subtle depth: a faint cool highlight pooled near the top that fades
+        // into the base, so the canvas reads as a lit surface rather than a flat
+        // greyscale slab. Very low contrast on purpose.
+        backgroundImage:
+          "radial-gradient(120% 80% at 50% -10%, rgba(139,150,196,0.06), rgba(139,150,196,0) 60%)",
+      }}
+    >
       <header className="flex items-center justify-between px-6 border-b border-edge"
          style={{ paddingTop: 12, paddingBottom: 10, WebkitAppRegion: "drag" } as React.CSSProperties}>
         <span className="font-medium text-[13px] text-txt/90" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>Marionette</span>
