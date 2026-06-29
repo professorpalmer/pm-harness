@@ -225,8 +225,8 @@ export default function CheckpointsPane() {
                 key={cp.id}
                 className="p-2.5 bg-panel2 hover:bg-edge/20 border border-edge/60 rounded flex flex-col gap-1.5 transition-colors"
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="font-medium text-txt break-words leading-snug flex-1">
+                <div className="flex items-start justify-between gap-2 min-w-0">
+                  <div className="font-medium text-txt break-all leading-snug flex-1 min-w-0">
                     {cp.label}
                   </div>
                   <span className="px-1.5 py-0.5 text-[9px] uppercase font-semibold tracking-wider bg-panel border border-edge/80 rounded text-faint shrink-0 select-none">
