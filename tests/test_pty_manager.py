@@ -37,3 +37,44 @@ def test_pty_resize_does_not_crash():
 def test_pty_get_missing_returns_none():
     m = PtyManager()
     assert m.get("nonexistent") is None
+
+
+def test_pty_reap_removes_dead_sessions():
+    """A killed PTY session must be reaped out of the manager so dead/exited
+    terminals do not pile up (the Restart button relies on this cleanup)."""
+    import time
+    from harness.pty_manager import PtyManager
+    m = PtyManager()
+    s = m.create()
+    sid = s.id
+    assert m.get(sid) is not None
+    # Kill the underlying shell and reap.
+    s.kill()
+    time.sleep(0.1)
+    m.reap()
+    assert m.get(sid) is None
+
+
+def test_pty_kill_is_idempotent():
+    """Killing the same session twice (or a missing id) must not raise."""
+    from harness.pty_manager import PtyManager
+    m = PtyManager()
+    s = m.create()
+    sid = s.id
+    m.kill(sid)
+    m.kill(sid)        # already gone -> no error
+    m.kill("nonexistent-id")  # never existed -> no error
+    assert m.get(sid) is None
+
+
+def test_pty_write_after_kill_is_safe():
+    """Writing to a killed session must not raise (frontend may send a stray
+    keystroke before it notices the exit)."""
+    import time
+    from harness.pty_manager import PtyManager
+    m = PtyManager()
+    s = m.create()
+    s.kill()
+    time.sleep(0.1)
+    s.write("echo hi\n")  # must be a no-op, not an exception
+    assert s.alive() is False

@@ -1,19 +1,32 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { RotateCw } from "lucide-react";
 import { postJSON, stream, withToken } from "../lib/transport";
 
 // Built-in terminal: xterm.js front-end over the harness PTY backend.
 // create -> SSE stream output (base64 frames) -> POST keystrokes -> resize -> kill.
+// A restart counter lets the user relaunch a dead/stuck shell without reloading
+// the app (the previous session is killed cleanly first).
 export default function TerminalPane() {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const idRef = useRef<string>("");
   const cancelRef = useRef<null | (() => void)>(null);
+  // Bumping this re-runs the effect: cleanly tears down the old PTY + xterm and
+  // spins up a fresh one. Drives the Restart button and exit auto-recovery.
+  const [restartNonce, setRestartNonce] = useState(0);
+  const [exited, setExited] = useState(false);
+
+  const restart = () => {
+    setExited(false);
+    setRestartNonce((n) => n + 1);
+  };
 
   useEffect(() => {
     if (!hostRef.current) return;
+    setExited(false);
     const term = new Terminal({
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       fontSize: 12,
@@ -58,14 +71,19 @@ export default function TerminalPane() {
             if (ev.kind === "data" && ev.b64) {
               try { term.write(_b64ToBytes(ev.b64)); } catch { /* ignore */ }
             } else if (ev.kind === "exit") {
-              term.write("\r\n\x1b[90m[process exited]\x1b[0m\r\n");
+              term.write("\r\n\x1b[90m[process exited -- press Restart]\x1b[0m\r\n");
+              idRef.current = "";  // session is dead; stop sending keystrokes to it
+              if (!disposed) setExited(true);
             }
           },
-          undefined,
-          () => { /* stream error -- backend gone */ }
+          // onDone: SSE closed (shell exited / backend closed the stream)
+          () => { if (!disposed) setExited(true); },
+          // onError: backend gone / stream broke -- surface a restartable state
+          () => { if (!disposed) setExited(true); }
         );
       } catch (e) {
-        term.write("\r\n\x1b[31mFailed to start terminal.\x1b[0m\r\n");
+        term.write("\r\n\x1b[31mFailed to start terminal -- press Restart.\x1b[0m\r\n");
+        if (!disposed) setExited(true);
       }
     })();
 
@@ -78,14 +96,28 @@ export default function TerminalPane() {
       ro.disconnect();
       if (cancelRef.current) cancelRef.current();
       if (idRef.current) postJSON("/api/terminal/kill", { id: idRef.current });
+      idRef.current = "";
       term.dispose();
     };
-  }, []);
+  }, [restartNonce]);
 
   return (
     <div className="h-full flex flex-col bg-[#0a0a0c]">
-      <div className="px-3 py-2 border-b border-edge text-[10px] uppercase tracking-wider text-faint font-medium shrink-0">
-        Terminal
+      <div className="px-3 py-2 border-b border-edge flex items-center justify-between shrink-0">
+        <span className="text-[10px] uppercase tracking-wider text-faint font-medium">
+          Terminal{exited ? " -- exited" : ""}
+        </span>
+        <button
+          onClick={restart}
+          title="Restart terminal (kills the current shell and starts a fresh one)"
+          className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
+            exited
+              ? "bg-accent/15 text-accent border-accent/30 hover:bg-accent/25"
+              : "text-faint border-edge2 hover:text-muted hover:bg-panel2/60"
+          }`}
+        >
+          <RotateCw size={11} /> Restart
+        </button>
       </div>
       <div ref={hostRef} className="flex-1 min-h-0 p-1.5 overflow-hidden" />
     </div>

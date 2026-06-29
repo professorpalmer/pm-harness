@@ -1228,6 +1228,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"ok": True}))
         if path == "/api/terminal/create":
             try:
+                # Reap any dead PTY sessions first so exited/stuck terminals do
+                # not pile up across restarts (the Restart button creates a fresh
+                # session each time; the old dead ones should be cleaned up).
+                _pty.reap()
                 cwd = _cfg.repo or os.path.expanduser("~")
                 cols = int(body.get("cols", 80)); rows = int(body.get("rows", 24))
                 sess = _pty.create(cwd=cwd, cols=cols, rows=rows)
