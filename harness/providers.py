@@ -194,7 +194,7 @@ def available_pilots() -> list:
     return entries
 
 
-def build_pilot(spec: str, *, max_tokens: int = 1500):
+def build_pilot(spec: str, *, max_tokens: int | None = None):
     """Build a thin driver for a pilot spec.
 
     spec forms:
@@ -204,6 +204,15 @@ def build_pilot(spec: str, *, max_tokens: int = 1500):
     Returns a driver exposing .complete(prompt, system=...). Transport is OURS
     (pmharness drivers); only the routing DATA is Hermes-derived.
     """
+    # Output-token ceiling. Default to HARNESS_MAX_TOKENS (8000) so large edit_file
+    # / write_file tool calls are NOT truncated mid-arguments -- a 1500-token cap
+    # silently cut off big tool-call JSON, which is why edit_file "lost" its args.
+    if max_tokens is None:
+        try:
+            max_tokens = int(os.environ.get("HARNESS_MAX_TOKENS", "8000"))
+        except (ValueError, TypeError):
+            max_tokens = 8000
+
     preset_name = spec
     if spec.startswith("moa:"):
         preset_name = spec[4:]

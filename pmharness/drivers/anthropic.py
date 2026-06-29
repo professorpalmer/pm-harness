@@ -410,11 +410,17 @@ class AnthropicDriver:
         for idx in sorted(tool_blocks.keys()):
             tb = tool_blocks[idx]
             args = tb["args"] or "{}"
-            # Validate the assembled JSON; fall back to empty object if malformed.
+            # Validate the assembled JSON. If it's malformed (truncated mid-stream,
+            # e.g. the response hit max_tokens during a large edit_file), KEEP the
+            # raw partial string rather than silently replacing it with "{}" --
+            # the harness's parse_tool_calls detects the broken JSON and asks the
+            # model to retry with smaller args, instead of the args just vanishing.
             try:
                 json.loads(args)
             except Exception:
-                args = "{}"
+                # leave `args` as the raw (broken) partial so downstream parsing
+                # flags it as truncated/invalid rather than an empty call.
+                pass
             tool_calls.append({
                 "id": tb["id"],
                 "type": "function",

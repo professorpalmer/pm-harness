@@ -58,6 +58,21 @@ export default function CheckpointsPane() {
 
   useEffect(() => {
     fetchCheckpoints();
+    // Live-refresh when the agent mutates the repo (it dispatches
+    // "harness-repo-mutated" after every edit/checkpoint/restore) and when the
+    // window/tab regains focus -- so new restore points appear on their own
+    // instead of only after tabbing out and back (which used to remount the
+    // pane and was the only thing triggering a refetch).
+    const onMutated = () => fetchCheckpoints();
+    const onVisible = () => { if (!document.hidden) fetchCheckpoints(); };
+    window.addEventListener("harness-repo-mutated", onMutated);
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("harness-repo-mutated", onMutated);
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   const handleCreateSnapshot = async (e: React.FormEvent) => {
