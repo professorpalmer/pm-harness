@@ -8,6 +8,12 @@ const DEFAULT_URL = "https://duckduckgo.com";
 interface Tab {
   id: string;
   url: string;
+  // The URL the webview's src is bound to. Set ONCE at tab creation (and only
+  // changed by an explicit address-bar navigation), never by post-load redirect
+  // tracking. Binding the webview src to the live `url` caused React to re-drive
+  // the webview on every redirect -- interrupting login flows and bouncing back
+  // to the login screen in a refresh loop.
+  initialUrl: string;
   title: string;
   loading: boolean;
   canBack: boolean;
@@ -23,6 +29,7 @@ export default function BrowserPane() {
     {
       id: initialIdRef.current,
       url: DEFAULT_URL,
+      initialUrl: DEFAULT_URL,
       title: "New Tab",
       loading: false,
       canBack: false,
@@ -60,7 +67,7 @@ export default function BrowserPane() {
   const go = (raw: string) => {
     const next = normalize(raw);
     setTabs((prev) =>
-      prev.map((t) => (t.id === activeTabId ? { ...t, url: next, loading: true } : t))
+      prev.map((t) => (t.id === activeTabId ? { ...t, url: next, initialUrl: next, loading: true } : t))
     );
     if (isDesktop) {
       const wv = webviewsRef.current[activeTabId];
@@ -117,6 +124,7 @@ export default function BrowserPane() {
     const tab: Tab = {
       id,
       url: initialUrl,
+      initialUrl,
       title: "New Tab",
       loading: false,
       canBack: false,
@@ -140,6 +148,7 @@ export default function BrowserPane() {
         return [{
           id: newId,
           url: DEFAULT_URL,
+          initialUrl: DEFAULT_URL,
           title: "New Tab",
           loading: false,
           canBack: false,
@@ -292,9 +301,16 @@ export default function BrowserPane() {
                   delete webviewsRef.current[tab.id];
                 }
               }}
-              src={tab.url}
+              src={tab.initialUrl}
               // @ts-expect-error -- webview is an Electron element, not in React JSX types
               allowpopups="true"
+              // Persistent session partition: cookies + localStorage survive
+              // webview remounts and navigations. Without this the webview gets a
+              // fresh in-memory session each render, wiping the auth cookie right
+              // after login -- which bounced the user back to the login screen in a
+              // refresh loop (Twitter/X etc.). A shared "persist:browser" partition
+              // also keeps you logged in across tabs and app restarts.
+              partition="persist:browser"
               className="absolute inset-0 w-full h-full border-0"
               style={{
                 display: isActive ? "flex" : "none",

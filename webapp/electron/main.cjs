@@ -7,7 +7,7 @@
 // The renderer is the SAME React app as the web build; only the transport
 // implementation differs (IPC here vs fetch/SSE on the web).
 
-const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, session } = require("electron");
 app.name = "Marionette";
 const { spawn } = require("node:child_process");
 const http = require("node:http");
@@ -373,7 +373,49 @@ function createWindow() {
   else win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
 }
 
+// Configure the in-app browser's PERSISTENT session partition. The <webview>
+// uses partition="persist:browser"; here we give that session a realistic
+// desktop user-agent (some sites -- X/Twitter included -- refuse to keep a
+// session alive for the default Electron UA and bounce you back to login) and
+// route webview popups (OAuth/login windows) to a real child window in the SAME
+// partition so the auth cookie is written to the session the webview reads from.
+function configureBrowserSession() {
+  try {
+    const ses = session.fromPartition("persist:browser");
+    // A mainstream Chrome UA so login flows behave like a normal browser.
+    const chromeUA =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    try { ses.setUserAgent(chromeUA); } catch {}
+  } catch (e) {
+    _dbg2(`browser session config failed: ${e}`);
+  }
+}
+
+function _dbg2(msg) {
+  try { fs.appendFileSync(path.join(os.homedir(), ".pmharness", "electron.log"), `${new Date().toISOString()} ${msg}\n`); } catch {}
+}
+
+// When the in-app browser opens a popup (window.open from an OAuth/login page),
+// give it a real BrowserWindow bound to the SAME persistent partition so the
+// login completes and its cookie lands in the session the webview shares.
+app.on("web-contents-created", (_e, contents) => {
+  if (contents.getType() === "webview") {
+    contents.setWindowOpenHandler(({ url }) => {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          webPreferences: { partition: "persist:browser", contextIsolation: true },
+          width: 600,
+          height: 750,
+        },
+      };
+    });
+  }
+});
+
 app.whenReady().then(async () => {
+  configureBrowserSession();
   try { await startBackend(); } catch (e) { console.error("backend start failed:", e); }
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
