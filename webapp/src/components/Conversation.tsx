@@ -223,6 +223,24 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   const feedRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const planTurnRef = useRef(false);
+  // Typewriter buffer: network deltas arrive in bursts (whole sentences at a
+  // time). To render smoothly like Cursor/Hermes we DON'T paint on arrival --
+  // we queue incoming text here and drain it at a steady per-frame cadence via
+  // requestAnimationFrame, so the user sees an even "typing" effect regardless
+  // of how chunky the underlying stream is.
+  const typeBufRef = useRef<string>("");          // undrained characters
+  const typeRafRef = useRef<number | null>(null); // active rAF handle
+  const typeDoneRef = useRef<boolean>(false);     // stream ended -> drain fast then stop
+
+  // Cancel any in-flight typewriter rAF on unmount so the loop never leaks.
+  useEffect(() => {
+    return () => {
+      if (typeRafRef.current != null) {
+        cancelAnimationFrame(typeRafRef.current);
+        typeRafRef.current = null;
+      }
+    };
+  }, []);
   const [msgQueue, setMsgQueue] = useState<{ text: string; auto: boolean; plan?: boolean }[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
@@ -397,6 +415,10 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   useEffect(() => {
     if (status === "done" || status === "error") {
       triggerCompletionEffects();
+      // Refresh the context-usage badge as soon as a turn ends, so the inline
+      // composer % updates live instead of only when the context panel is open
+      // or clicked. (The 5s poll only runs while the panel is visible.)
+      fetchContextUsage();
 
       const queuePrefVal = localStorage.getItem("pmharness.queueMessages");
       const isQueueEnabled = queuePrefVal !== null ? queuePrefVal === "true" : true;
@@ -1020,6 +1042,64 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     };
   }, [pendingJobIds, backendPendingSwarms]);
 
+  // Append decoded text to the streaming assistant bubble (one state update).
+  const appendStreamingText = (chunk: string) => {
+    if (!chunk) return;
+    setItems((p) => {
+      const lastIdx = p.length - 1;
+      if (lastIdx >= 0 && p[lastIdx].kind === "msg") {
+        const lastMsg = p[lastIdx] as { kind: "msg"; msg: Msg };
+        if (lastMsg.msg.role === "assistant" && lastMsg.msg.streaming) {
+          const updated = [...p];
+          updated[lastIdx] = { kind: "msg", msg: { ...lastMsg.msg, text: lastMsg.msg.text + chunk } };
+          return updated;
+        }
+      }
+      return [...p, { kind: "msg", msg: { role: "assistant", text: chunk, streaming: true, isPlan: planTurnRef.current } }];
+    });
+  };
+
+  // Drain the typewriter buffer at a steady cadence. While the stream is live we
+  // reveal a fixed number of chars per frame (smooths bursty network arrival);
+  // once the stream has ended we accelerate so we never lag behind the model.
+  const pumpTypewriter = () => {
+    typeRafRef.current = null;
+    const buf = typeBufRef.current;
+    if (!buf) {
+      if (!typeDoneRef.current) typeRafRef.current = requestAnimationFrame(pumpTypewriter);
+      return;
+    }
+    // Reveal speed: ~3 chars/frame live (~180 cps at 60fps); when the stream is
+    // done, drain a larger slice so the tail finishes promptly.
+    const perFrame = typeDoneRef.current ? Math.max(12, Math.ceil(buf.length / 4)) : 3;
+    const take = buf.slice(0, perFrame);
+    typeBufRef.current = buf.slice(perFrame);
+    appendStreamingText(take);
+    if (typeBufRef.current || !typeDoneRef.current) {
+      typeRafRef.current = requestAnimationFrame(pumpTypewriter);
+    }
+  };
+
+  const startTypewriter = () => {
+    typeDoneRef.current = false;
+    if (typeRafRef.current == null) {
+      typeRafRef.current = requestAnimationFrame(pumpTypewriter);
+    }
+  };
+
+  // Flush any buffered text immediately + stop the loop (on done/error/finalize).
+  const flushTypewriter = () => {
+    typeDoneRef.current = true;
+    if (typeBufRef.current) {
+      appendStreamingText(typeBufRef.current);
+      typeBufRef.current = "";
+    }
+    if (typeRafRef.current != null) {
+      cancelAnimationFrame(typeRafRef.current);
+      typeRafRef.current = null;
+    }
+  };
+
   const executeSend = (msg: string, useAuto: boolean, usePlan: boolean = false) => {
     planTurnRef.current = usePlan;
     const imgsToSend = [...attachedImages];
@@ -1062,36 +1142,43 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
       } else if (ev.kind === "message_delta") {
         setCompactingStatus(null);
         setStatus("streaming");
+        // Ensure a streaming bubble exists, then queue the text for the
+        // typewriter loop (smooth cadence) instead of painting on arrival.
         setItems((p) => {
           const lastIdx = p.length - 1;
           if (lastIdx >= 0 && p[lastIdx].kind === "msg") {
             const lastMsg = p[lastIdx] as { kind: "msg"; msg: Msg };
             if (lastMsg.msg.role === "assistant" && lastMsg.msg.streaming) {
-              const updatedMsg = {
-                ...lastMsg.msg,
-                text: lastMsg.msg.text + (d.text || "")
-              };
-              const updatedItems = [...p];
-              updatedItems[lastIdx] = { kind: "msg", msg: updatedMsg };
-              return updatedItems;
+              return p;
             }
           }
-          return [...p, { kind: "msg", msg: { role: "assistant", text: d.text || "", streaming: true, isPlan: planTurnRef.current } }];
+          return [...p, { kind: "msg", msg: { role: "assistant", text: "", streaming: true, isPlan: planTurnRef.current } }];
         });
+        typeBufRef.current += (d.text || "");
+        startTypewriter();
       } else if (ev.kind === "message") {
         setCompactingStatus(null);
         setStatus("thinking");
+        // Drain any queued typed text before finalizing, so the bubble is whole.
+        flushTypewriter();
         setItems((p) => {
           const lastIdx = p.length - 1;
           if (lastIdx >= 0 && p[lastIdx].kind === "msg") {
             const lastMsg = p[lastIdx] as { kind: "msg"; msg: Msg };
             if (lastMsg.msg.role === "assistant" && lastMsg.msg.streaming) {
-              if (!d.text) {
+              // Finalize the streaming bubble in place. If the final text is
+              // empty, KEEP whatever already streamed into the bubble (don't wipe
+              // visible narration) -- only drop the bubble when it never had any
+              // text at all. This preserves the text -> tool -> text -> tool
+              // thought chain instead of making intermediate prose vanish when a
+              // step finalizes with an empty cleaned-say.
+              const finalText = d.text || lastMsg.msg.text || "";
+              if (!finalText.trim()) {
                 return p.slice(0, lastIdx);
               }
               const updatedMsg = {
                 ...lastMsg.msg,
-                text: d.text,
+                text: finalText,
                 streaming: false
               };
               const updatedItems = [...p];
@@ -1168,6 +1255,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
         handleSwarmResult(d);
       } else if (ev.kind === "assistant_done") {
         setStatus("done");
+        fetchContextUsage();
         // The backend derives a session title from the first user message
         // (set_title_if_default). Tell the sidebar to refetch so the auto-named
         // session shows up immediately, Cursor/Hermes-style, instead of staying
@@ -1178,8 +1266,8 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
         setStatus("error");
         setItems((p) => [...p, { kind: "msg", msg: { role: "assistant", text: "[error] " + (d.error || "") } }]);
       }
-    }, () => { setStatus("done"); cancelRef.current = null; setCompactingStatus(null); },
-       () => { setStatus("error"); cancelRef.current = null; setCompactingStatus(null); });
+    }, () => { flushTypewriter(); setStatus("done"); cancelRef.current = null; setCompactingStatus(null); },
+       () => { flushTypewriter(); setStatus("error"); cancelRef.current = null; setCompactingStatus(null); });
   };
 
   const send = () => {
@@ -1330,6 +1418,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   const stop = () => {
     cancelRef.current?.();
     cancelRef.current = null;
+    flushTypewriter();
     setStatus("idle");
     api.interruptSession().catch((e) => console.error("Failed to interrupt session on backend:", e));
   };
