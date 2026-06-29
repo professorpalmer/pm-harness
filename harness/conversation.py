@@ -268,6 +268,8 @@ class ConversationalSession:
         self._first_objective: str = ""
         # token accounting for the autobudget governor (real metering, not a stub)
         self._tokens_used: int = 0
+        self._tokens_in: int = 0   # cumulative prompt tokens (for accurate cost)
+        self._tokens_out: int = 0  # cumulative completion tokens
         # concurrency: a single ConversationalSession is single-flight. Two
         # concurrent send()/run_auto() calls would interleave self._history and
         # corrupt the transcript, so we reject re-entrant streams rather than
@@ -1506,8 +1508,11 @@ class ConversationalSession:
 
                 # real token metering: prompt + completion (drivers report tokens_out;
                 # estimate tokens_in from prompt length when not provided).
-                self._tokens_used += int(getattr(resp, "tokens_out", 0) or 0)
-                self._tokens_used += int(getattr(resp, "tokens_in", 0) or len(prompt) // 4)
+                _t_out = int(getattr(resp, "tokens_out", 0) or 0)
+                _t_in = int(getattr(resp, "tokens_in", 0) or len(prompt) // 4)
+                self._tokens_used += _t_out + _t_in
+                self._tokens_out += _t_out
+                self._tokens_in += _t_in
 
                 if resp and resp.error:
                     from pmharness.drivers import error_classifier

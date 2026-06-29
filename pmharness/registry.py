@@ -48,9 +48,30 @@ def model_names(tier: Optional[str] = None) -> list:
 
 
 def price(name: str) -> tuple:
-    """Native (price_in, price_out) per Mtok for the cost column."""
-    m = _entry(name)
-    return (m.get("price_in"), m.get("price_out"))
+    """Native (price_in, price_out) per Mtok for the cost column. Tries the eval
+    catalog first (exact native rates for benchmarked models); for everything
+    else -- including provider:model picker specs like 'anthropic:claude-opus-4-8'
+    -- falls back to the live OpenRouter price map so the estimate reflects the
+    real published rate (Opus 4.8 = $5/$25) instead of a placeholder."""
+    try:
+        m = _entry(name)
+        pin, pout = m.get("price_in"), m.get("price_out")
+        if pin is not None and pout is not None:
+            return (pin, pout)
+    except Exception:
+        pass
+    live = _resolve_live_price(name)
+    if live is not None:
+        return live
+    return (None, None)
+
+
+def resolve_price(name: str, default_in: float = 0.5, default_out: float = 2.0) -> tuple:
+    """price() with a numeric fallback, for the cost estimator UI."""
+    pin, pout = price(name)
+    if pin is None or pout is None:
+        return (default_in, default_out)
+    return (pin, pout)
 
 
 # ---- live OpenRouter context-window map (cached) --------------------------
@@ -94,9 +115,17 @@ def _cw_norm(slug: str) -> str:
     return _re.sub(r"[^a-z0-9]", "", s)
 
 
+# Live OpenRouter PRICE map {slug: (price_in_per_Mtok, price_out_per_Mtok)},
+# populated as a side effect of the windows fetch (same /models payload) so the
+# cost estimator shows real rates (Opus 4.8 = $5/$25) instead of a placeholder.
+_PRICE_MEM: dict = {}
+
+
 def _fetch_live_windows() -> dict:
-    """Fetch {slug: context_length} from OpenRouter (no auth). Returns {} on any
-    failure. Caller handles caching + fallback."""
+    """Fetch {slug: context_length} from OpenRouter (no auth). Also populates the
+    module-level live price map from the same payload. Returns {} on any failure;
+    caller handles caching + fallback."""
+    global _PRICE_MEM
     req = _urlreq.Request(
         "https://openrouter.ai/api/v1/models",
         headers={"User-Agent": "pm-harness"},
@@ -104,12 +133,68 @@ def _fetch_live_windows() -> dict:
     raw = _urlreq.urlopen(req, timeout=_CW_FETCH_TIMEOUT).read()
     data = _json.loads(raw)
     out = {}
+    prices = {}
     for m in data.get("data", []):
         mid = m.get("id")
         ctx = m.get("context_length")
         if mid and isinstance(ctx, int) and ctx > 0:
             out[mid] = ctx
+        # OpenRouter pricing is per-TOKEN as decimal strings; x1e6 -> per Mtok.
+        pr = m.get("pricing") or {}
+        try:
+            p_in = float(pr.get("prompt"))
+            p_out = float(pr.get("completion"))
+            if mid and (p_in > 0 or p_out > 0):
+                prices[mid] = (p_in * 1.0e6, p_out * 1.0e6)
+        except (TypeError, ValueError):
+            pass
+    if prices:
+        _PRICE_MEM = prices
     return out
+
+
+def _resolve_live_price(name: str):
+    """Best live OpenRouter (price_in, price_out) per Mtok for `name`, mirroring
+    _resolve_live_window's slug matching. Returns None if no live match."""
+    _live_windows()  # ensure the fetch ran (populates _PRICE_MEM as a side effect)
+    live = _PRICE_MEM
+    if not live:
+        return None
+    candidates = []
+    try:
+        ent = _entry(name)
+        if ent.get("openrouter"):
+            candidates.append(ent["openrouter"])
+    except Exception:
+        pass
+    if ":" in name:
+        candidates.append(name.split(":", 1)[1])
+    candidates.append(name)
+    for c in candidates:
+        if c in live:
+            return live[c]
+    # Fuzzy normalized match, shortest slug wins (base model over -fast/-image).
+    targets = {_cw_norm(c) for c in candidates if c}
+    best = None
+    best_len = 10 ** 9
+    for slug, pair in live.items():
+        if _cw_norm(slug) in targets and len(slug) < best_len:
+            best = pair
+            best_len = len(slug)
+    return best
+
+
+def _restore_prices_from_disk(disk: dict) -> None:
+    """Restore the live price map from a disk-cached payload (so cost estimates
+    work without a fresh network fetch). Tolerates an old cache with no prices."""
+    global _PRICE_MEM
+    try:
+        cached = disk.get("prices")
+        if isinstance(cached, dict) and cached and not _PRICE_MEM:
+            _PRICE_MEM = {k: (float(v[0]), float(v[1])) for k, v in cached.items()
+                          if isinstance(v, (list, tuple)) and len(v) == 2}
+    except Exception:
+        pass
 
 
 def _live_windows() -> dict:
@@ -138,6 +223,7 @@ def _live_windows() -> dict:
             windows = disk.get("windows")
             if isinstance(windows, dict) and (_time.time() - fetched_at) < _CW_CACHE_TTL:
                 _CW_MEM = {k: int(v) for k, v in windows.items()}
+                _restore_prices_from_disk(disk)
                 _CW_MEM_AT = _time.monotonic()
                 return _CW_MEM
         # Stale or missing -> try one fetch; on failure fall back to stale disk.
@@ -146,7 +232,8 @@ def _live_windows() -> dict:
             if fresh:
                 try:
                     with open(path, "w") as f:
-                        _json.dump({"fetched_at": _time.time(), "windows": fresh}, f)
+                        _json.dump({"fetched_at": _time.time(), "windows": fresh,
+                                    "prices": _PRICE_MEM}, f)
                 except Exception:
                     pass
                 _CW_MEM = fresh
@@ -157,6 +244,7 @@ def _live_windows() -> dict:
         # Network failed -> use stale disk cache if present, else empty.
         if isinstance(disk, dict) and isinstance(disk.get("windows"), dict):
             _CW_MEM = {k: int(v) for k, v in disk["windows"].items()}
+            _restore_prices_from_disk(disk)
         else:
             _CW_MEM = {}
         _CW_MEM_AT = _time.monotonic()

@@ -2355,23 +2355,24 @@ class Handler(BaseHTTPRequestHandler):
             qtok = parse_qs(u.query).get("token", [""])[0]
             if qtok != _TOKEN and self.headers.get("X-Harness-Token", "") != _TOKEN:
                 return self._send(403, json.dumps({"error": "missing or bad token"}))
-            price_in = 0.5
-            price_out = 2.0
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            catalog_path = os.path.join(base_dir, "pmharness", "catalog.json")
-            if os.path.exists(catalog_path):
-                try:
-                    with open(catalog_path, "r", encoding="utf-8") as f:
-                        catalog_data = json.load(f)
-                        for m in catalog_data.get("models", []):
-                            if m.get("name") == _cfg.driver or _cfg.driver in m.get("name", "") or m.get("name", "") in _cfg.driver:
-                                price_in = m.get("price_in", price_in)
-                                price_out = m.get("price_out", price_out)
-                                break
-                except Exception:
-                    pass
+            # Resolve real per-Mtok pricing for the active driver: eval-catalog
+            # native rates first, then the live OpenRouter price map (so picker
+            # specs like 'anthropic:claude-opus-4-8' show the true $5/$25 instead
+            # of a 0.5/2.0 placeholder).
+            try:
+                from pmharness.registry import resolve_price
+                price_in, price_out = resolve_price(_cfg.driver)
+            except Exception:
+                price_in, price_out = 0.5, 2.0
             tokens_used = getattr(_pilot, "_tokens_used", 0)
-            est_session_cost = (tokens_used / 1.0e6) * price_out
+            # Accurate split: input tokens at price_in, output at price_out. Falls
+            # back to a blended estimate if the in/out split isn't tracked yet.
+            _t_in = getattr(_pilot, "_tokens_in", 0)
+            _t_out = getattr(_pilot, "_tokens_out", 0)
+            if _t_in or _t_out:
+                est_session_cost = (_t_in / 1.0e6) * price_in + (_t_out / 1.0e6) * price_out
+            else:
+                est_session_cost = (tokens_used / 1.0e6) * price_out
             jobs_list = []
             try:
                 jobs = _session.state().list_jobs()
@@ -2435,22 +2436,12 @@ class Handler(BaseHTTPRequestHandler):
             if qtok != _TOKEN and self.headers.get("X-Harness-Token", "") != _TOKEN:
                 return self._send(403, json.dumps({"error": "missing or bad token"}))
             res_jobs = []
-            price_in = 0.5
-            price_out = 2.0
             try:
-                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                catalog_path = os.path.join(base_dir, "pmharness", "catalog.json")
-                if os.path.exists(catalog_path):
-                    try:
-                        with open(catalog_path, "r", encoding="utf-8") as f:
-                            catalog_data = json.load(f)
-                            for m in catalog_data.get("models", []):
-                                if m.get("name") == _cfg.driver or _cfg.driver in m.get("name", "") or m.get("name", "") in _cfg.driver:
-                                    price_in = m.get("price_in", price_in)
-                                    price_out = m.get("price_out", price_out)
-                                    break
-                    except Exception:
-                        pass
+                from pmharness.registry import resolve_price
+                price_in, price_out = resolve_price(_cfg.driver)
+            except Exception:
+                price_in, price_out = 0.5, 2.0
+            try:
                 
                 state_obj = _session.state()
                 jobs = state_obj.list_jobs()
@@ -2520,7 +2511,14 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             
             tokens_used = getattr(_pilot, "_tokens_used", 0)
-            est_session_cost = (tokens_used / 1.0e6) * price_out
+            # Accurate split: input tokens at price_in, output at price_out. Falls
+            # back to a blended estimate if the in/out split isn't tracked yet.
+            _t_in = getattr(_pilot, "_tokens_in", 0)
+            _t_out = getattr(_pilot, "_tokens_out", 0)
+            if _t_in or _t_out:
+                est_session_cost = (_t_in / 1.0e6) * price_in + (_t_out / 1.0e6) * price_out
+            else:
+                est_session_cost = (tokens_used / 1.0e6) * price_out
             
             response_data = {
                 "session": {
