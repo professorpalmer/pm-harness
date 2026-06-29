@@ -2383,43 +2383,51 @@ class Handler(BaseHTTPRequestHandler):
                 est_session_cost = (tokens_used / 1.0e6) * price_out
             jobs_list = []
             try:
+                from puppetmaster.models import ArtifactType
+                from puppetmaster.usage import aggregate_token_usage
                 jobs = _session.state().list_jobs()
-                for j in jobs:
-                    jid = j.get("id")
-                    if jid:
+                store = _session.state().store
+                jids = [j.get("id") for j in jobs if j.get("id")]
+                # Batch: one bulk artifact read regrouped by job_id, instead of
+                # one store.list_artifacts(jid) query PER job (the N+1).
+                arts_by_job: dict = {}
+                try:
+                    for a in store.list_artifacts_for_jobs(jids):
+                        arts_by_job.setdefault(getattr(a, "job_id", None), []).append(a)
+                except Exception:
+                    arts_by_job = None  # fall back to per-job reads
+                for jid in jids:
+                    try:
+                        artifacts = (arts_by_job.get(jid, []) if arts_by_job is not None
+                                     else store.list_artifacts(jid))
+                        routing = []
+                        seen_router_tasks = set()
+                        total = 0.0
+                        for artifact in artifacts:
+                            if artifact.type == ArtifactType.ROUTING and artifact.created_by == "router":
+                                task_id = artifact.task_id
+                                if task_id:
+                                    if task_id in seen_router_tasks:
+                                        continue
+                                    seen_router_tasks.add(task_id)
+                                routing.append(artifact)
+                        for artifact in routing:
+                            payload = artifact.payload or {}
+                            cost = float(payload.get("estimated_cost_usd") or 0.0)
+                            total += cost
+                        tokens = 0
                         try:
-                            from puppetmaster.models import ArtifactType
-                            from puppetmaster.usage import aggregate_token_usage
-                            store = _session.state().store
-                            artifacts = store.list_artifacts(jid)
-                            routing = []
-                            seen_router_tasks = set()
-                            total = 0.0
-                            for artifact in artifacts:
-                                if artifact.type == ArtifactType.ROUTING and artifact.created_by == "router":
-                                    task_id = artifact.task_id
-                                    if task_id:
-                                        if task_id in seen_router_tasks:
-                                            continue
-                                        seen_router_tasks.add(task_id)
-                                    routing.append(artifact)
-                            for artifact in routing:
-                                payload = artifact.payload or {}
-                                cost = float(payload.get("estimated_cost_usd") or 0.0)
-                                total += cost
-                            tokens = 0
-                            try:
-                                token_usage_dict = aggregate_token_usage(artifacts)
-                                tokens = token_usage_dict.get("total_tokens", 0)
-                            except Exception:
-                                pass
-                            jobs_list.append({
-                                "job_id": jid,
-                                "tokens": tokens,
-                                "est_cost_usd": round(total, 6)
-                            })
+                            token_usage_dict = aggregate_token_usage(artifacts)
+                            tokens = token_usage_dict.get("total_tokens", 0)
                         except Exception:
                             pass
+                        jobs_list.append({
+                            "job_id": jid,
+                            "tokens": tokens,
+                            "est_cost_usd": round(total, 6)
+                        })
+                    except Exception:
+                        pass
             except Exception:
                 pass
             response_data = {
@@ -2450,23 +2458,46 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 price_in, price_out = 0.5, 2.0
             try:
-                
                 state_obj = _session.state()
                 jobs = state_obj.list_jobs()
+                store = state_obj.store
                 from puppetmaster.models import ArtifactType
                 from puppetmaster.usage import aggregate_token_usage
-                
+
+                jids = [j.get("id") for j in jobs if j.get("id")]
+                # Batch all three per-job reads (the old N+1 read artifacts TWICE
+                # plus tasks, per job): one bulk artifacts read + one bulk tasks
+                # read, regrouped by job_id.
+                arts_by_job: dict = {}
+                tasks_by_job: dict = {}
+                try:
+                    for a in store.list_artifacts_for_jobs(jids):
+                        arts_by_job.setdefault(getattr(a, "job_id", None), []).append(a)
+                except Exception:
+                    arts_by_job = None
+                try:
+                    for t in store.list_tasks_for_jobs(jids):
+                        tasks_by_job.setdefault(getattr(t, "job_id", None), []).append(t)
+                except Exception:
+                    tasks_by_job = None
+
                 for j in jobs:
                     jid = j.get("id")
                     if not jid:
                         continue
-                    
-                    artifacts_list = state_obj.job_artifacts(jid)
-                    
+
+                    raw_arts = (arts_by_job.get(jid, []) if arts_by_job is not None
+                                else store.list_artifacts(jid))
+                    # job_artifacts() formats the same artifacts for display; build
+                    # it from the batched list when available to avoid a re-read.
+                    try:
+                        artifacts_list = state_obj.format_artifacts(raw_arts) if hasattr(state_obj, "format_artifacts") else state_obj.job_artifacts(jid)
+                    except Exception:
+                        artifacts_list = []
+
                     tokens = 0
                     est_cost_usd = 0.0
                     try:
-                        raw_arts = state_obj.store.list_artifacts(jid)
                         seen_router_tasks = set()
                         for artifact in raw_arts:
                             if artifact.type == ArtifactType.ROUTING and artifact.created_by == "router":
@@ -2478,7 +2509,6 @@ class Handler(BaseHTTPRequestHandler):
                                 payload = artifact.payload or {}
                                 cost = float(payload.get("estimated_cost_usd") or 0.0)
                                 est_cost_usd += cost
-                        
                         try:
                             token_usage_dict = aggregate_token_usage(raw_arts)
                             tokens = token_usage_dict.get("total_tokens", 0)
@@ -2486,10 +2516,11 @@ class Handler(BaseHTTPRequestHandler):
                             pass
                     except Exception:
                         pass
-                    
+
                     tasks_list = []
                     try:
-                        raw_tasks = state_obj.store.list_tasks(jid)
+                        raw_tasks = (tasks_by_job.get(jid, []) if tasks_by_job is not None
+                                     else store.list_tasks(jid))
                         for t in raw_tasks:
                             tasks_list.append({
                                 "id": getattr(t, "id", ""),
@@ -2501,7 +2532,7 @@ class Handler(BaseHTTPRequestHandler):
                             })
                     except Exception:
                         pass
-                    
+
                     res_jobs.append({
                         "id": jid,
                         "goal": j.get("goal", ""),

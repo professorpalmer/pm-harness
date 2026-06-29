@@ -213,9 +213,13 @@ class ProviderWorker:
                 ".mypy_cache", ".ruff_cache", "*.egg-info", ".coverage",
                 "node_modules", ".DS_Store",
             ]
+            # One git reset over ALL pathspecs instead of 2 spawns per spec
+            # (git reset accepts multiple pathspecs; 20 spawns -> 1).
+            _reset_specs = []
             for _spec in _ARTIFACT_PATHSPECS:
-                _git(wt_path, "reset", "-q", "--", f":(glob){_spec}")
-                _git(wt_path, "reset", "-q", "--", f":(glob)**/{_spec}")
+                _reset_specs.append(f":(glob){_spec}")
+                _reset_specs.append(f":(glob)**/{_spec}")
+            _git(wt_path, "reset", "-q", "--", *_reset_specs)
                 
             # Run git diff --cached --no-color using subprocess.run directly to preserve formatting/newlines
             p_diff = subprocess.run(

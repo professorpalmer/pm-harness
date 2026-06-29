@@ -132,20 +132,7 @@ class CheckpointStore:
             return []
 
         raw = self._list_raw_checkpoints()
-        valid = []
-        for cp in raw:
-            try:
-                # Confirm the commit exists in git
-                res = subprocess.run(
-                    ["git", "cat-file", "-e", f"{cp['id']}^" + "{commit}"],
-                    cwd=self.repo,
-                    capture_output=True,
-                )
-                if res.returncode == 0:
-                    valid.append(cp)
-            except Exception:
-                pass
-        return valid
+        return self._filter_existing_commits(raw)
 
     def restore(self, checkpoint_id: str) -> dict[str, Any]:
         """
@@ -315,23 +302,39 @@ class CheckpointStore:
             return
         try:
             raw = self._list_raw_checkpoints()
-            valid = []
-            for cp in raw:
-                try:
-                    res = subprocess.run(
-                        ["git", "cat-file", "-e", f"{cp['id']}^" + "{commit}"],
-                        cwd=self.repo,
-                        capture_output=True,
-                    )
-                    if res.returncode == 0:
-                        valid.append(cp)
-                except Exception:
-                    pass
+            valid = self._filter_existing_commits(raw)
             valid = valid[-50:]
             with open(self._meta_file, "w") as f:
                 json.dump(valid, f, indent=2)
         except Exception:
             pass
+
+    def _filter_existing_commits(self, raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return only checkpoints whose commit still exists, using a SINGLE
+        `git cat-file --batch-check` process instead of one `git cat-file -e`
+        spawn per checkpoint (that was an N+1: process startup per item, scaling
+        with checkpoint count). One stdin-fed batch call replaces N spawns."""
+        if not raw:
+            return []
+        ids = [cp["id"] for cp in raw]
+        try:
+            proc = subprocess.run(
+                ["git", "cat-file", "--batch-check=%(objecttype)"],
+                cwd=self.repo,
+                input="\n".join(f"{i}^{{commit}}" for i in ids),
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            return []
+        lines = proc.stdout.splitlines()
+        valid = []
+        for cp, line in zip(raw, lines):
+            # "commit" => the ref resolves to a commit; anything else
+            # ("... missing", a different type) => skip.
+            if line.strip() == "commit":
+                valid.append(cp)
+        return valid
 
     def _list_raw_checkpoints(self) -> list[dict[str, Any]]:
         if not self._meta_file or not self._meta_file.exists():

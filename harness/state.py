@@ -17,14 +17,41 @@ class DurableState:
 
     def list_jobs(self) -> list:
         jobs = self.store.list_jobs()
+        jids = [j.id for j in jobs]
+        # Batch the per-job lookups instead of one query per job (the old N+1:
+        # count_artifacts + list_tasks per job, scaling with history size).
+        # Tasks: one bulk read regrouped by job_id. Artifact counts: one bulk
+        # count when the store supports it, else fall back to per-job counts.
+        tasks_by_job: dict = {}
+        try:
+            all_tasks = self.store.list_tasks_for_jobs(jids)
+            for t in all_tasks:
+                tasks_by_job.setdefault(getattr(t, "job_id", None), []).append(t)
+        except Exception:
+            tasks_by_job = None  # signal per-job fallback below
+        counts_by_job: dict = {}
+        try:
+            if hasattr(self.store, "count_artifacts_for_jobs"):
+                counts_by_job = self.store.count_artifacts_for_jobs(jids)
+            else:
+                counts_by_job = None
+        except Exception:
+            counts_by_job = None
+
         out = []
         for j in jobs:
-            arts = self.store.count_artifacts(j.id)
+            if counts_by_job is not None:
+                arts = counts_by_job.get(j.id, 0)
+            else:
+                arts = self.store.count_artifacts(j.id)
             role = ""
             adapter = ""
             task_count = 0
             try:
-                tasks = self.store.list_tasks(j.id)
+                if tasks_by_job is not None:
+                    tasks = tasks_by_job.get(j.id, [])
+                else:
+                    tasks = self.store.list_tasks(j.id)
                 task_count = len(tasks)
                 if tasks:
                     for t in tasks:
@@ -55,9 +82,12 @@ class DurableState:
             })
         return out
 
-    def job_artifacts(self, job_id: str) -> list:
+    def format_artifacts(self, artifacts: list) -> list:
+        """Format already-loaded artifact objects for the GUI. Split out of
+        job_artifacts so callers that already hold a (batched) artifact list can
+        format them without a second per-job store read."""
         out = []
-        for a in self.store.list_artifacts(job_id):
+        for a in artifacts:
             payload = getattr(a, "payload", {}) or {}
             headline = (payload.get("claim") or payload.get("decision")
                         or payload.get("risk") or payload.get("check")
@@ -75,6 +105,9 @@ class DurableState:
                 "detail": payload.get("reason") or payload.get("detail"),
             })
         return out
+
+    def job_artifacts(self, job_id: str) -> list:
+        return self.format_artifacts(self.store.list_artifacts(job_id))
 
     def events_since(self, job_id: str, cursor: int = 0) -> dict:
         try:
