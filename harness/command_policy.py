@@ -155,24 +155,49 @@ def run_cancellable(
         return (f"Failed to execute command: {e}", -1, "error")
 
     def _kill_group():
+        # Capture the group id BEFORE the parent exits -- once proc is reaped,
+        # os.getpgid(proc.pid) raises and we lose the ability to sweep survivors.
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            pgid = os.getpgid(proc.pid)
         except Exception:
+            pgid = None
+
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except Exception:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+        else:
             try:
                 proc.terminate()
             except Exception:
                 pass
-        # Give it a moment, then SIGKILL anything that ignored SIGTERM.
+
+        # Wait for the PARENT shell to exit on SIGTERM.
         try:
             proc.wait(timeout=3)
         except Exception:
+            pass
+
+        # ALWAYS SIGKILL the whole group afterward -- do NOT make this conditional
+        # on the parent surviving. On Linux a backgrounded child ("cmd & cmd &
+        # wait") can outlive the shell: the shell exits on SIGTERM (so proc.wait
+        # succeeds) while a child ignored/escaped SIGTERM and lingers. The old code
+        # skipped SIGKILL whenever the parent exited, orphaning that child. A final
+        # unconditional group SIGKILL reaps any survivor; signalling an
+        # already-dead group is a harmless no-op (ProcessLookupError, swallowed).
+        if pgid is not None:
             try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                os.killpg(pgid, signal.SIGKILL)
             except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+                pass
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
     status = "ok"
     while True:
