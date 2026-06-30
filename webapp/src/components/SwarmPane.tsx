@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, CheckCircle2, XCircle, Circle, ChevronDown, ChevronRight, Cpu, Activity } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Circle, ChevronDown, ChevronRight, Cpu, Activity, Network } from "lucide-react";
 import { api, type SwarmLive, type Job, type Artifact } from "../lib/api";
 
 function jobStatus(j: Job): "pending" | "in_progress" | "completed" | "cancelled" {
@@ -47,14 +47,35 @@ export default function SwarmPane() {
   }, [pollInterval]);
 
   const jobs = data?.jobs || [];
+  const anyRunning = jobs.some((j) => jobStatus(j) === "in_progress");
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-panel">
+      {jobs.length > 0 && (
+        <div className="shrink-0 flex items-center justify-between px-3 py-2 border-b border-edge/60 select-none">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-faint font-semibold">
+            <Network size={11} className="text-faint/70" />
+            <span>Swarm Jobs</span>
+            <span className="text-faint/60 normal-case tracking-normal">({jobs.length})</span>
+          </div>
+          {anyRunning && (
+            <span className="flex items-center gap-1 text-[10px] text-accent">
+              <Loader2 size={10} className="animate-spin" /> running
+            </span>
+          )}
+        </div>
+      )}
       {/* Scrollable Jobs list */}
       <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
         {jobs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 text-center px-4">
-            <span className="text-[11px] text-muted italic">No swarm activity</span>
+          <div className="flex flex-col items-center justify-center h-48 text-center px-6 gap-2">
+            <Network size={20} className="text-faint/50" />
+            <span className="text-[12px] text-muted font-medium">No swarm jobs yet</span>
+            <span className="text-[10.5px] text-faint leading-relaxed">
+              Puppetmaster jobs dispatched via run_implement, run_parallel, or
+              run_swarm appear here with their router choice, workers, and live
+              artifacts. Inline tool calls show in the chat transcript instead.
+            </span>
           </div>
         ) : (
           jobs.slice().reverse().map((j) => {
@@ -286,14 +307,27 @@ export default function SwarmPane() {
         )}
       </div>
 
-      {/* Footer Session block */}
+      {/* Footer: session totals. Labeled "SWARM RUNNING" only when a job is
+          actually in flight; otherwise it's clearly session-cumulative totals,
+          not a false "active" indicator. */}
       {data?.session && (
         <div className="shrink-0 border-t border-edge bg-panel2/80 px-3 py-2 flex items-center justify-between text-[10px] text-muted font-medium select-none">
-          <div className="flex items-center gap-1 min-w-0">
-            <Activity size={11} className="text-accent shrink-0" />
-            <span className="truncate">
-              SWARM ACTIVE: <span className="text-txt font-mono font-semibold">{data.session.driver || "unknown"}</span>
-            </span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            {anyRunning ? (
+              <>
+                <Loader2 size={11} className="text-accent shrink-0 animate-spin" />
+                <span className="truncate">
+                  SWARM RUNNING: <span className="text-txt font-mono font-semibold">{data.session.driver || "unknown"}</span>
+                </span>
+              </>
+            ) : (
+              <>
+                <Activity size={11} className="text-faint shrink-0" />
+                <span className="truncate text-faint">
+                  Session total <span className="text-muted font-mono">{data.session.driver || ""}</span>
+                </span>
+              </>
+            )}
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <span>
