@@ -252,6 +252,15 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
   const [attachedImages, setAttachedImages] = useState<{ path: string; name: string; previewUrl: string }[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Auto-fade upload errors after 6s so a transient failure doesn't sit in the
+  // composer looking permanently broken (it used to persist until the next
+  // upload attempt). Pass null to clear immediately.
+  const flashUploadError = (msg: string | null) => {
+    setUploadError(msg);
+    if (msg) {
+      window.setTimeout(() => setUploadError((cur) => (cur === msg ? null : cur)), 6000);
+    }
+  };
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
   // Compacting & Context breakdown states
@@ -763,7 +772,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
         if (file) {
           e.preventDefault(); // prevent pasting binary junk text
           if (addedCount >= 8) {
-            setUploadError("Maximum 8 images allowed per message");
+            flashUploadError("Maximum 8 images allowed per message");
             continue;
           }
           setUploadError(null);
@@ -782,7 +791,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
             addedCount++;
           } catch (err) {
             console.error("Failed to upload pasted image:", err);
-            setUploadError("Image upload failed");
+            flashUploadError("Image upload failed");
           }
         }
       }
@@ -822,7 +831,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
       if (isImage) {
         // Images attach as visual context (upload + thumbnail), as before.
         if (addedCount >= 8) {
-          setUploadError("Maximum 8 images allowed per message");
+          flashUploadError("Maximum 8 images allowed per message");
           continue;
         }
         try {
@@ -835,7 +844,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
           addedCount++;
         } catch (err) {
           console.error("Failed to upload dropped image:", err);
-          setUploadError("Image upload failed");
+          flashUploadError("Image upload failed");
         }
         continue;
       }
@@ -861,10 +870,10 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
           ? uploaded.path.slice(repo.length + 1)
           : uploaded.path;
         if (!/\s/.test(rel)) mentions.push(`@${rel}`);
-        else setUploadError("Dropped file path has spaces -- rename and retry");
+        else flashUploadError("Dropped file path has spaces -- rename and retry");
       } catch (err) {
         console.error("Failed to upload dropped file:", err);
-        setUploadError("File upload failed");
+        flashUploadError("File upload failed");
       }
     }
 

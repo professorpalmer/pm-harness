@@ -3471,8 +3471,16 @@ class ConversationalSession:
                 shutil.rmtree(state_dir, ignore_errors=True)
 
     def drain_swarm_results(self) -> Iterator[ConvEvent]:
-        # holding _busy blocking
-        self._busy.acquire(blocking=True)
+        # Drain finished background-swarm results, appending follow-up messages to
+        # history under the single-writer _busy lock. CRITICAL: acquire NON-blocking.
+        # This is called from an HTTP handler (the 2.5s frontend poll). If a chat
+        # turn is in flight (or a wedged turn never released _busy), a blocking
+        # acquire would hang the server thread indefinitely -- the "swarm running
+        # forever / app hung" symptom. If we can't get the lock right now, just
+        # return nothing; the next poll (2.5s later) drains it once the turn frees
+        # the lock. Results stay queued, so nothing is lost.
+        if not self._busy.acquire(blocking=False):
+            return
         try:
             import queue
             while True:
