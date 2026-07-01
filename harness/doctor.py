@@ -97,19 +97,20 @@ def run_doctor(argv) -> int:
     else:
         _line("ok", "wiki", "not configured (optional -- set HARNESS_WIKI_URL + HARNESS_WIKI_TOKEN to auto-capture findings)")
 
-    # 4. Vision sidecar key (warn-only; vision is optional). The backend depends
-    # on HARNESS_VLM_REACH: openrouter -> open VLM (OPENROUTER_API_KEY), else Gemini.
-    vlm_reach = os.environ.get("HARNESS_VLM_REACH", "").lower()
-    if vlm_reach == "openrouter":
-        if os.environ.get("OPENROUTER_API_KEY", "").strip():
-            _line("ok", "vision sidecar", "open VLM via OPENROUTER_API_KEY")
+    # 4. Vision sidecar (warn-only; vision is optional). Resolved dynamically from
+    # whatever provider key is configured, so any of Anthropic/OpenAI/Gemini/xAI/
+    # OpenRouter enables image input -- no dedicated VLM key required.
+    try:
+        from .vision import default_sidecar, NullVisionSidecar
+        _sc = default_sidecar()
+        if isinstance(_sc, NullVisionSidecar):
+            _line("warn", "vision sidecar",
+                  "no vision-capable provider key -- image input disabled "
+                  "(add Anthropic/OpenAI/Gemini/xAI/OpenRouter key)")
         else:
-            _line("warn", "vision sidecar", "OPENROUTER_API_KEY not set -- open-VLM image input disabled")
-    else:
-        if os.environ.get("GEMINI_API_KEY", "").strip():
-            _line("ok", "vision sidecar", "Gemini VLM via GEMINI_API_KEY")
-        else:
-            _line("warn", "vision sidecar", "no VLM key -- set GEMINI_API_KEY or HARNESS_VLM_REACH=openrouter")
+            _line("ok", "vision sidecar", f"{_sc.model} via {_sc.api_key_env}")
+    except Exception as e:
+        _line("warn", "vision sidecar", f"could not resolve sidecar: {e!r}")
 
     # 5. Optional live ping
     if args.ping and not hard_fail:

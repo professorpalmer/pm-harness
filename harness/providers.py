@@ -35,6 +35,11 @@ class Provider:
     display_name: str = ""
     # curated pilot-capable models shown when a live catalog fetch isn't done.
     pilot_models: tuple = ()
+    # A cheap vision-capable model on this provider. The vision sidecar uses it
+    # to transcribe images with the SAME key the user already configured, so
+    # image input works without a dedicated GEMINI/OPENROUTER key. Empty string
+    # means this provider has no first-class vision model wired in this rig.
+    vision_model: str = ""
 
     def _is_disconnected(self) -> bool:
         """True if the user explicitly disconnected this provider. Authoritative
@@ -85,6 +90,7 @@ PROVIDERS = (
         pilot_models=("qwen/qwen3-coder-30b-a3b-instruct", "z-ai/glm-5.2",
                       "deepseek/deepseek-v4-pro", "moonshotai/kimi-k2.6",
                       "anthropic/claude-opus-4.8", "openai/gpt-5.4"),
+        vision_model="qwen/qwen3-vl-30b-a3b-instruct",
     ),
     Provider(
         name="anthropic", aliases=("claude",),
@@ -92,6 +98,7 @@ PROVIDERS = (
         base_url="https://api.anthropic.com",
         api_mode="anthropic_messages", display_name="Anthropic",
         pilot_models=("claude-opus-4-8", "claude-sonnet-4-5", "claude-haiku-4-5"),
+        vision_model="claude-haiku-4-5",
     ),
     Provider(
         name="openai", aliases=("oai",),
@@ -99,6 +106,7 @@ PROVIDERS = (
         base_url="https://api.openai.com/v1",
         api_mode="chat_completions", display_name="OpenAI",
         pilot_models=("gpt-5.4", "gpt-5.4-mini"),
+        vision_model="gpt-5.4-mini",
     ),
     Provider(
         name="gemini", aliases=("google", "google-gemini"),
@@ -108,6 +116,7 @@ PROVIDERS = (
         # use -latest aliases so the picker tracks Google's current models
         # without pinning a version that may rotate out.
         pilot_models=("gemini-3.5-flash", "gemini-flash-latest", "gemini-pro-latest"),
+        vision_model="gemini-flash-latest",
     ),
     Provider(
         name="deepseek", aliases=("deepseek-chat",),
@@ -136,6 +145,7 @@ PROVIDERS = (
         base_url="https://api.x.ai/v1",
         api_mode="chat_completions", display_name="xAI Grok",
         pilot_models=("grok-4", "grok-4-fast"),
+        vision_model="grok-4-fast",
     ),
     Provider(
         name="nvidia", aliases=("nvidia-nim",),

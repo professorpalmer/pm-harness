@@ -202,20 +202,31 @@ def test_view_image_confinement(monkeypatch):
         assert "Path traversal attempt rejected" in tool_msgs[0]["content"]
 
 def test_vision_default_sidecar_fallback(monkeypatch):
+    from harness.vision import NullVisionSidecar
+    # Clear every provider/VLM key so the fallback chain is deterministic
+    # regardless of ambient environment.
+    for ev in ("HARNESS_VLM_REACH", "HARNESS_VLM_MODEL", "OPENROUTER_API_KEY",
+               "ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN", "OPENAI_API_KEY",
+               "GEMINI_API_KEY", "GOOGLE_API_KEY", "DEEPSEEK_API_KEY",
+               "GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY", "MINIMAX_API_KEY",
+               "XAI_API_KEY", "NVIDIA_API_KEY"):
+        monkeypatch.delenv(ev, raising=False)
+
     monkeypatch.setenv("HARNESS_VLM_REACH", "openrouter")
     monkeypatch.setenv("GEMINI_API_KEY", "some_gemini_key")
     monkeypatch.setenv("OPENROUTER_API_KEY", "some_openrouter_key")
     sc = default_sidecar()
     assert isinstance(sc, OpenRouterVisionSidecar)
-    
+
     monkeypatch.delenv("HARNESS_VLM_REACH", raising=False)
     sc = default_sidecar()
     assert isinstance(sc, GeminiVisionSidecar)
-    
+
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     sc = default_sidecar()
     assert isinstance(sc, OpenRouterVisionSidecar)
-    
+
+    # No dedicated VLM key and no other provider key -> null sidecar.
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     sc = default_sidecar()
-    assert isinstance(sc, GeminiVisionSidecar)
+    assert isinstance(sc, NullVisionSidecar)
