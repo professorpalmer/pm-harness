@@ -34,6 +34,21 @@ npm run dist:mac       # -> webapp/release/mac-arm64/PM Harness.app
 
 This retains the original behavior and does not build or bundle the Python backend via PyInstaller, which is faster for local shell testing.
 
+## Background auto-update (installed app)
+
+The packaged app updates itself via `electron-updater`
+(`webapp/electron/auto-updater.cjs`): it polls GitHub Releases, downloads the
+`.zip` build in the background, and applies it on relaunch. This is wired via the
+`publish` block (GitHub provider) and the mac `zip` target in `package.json`, so
+`npm run dist:dmg` emits `.dmg` + `.zip` + `latest-mac.yml`. `scripts/release.sh`
+uploads all of them.
+
+**macOS only applies signed updates.** Squirrel.Mac validates the downloaded
+build's code signature, so auto-update works only when the release is Developer
+ID signed and notarized (below). An unsigned build downloads but macOS refuses to
+swap it in. When running from a git checkout (unpackaged), the app uses the
+in-place git self-updater instead, so signing is irrelevant there.
+
 ## Code Signing and Notarization
 
 To distribute PM Harness to other macOS machines without Gatekeeper friction, you need an Apple Developer certificate ($99/yr). The build configuration is fully wired for signing and notarization, but gates these processes on the presence of corresponding environment variables. If these variables are not present, the build cleanly skips signing and notarization, allowing unsigned personal or development builds to function with no extra configuration.

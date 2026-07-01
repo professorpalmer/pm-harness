@@ -1,0 +1,147 @@
+// Binary auto-updater for the installed (.app) build -- the "install once,
+// updates just land" model, like Hermes Desktop. New releases published to
+// GitHub Releases are downloaded in the background and applied on relaunch, so
+// there is no script to run and no DMG to re-download per change.
+//
+// It implements the SAME IPC contract as the git self-updater (update-bridge.cjs):
+//   updates:check    -> { current, available, behind, branch, latest, url }
+//   updates:apply    -> streams "updates:progress" { stage, message, percent }, then relaunches
+//   updates:openRepo -> opens the releases page
+// so the StatusBar pill behaves identically whether the app runs from a git
+// checkout (git pull + rebuild) or as a packaged binary (this path).
+//
+// main.cjs chooses which updater to register based on app.isPackaged: a checkout
+// rebuilds itself; a shipped .app swaps its whole signed bundle. macOS refuses to
+// apply an unsigned update, so the release must be Developer ID signed + notarized.
+
+const REPO_HTML_URL = "https://github.com/professorpalmer/pm-harness";
+const RELEASES_URL = `${REPO_HTML_URL}/releases`;
+const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // re-check every 6h while running
+
+// Compare dotted numeric versions ("0.6.7"). Returns >0 if a is newer than b.
+function compareVersions(a, b) {
+  const pa = String(a).split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function registerAutoUpdater(ipcMain, app, shell, opts = {}) {
+  let autoUpdater;
+  try {
+    ({ autoUpdater } = require("electron-updater"));
+  } catch {
+    // Dependency unavailable: expose a no-op surface so the renderer's update
+    // check simply reports "up to date" instead of throwing.
+    ipcMain.handle("updates:check", async () => ({ current: app.getVersion(), available: false }));
+    ipcMain.handle("updates:apply", async () => ({ ok: false, error: "auto-updater unavailable" }));
+    ipcMain.handle("updates:openRepo", async () => {
+      try { await shell.openExternal(RELEASES_URL); return true; } catch { return false; }
+    });
+    return;
+  }
+
+  const cleanup = opts.cleanup || (() => {});
+
+  autoUpdater.autoDownload = true; // pull new releases in the background
+  autoUpdater.autoInstallOnAppQuit = true; // apply on the next quit with no prompt
+  autoUpdater.allowPrerelease = false;
+  autoUpdater.logger = null;
+
+  const state = { available: false, downloaded: false, latest: app.getVersion(), error: "" };
+  let installWhenReady = false;
+
+  const { BrowserWindow } = require("electron");
+  const broadcast = (payload) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      try {
+        if (win.webContents && !win.webContents.isDestroyed()) win.webContents.send("updates:progress", payload);
+      } catch { /* window went away mid-broadcast */ }
+    }
+  };
+
+  const install = () => {
+    broadcast({ stage: "done", message: "Update ready -- restarting", percent: 100 });
+    try { cleanup(); } catch { /* ignore */ }
+    // A tick lets the renderer paint the final state before the app quits.
+    setTimeout(() => {
+      try { autoUpdater.quitAndInstall(false, true); } catch { /* ignore */ }
+    }, 400);
+  };
+
+  autoUpdater.on("update-available", (info) => {
+    state.available = true;
+    state.latest = (info && info.version) || state.latest;
+    broadcast({ stage: "available", message: `Update ${state.latest} available`, percent: 0 });
+  });
+  autoUpdater.on("download-progress", (p) => {
+    const pct = Math.round((p && p.percent) || 0);
+    broadcast({ stage: "download", message: `Downloading update ${pct}%`, percent: pct });
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    state.downloaded = true;
+    state.latest = (info && info.version) || state.latest;
+    broadcast({ stage: "downloaded", message: `Update ${state.latest} ready`, percent: 100 });
+    if (installWhenReady) install();
+  });
+  autoUpdater.on("error", (err) => {
+    state.error = String((err && err.message) || err);
+  });
+
+  const check = async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      const info = result && result.updateInfo;
+      const latest = (info && info.version) || app.getVersion();
+      state.latest = latest;
+      state.available = compareVersions(latest, app.getVersion()) > 0;
+      return state.available;
+    } catch (e) {
+      // A failed check must stay silent -- never nag on a flaky network.
+      state.error = String((e && e.message) || e);
+      return false;
+    }
+  };
+
+  ipcMain.handle("updates:check", async () => {
+    await check();
+    return {
+      current: app.getVersion(),
+      available: state.available,
+      downloaded: state.downloaded,
+      behind: state.available ? 1 : 0,
+      branch: `v${state.latest}`,
+      latest: state.latest,
+      url: RELEASES_URL,
+    };
+  });
+
+  ipcMain.handle("updates:apply", async () => {
+    if (!state.available && !state.downloaded) {
+      const has = await check();
+      if (!has) return { ok: false, error: "no update available" };
+    }
+    if (state.downloaded) {
+      install();
+      return { ok: true };
+    }
+    // Download is (or will be) in flight; install as soon as it lands.
+    installWhenReady = true;
+    broadcast({ stage: "download", message: "Downloading update", percent: 0 });
+    try { autoUpdater.downloadUpdate(); } catch { /* autoDownload may already be running */ }
+    return { ok: true };
+  });
+
+  ipcMain.handle("updates:openRepo", async () => {
+    try { await shell.openExternal(RELEASES_URL); return true; } catch { return false; }
+  });
+
+  // Kick an initial background check shortly after launch, then periodically.
+  setTimeout(() => { void check(); }, 8000);
+  setInterval(() => { void check(); }, CHECK_INTERVAL_MS);
+}
+
+module.exports = { registerAutoUpdater, compareVersions };

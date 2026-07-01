@@ -1,51 +1,57 @@
 # Releasing Marionette
 
-Marionette has two delivery channels. The first is the default for the
-contributor circle; the second is for non-dev testers.
+Marionette delivers updates two ways behind one status-bar pill. Which one runs
+is decided automatically by whether the app is an installed `.app` or a git
+checkout.
 
-## 1. Git self-update (primary)
+## 1. Installed app -- background auto-update (primary)
 
-The installed app tracks the `main` branch of a git checkout and updates itself
-in place -- the Hermes model. There is **no build step to "release"**: merging to
-`main` is the release.
+The shipped `.app` is the "real app": install it once from the DMG, and from
+then on it updates itself. New releases published to GitHub Releases are
+downloaded in the background and applied on the next relaunch -- no script, no
+re-downloading a DMG per change. This is the Hermes Desktop model, implemented
+with `electron-updater` (`webapp/electron/auto-updater.cjs`).
 
 How it reaches everyone:
 
-1. A change lands on `main` (your merge, or a merged PR -- CI must be green).
-2. On each running app, the status bar polls the branch tip on launch and shows
-   an `update (N)` pill when the checkout is `N` commits behind.
-3. Clicking it runs, in the checkout, streaming progress to the UI:
-   - `git fetch` + `git merge --ff-only` the branch tip,
-   - `pip install -e .` **only if** a Python dep file changed,
-   - `npm ci` **only if** `webapp/package-lock.json` changed,
-   - `npm run build` (retry once) to rebuild the renderer,
-   - relaunch (backend torn down first so it comes back on the new code).
+1. You cut a signed release (below). electron-builder publishes the `.dmg`, the
+   `.zip`, and `latest-mac.yml` to the GitHub Release.
+2. Every installed app checks the release feed on launch (and every 6h), sees a
+   newer version, and downloads the `.zip` in the background.
+3. The status-bar `update` pill lights up; clicking it (or just quitting and
+   reopening) swaps the whole signed bundle and relaunches on the new version.
 
-Implementation lives in `webapp/electron/update-*.cjs` (pure helpers, unit
-tested via `npm run test:electron`) and `update-bridge.cjs` (the orchestrator).
-The pattern is adapted with attribution from the Hermes Agent desktop updater
-(MIT, Nous Research).
-
-Fast-forward only: if a user has local commits or uncommitted changes on the
-branch, the update stops with a clear message instead of rewriting their tree.
-
-### Cutting a "version" (optional)
-
-Version is cosmetic under this model (it labels the build in the status bar and
-about box). To bump it, edit `webapp/package.json` `version` and merge. No tag
-or artifact is required for self-update to work.
-
-## 2. Notarized DMG (secondary -- non-dev testers)
-
-For someone who wants a double-clickable app and no checkout, build a signed +
-notarized DMG and attach it to a GitHub Release:
+### Cutting a signed release
 
 ```bash
 bash scripts/release.sh X.Y.Z "release notes"
 ```
 
-Requires Apple notarization creds in the environment (`APPLE_ID`,
-`APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and the signing cert). See
-`webapp/PACKAGING.md`. This path is a full app reinstall, not self-update; a DMG
-user updates by downloading the next DMG. Prefer channel 1 for the contributor
-circle.
+This bumps `webapp/package.json`, builds the notarized DMG **and** the
+auto-update `.zip` + `latest-mac.yml`, tags `vX.Y.Z`, and uploads every
+auto-update artifact (dmg, zip, latest-mac.yml, blockmaps) to the GitHub
+Release.
+
+**macOS requires the release to be Developer ID signed + notarized** -- an
+unsigned build will download but macOS will refuse to apply it. So the
+notarization creds must be in the environment (`APPLE_ID`, `APPLE_TEAM_ID`,
+`APPLE_APP_SPECIFIC_PASSWORD`) alongside the signing cert (Developer ID
+Application: Cary Palmer, ZDSDN9VC8M). See `webapp/PACKAGING.md`. If those are
+absent the build is unsigned and auto-update will not apply.
+
+## 2. Git checkout -- self-update from source (contributors)
+
+Running from a source checkout (contributors hacking on Marionette) has no
+signed bundle to swap, so the same pill instead pulls + rebuilds in place:
+
+- `git fetch` + `git merge --ff-only` the tracked branch tip,
+- `pip install -e .` **only if** a Python dep file changed,
+- `npm ci` **only if** `webapp/package-lock.json` changed,
+- `npm run build` (retry once) to rebuild the renderer,
+- relaunch (backend torn down first so it comes back on the new code).
+
+Fast-forward only: local commits or uncommitted changes stop the update with a
+clear message instead of rewriting the tree. Implementation lives in
+`webapp/electron/update-*.cjs` (pure helpers, unit tested via
+`npm run test:electron`) and `update-bridge.cjs`. Adapted with attribution from
+the Hermes Agent desktop updater (MIT, Nous Research).

@@ -87,12 +87,16 @@ Puppetmaster's free local adapter so ground truth is deterministic and key-free.
 
 ## Install and updates
 
-Marionette runs from a git checkout and self-updates the way Hermes does: it
-tracks the `main` branch, and when you (or a friend) merge a change, every
-running app shows an `update (N)` pill in the status bar. Click it and the app
-pulls, refreshes deps if their lockfiles changed, rebuilds the renderer, and
-relaunches -- no DMG to send around. This is why contributing is the delivery
-mechanism: merge to `main`, everyone gets it on their next relaunch.
+Marionette is a real installed app that updates itself the way Hermes Desktop
+does. Install it once from the DMG (drag to `/Applications`), and from then on
+new releases download in the background and apply on the next relaunch -- no
+script to run, no DMG to re-download per change. The status-bar `update` pill
+shows when a new version is ready; click it (or just quit and reopen) and the
+app relaunches on the new version. Cutting a release is described in
+`RELEASING.md`.
+
+Contributors who want to hack on Marionette run it from a git checkout instead;
+in that mode the same pill pulls + rebuilds the source in place (see below).
 
 One-command setup on a fresh machine (macOS, Apple Silicon):
 
@@ -121,9 +125,9 @@ Or the one-command dev launcher (cleans stale processes, then launches):
 bash scripts/dev.sh
 ```
 
-A notarized macOS DMG (`scripts/release.sh`) still exists for shipping to
-non-dev testers who don't want a checkout -- see `RELEASING.md`. The git
-self-update path above is the primary channel for the contributor circle.
+The signed, auto-updating DMG is cut with `scripts/release.sh` -- see
+`RELEASING.md`. That installed app is the primary channel for everyone; the git
+checkout above is for people actively developing Marionette.
 
 Research rig (offline, no keys):
 

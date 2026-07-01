@@ -366,23 +366,33 @@ ipcMain.on("harness:stream", (event, channelId, apiPath) => {
 const { registerFsBridge } = require("./fs-bridge.cjs");
 const { registerGitBridge } = require("./git-bridge.cjs");
 const { registerUpdateBridge } = require("./update-bridge.cjs");
+const { registerAutoUpdater } = require("./auto-updater.cjs");
 registerFsBridge(ipcMain);
 registerGitBridge(ipcMain);
-// Self-update: track the checkout, pull+rebuild in place, then relaunch. The
-// relaunch tears the backend down first (and drops the marker so the fresh
-// instance spawns a backend running the just-pulled code) before re-exec.
-registerUpdateBridge(ipcMain, app, shell, {
-  getRepoRoot: resolveRepoRoot,
-  relaunch: () => {
-    try { cleanupBackend(); } catch { /* ignore */ }
-    app.relaunch();
-    app.exit(0);
-  },
-});
+// Two delivery models behind one IPC surface (StatusBar's update pill):
+//   - Installed .app: swap the whole signed bundle via electron-updater. New
+//     GitHub releases download in the background and apply on relaunch -- the
+//     "install once, updates just land" path for everyone on the DMG.
+//   - Git checkout (contributors): pull + rebuild the source in place, then
+//     relaunch. Working from source has no bundle to swap.
+if (app.isPackaged) {
+  registerAutoUpdater(ipcMain, app, shell, {
+    cleanup: () => { try { cleanupBackend(); } catch { /* ignore */ } },
+  });
+} else {
+  registerUpdateBridge(ipcMain, app, shell, {
+    getRepoRoot: resolveRepoRoot,
+    relaunch: () => {
+      try { cleanupBackend(); } catch { /* ignore */ }
+      app.relaunch();
+      app.exit(0);
+    },
+  });
+}
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1440, height: 900, backgroundColor: "#0d0d0f",
+    width: 1440, height: 900, backgroundColor: "#0f1113",
     titleBarStyle: "hiddenInset",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),

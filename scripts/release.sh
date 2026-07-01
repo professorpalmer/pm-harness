@@ -55,7 +55,7 @@ open(p, "w").write(s)
 print("package.json ->", v)
 PY
 
-echo "== build notarized DMG (dist:full) -- this is the slow part =="
+echo "== build notarized DMG + auto-update zip (dist:full) -- this is the slow part =="
 ( cd webapp && npm run dist:full )
 
 DMG="$(ls -t webapp/release/*.dmg 2>/dev/null | head -1 || true)"
@@ -64,6 +64,23 @@ if [ -z "$DMG" ] || [ ! -f "$DMG" ]; then
   exit 1
 fi
 echo "built: $DMG"
+
+# electron-updater (installed .app auto-update) needs the zip + latest-mac.yml
+# (and their blockmaps for delta downloads) on the release, not just the DMG.
+ZIP="$(ls -t webapp/release/*.zip 2>/dev/null | head -1 || true)"
+LATEST_YML="webapp/release/latest-mac.yml"
+if [ -z "$ZIP" ] || [ ! -f "$ZIP" ] || [ ! -f "$LATEST_YML" ]; then
+  echo "ERROR: missing auto-update artifacts (zip / latest-mac.yml) under webapp/release/." >&2
+  echo "       Installed apps would NOT auto-update. Check the mac targets + publish config." >&2
+  exit 1
+fi
+echo "built: $ZIP"
+
+# Every artifact electron-updater consults, in one array (blockmaps are optional
+# but enable delta downloads, so upload them when present).
+UPDATE_ASSETS=( "$DMG" "$ZIP" "$LATEST_YML" )
+[ -f "${DMG}.blockmap" ] && UPDATE_ASSETS+=( "${DMG}.blockmap" )
+[ -f "${ZIP}.blockmap" ] && UPDATE_ASSETS+=( "${ZIP}.blockmap" )
 
 echo "== commit + tag + push =="
 git -c user.name=professorpalmer -c user.email=professorpalmer@users.noreply.github.com \
@@ -77,9 +94,9 @@ git push -f origin "$TAG"
 echo "== github release =="
 REL_NOTES="${NOTES:-Marionette ${VERSION}}"
 if gh release view "$TAG" --repo professorpalmer/pm-harness >/dev/null 2>&1; then
-  gh release upload "$TAG" "$DMG" --repo professorpalmer/pm-harness --clobber
+  gh release upload "$TAG" "${UPDATE_ASSETS[@]}" --repo professorpalmer/pm-harness --clobber
 else
-  gh release create "$TAG" "$DMG" \
+  gh release create "$TAG" "${UPDATE_ASSETS[@]}" \
     --repo professorpalmer/pm-harness \
     --title "Marionette ${VERSION}" \
     --notes "$REL_NOTES" \
@@ -93,15 +110,15 @@ fi
 # webapp/release/ does not pile up to gigabytes over many releases.
 REL_DIR="webapp/release"
 KEEP_DMG="$(basename "$DMG")"
-KEEP_BLOCKMAP="${KEEP_DMG}.blockmap"
+KEEP_ZIP="$(basename "$ZIP")"
 echo
-echo "Pruning stale artifacts from ${REL_DIR}/ (keeping ${KEEP_DMG}) ..."
+echo "Pruning stale artifacts from ${REL_DIR}/ (keeping ${KEEP_DMG} + ${KEEP_ZIP}) ..."
 if [ -d "$REL_DIR" ]; then
   for f in "$REL_DIR"/*; do
     [ -e "$f" ] || continue
     base="$(basename "$f")"
     case "$base" in
-      "$KEEP_DMG"|"$KEEP_BLOCKMAP"|"mac-arm64"|"builder-debug.yml"|"latest-mac.yml"|"latest.yml")
+      "$KEEP_DMG"|"${KEEP_DMG}.blockmap"|"$KEEP_ZIP"|"${KEEP_ZIP}.blockmap"|"mac-arm64"|"builder-debug.yml"|"latest-mac.yml"|"latest.yml")
         : ;;  # keep
       *)
         rm -rf "$f" && echo "  pruned ${base}" ;;
@@ -110,5 +127,5 @@ if [ -d "$REL_DIR" ]; then
 fi
 
 echo
-echo "DONE. Release ${TAG} published with $(basename "$DMG")."
-echo "Testers on an older build will see the 'update ${VERSION}' nudge in the status bar on next launch."
+echo "DONE. Release ${TAG} published with $(basename "$DMG") + auto-update assets."
+echo "Installed apps on an older build will download ${VERSION} in the background and apply it on the next relaunch."
