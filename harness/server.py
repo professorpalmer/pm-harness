@@ -2365,7 +2365,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/platform":
             return self._send(200, json.dumps(_get_platform_adapters()))
         if u.path == "/api/jobs":
-            return self._send(200, json.dumps(_session.state().list_jobs()))
+            return self._send(200, json.dumps(_jobs_snapshot()))
         if u.path == "/api/usage":
             if self._guard():
                 return
@@ -3149,6 +3149,37 @@ def _finalize_turn(ctx) -> None:
     except Exception as e:
         import sys
         print(f"[transcript persist error] {e!r}", file=sys.stderr)
+
+
+_last_jobs_snapshot: list = []
+
+
+def _jobs_snapshot() -> list:
+    """List jobs with resilience to a transient SQLite 'database is locked'. A
+    brief lock (e.g. a lingering second backend during a relaunch) must not 500
+    the jobs poll and disconnect the UI -- retry briefly, then fall back to the
+    last good snapshot so the panel holds steady instead of erroring out."""
+    global _last_jobs_snapshot
+    import sqlite3
+    import time as _t
+    for attempt in range(3):
+        try:
+            jobs = _session.state().list_jobs()
+            _last_jobs_snapshot = jobs
+            return jobs
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower() and attempt < 2:
+                _t.sleep(0.15)
+                continue
+            import sys
+            print(f"[jobs poll degraded] {e!r} -- serving last-known "
+                  f"({len(_last_jobs_snapshot)})", file=sys.stderr)
+            return _last_jobs_snapshot
+        except Exception as e:
+            import sys
+            print(f"[jobs poll error] {e!r} -- serving last-known", file=sys.stderr)
+            return _last_jobs_snapshot
+    return _last_jobs_snapshot
 
 
 def _pilot_preflight():

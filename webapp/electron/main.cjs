@@ -109,6 +109,12 @@ let win = null;
 let quitting = false;
 // Timestamps of recent unexpected respawns -- caps a crash loop (see backend.on exit).
 let respawnTimes = [];
+// Coalesces concurrent startBackend() calls. Two overlapping starts (app 'ready'
+// racing 'activate', or a respawn racing a reopen) each spawned a backend on a
+// fresh port before either marker was written -- two processes then hit the same
+// Puppetmaster SQLite and one died with "database is locked", disconnecting the
+// UI. A single in-flight promise guarantees at most one backend launch at a time.
+let startInFlight = null;
 
 // The source checkout the app runs from. The backend is `harness.cli` under this
 // root, and the self-updater pulls + rebuilds it in place. HARNESS_REPO wins;
@@ -159,7 +165,15 @@ function markerPath() {
   return path.join(dir, "backend.json");
 }
 
-async function startBackend() {
+function startBackend() {
+  // Coalesce overlapping starts onto one in-flight promise so we never launch a
+  // second backend against the same SQLite while the first is still starting up.
+  if (startInFlight) return startInFlight;
+  startInFlight = _startBackendOnce().finally(() => { startInFlight = null; });
+  return startInFlight;
+}
+
+async function _startBackendOnce() {
   // 1. Try to reuse an existing healthy backend.
   try {
     const m = JSON.parse(fs.readFileSync(markerPath(), "utf8"));
