@@ -64,7 +64,10 @@ function registerAutoUpdater(ipcMain, app, shell, opts = {}) {
   };
 
   const install = () => {
-    broadcast({ stage: "done", message: "Update ready -- restarting", percent: 100 });
+    // The bytes are already on disk by this point; the only work left is the
+    // bundle swap + relaunch. Say "Installing", not a download percent, so the
+    // pill never looks stuck at 0% right before the app restarts.
+    broadcast({ stage: "install", message: "Installing update -- restarting", percent: null });
     try { cleanup(); } catch { /* ignore */ }
     // A tick lets the renderer paint the final state before the app quits.
     setTimeout(() => {
@@ -79,7 +82,14 @@ function registerAutoUpdater(ipcMain, app, shell, opts = {}) {
   });
   autoUpdater.on("download-progress", (p) => {
     const pct = Math.round((p && p.percent) || 0);
-    broadcast({ stage: "download", message: `Downloading update ${pct}%`, percent: pct });
+    // Only surface a percent once there's real progress. A differential
+    // (blockmap) download can jump straight from 0 to done, so painting "0%"
+    // just reads as "stuck".
+    if (pct > 0) {
+      broadcast({ stage: "download", message: `Downloading update ${pct}%`, percent: pct });
+    } else {
+      broadcast({ stage: "prepare", message: "Preparing update", percent: null });
+    }
   });
   autoUpdater.on("update-downloaded", (info) => {
     state.downloaded = true;
@@ -128,9 +138,10 @@ function registerAutoUpdater(ipcMain, app, shell, opts = {}) {
       install();
       return { ok: true };
     }
-    // Download is (or will be) in flight; install as soon as it lands.
+    // Download is (or will be) in flight; install as soon as it lands. Show a
+    // neutral "Preparing" (no 0%) until real download progress arrives.
     installWhenReady = true;
-    broadcast({ stage: "download", message: "Downloading update", percent: 0 });
+    broadcast({ stage: "prepare", message: "Preparing update", percent: null });
     try { autoUpdater.downloadUpdate(); } catch { /* autoDownload may already be running */ }
     return { ok: true };
   });

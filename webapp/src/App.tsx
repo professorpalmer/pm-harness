@@ -5,6 +5,7 @@ import Conversation from "./components/Conversation";
 import RightPane from "./components/RightPane";
 import TaskStack from "./components/TaskStack";
 import StatusBar from "./components/StatusBar";
+import UpdateBanner from "./components/UpdateBanner";
 import Resizer from "./components/Resizer";
 import RegistryWizard from "./components/RegistryWizard";
 
@@ -124,6 +125,7 @@ export default function App() {
 
   return (
     <div className="h-full flex flex-col">
+      <UpdateBanner />
       <div className="flex-1 min-h-0 flex">
         {leftOpen && (
           <>

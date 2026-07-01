@@ -14,6 +14,14 @@ export default function StatePane({ artifacts }: {
   const [wiki, setWiki] = useState<WikiGraphData | null>(null);
   const [loadingWiki, setLoadingWiki] = useState(false);
 
+  // Telemetry (CodeGraph / Wiki) is collapsed by default so it reads as a quiet
+  // status line, not a wall of stats competing with the actual findings. The
+  // full metrics are one click away. Preference persists per user.
+  const [cgOpen, setCgOpen] = useState(() => localStorage.getItem("pmharness.statePane.cgOpen") === "1");
+  const [wikiOpen, setWikiOpen] = useState(() => localStorage.getItem("pmharness.statePane.wikiOpen") === "1");
+  const toggleCg = () => setCgOpen((v) => { localStorage.setItem("pmharness.statePane.cgOpen", v ? "0" : "1"); return !v; });
+  const toggleWiki = () => setWikiOpen((v) => { localStorage.setItem("pmharness.statePane.wikiOpen", v ? "0" : "1"); return !v; });
+
   const fetchCg = async () => {
     try {
       const res = await api.getCodegraph();
@@ -161,154 +169,147 @@ export default function StatePane({ artifacts }: {
     return a.localeCompare(b);
   });
 
+  const cgReady = cg?.status === "ready";
+  const cgIndexing = cg?.status === "indexing";
+  const cgDot = cgReady ? "bg-good" : cgIndexing ? "bg-accent" : "bg-faint";
+  const cgWord = cgIndexing ? "indexing" : cgReady ? "ready" : cg?.status === "unsupported" ? "unsupported" : "none";
+  const cgMetric = cgReady && cg?.nodes != null
+    ? `${cg.nodes.toLocaleString()} nodes`
+    : cgIndexing ? "working" : cg?.status === "none" ? "no workspace" : "";
+
+  const wikiOk = wiki?.status === "ok";
+  const wikiErr = wiki?.status === "error";
+  const wikiDot = wikiOk ? "bg-good" : wikiErr ? "bg-risk" : "bg-faint";
+  const wikiWord = wikiOk ? "connected" : wikiErr ? "error" : "off";
+  const wikiMetric = wikiOk ? `${(wiki?.nodes || []).length} pages` : "";
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="text-[10px] text-muted px-3 pt-2 pb-1.5 flex justify-between items-center shrink-0">
-        <span className="font-semibold uppercase tracking-wider text-faint">CodeGraph & State</span>
-      </div>
+      {/* Telemetry status strip: CodeGraph + Wiki collapsed to quiet one-line
+          pills. This is proof-of-power chrome -- kept available, kept subdued,
+          so the eye lands on the findings below instead of a wall of stats. */}
+      <div className="px-2 pt-2 pb-1.5 shrink-0 flex flex-col gap-1">
+        {/* CodeGraph pill */}
+        <div className="rounded-md border border-edge/40 bg-panel/40 overflow-hidden">
+          <button
+            onClick={toggleCg}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[10px] hover:bg-panel2/30 transition-colors"
+            title={cgOpen ? "Hide CodeGraph details" : "Show CodeGraph details"}
+          >
+            {cgOpen ? <ChevronDown className="w-3 h-3 text-faint shrink-0" /> : <ChevronRight className="w-3 h-3 text-faint shrink-0" />}
+            <span className="uppercase tracking-wider font-semibold text-faint">CodeGraph</span>
+            {cgIndexing
+              ? <Loader2 className="w-2.5 h-2.5 animate-spin text-accent shrink-0" />
+              : <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${cgDot}`} aria-hidden />}
+            <span className="text-muted lowercase">{cgWord}</span>
+            <span className="flex-1" />
+            {cgMetric && <span className="text-faint tabular-nums truncate">{cgMetric}</span>}
+          </button>
 
-      {/* CodeGraph Section */}
-      <div className="mx-2 mb-3 bg-panel border border-edge rounded-lg p-2.5 shrink-0">
-        <div className="flex items-center justify-between pb-2 border-b border-edge/60">
-          <div className="flex items-center gap-1.5 font-semibold text-txt text-[12px]">
-            <span className="text-txt tracking-wide uppercase text-[10px] font-semibold">CodeGraph</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            {cg?.status === "indexing" ? (
-              <span className="flex items-center gap-1 text-[9px] text-accent font-bold px-1.5 py-0.5 rounded bg-accent2 border border-accent/20">
-                <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                INDEXING
-              </span>
-            ) : cg?.status === "ready" ? (
-              <span className="text-[9px] text-good font-bold px-1.5 py-0.5 rounded bg-good/10 border border-good/20">
-                READY
-              </span>
-            ) : cg?.status === "unsupported" ? (
-              <span className="text-[9px] text-muted font-semibold px-1.5 py-0.5 rounded bg-panel2 border border-edge2">
-                UNSUPPORTED
-              </span>
-            ) : (
-              <span className="text-[9px] text-muted font-semibold px-1.5 py-0.5 rounded bg-panel2 border border-edge2">
-                NONE
-              </span>
-            )}
-
-            {cg && cg.status !== "none" && (
-              <button
-                onClick={handleReindex}
-                disabled={reindexing || cg.status === "indexing"}
-                className="text-[9px] bg-edge hover:bg-edge2 disabled:opacity-50 text-txt px-1.5 py-0.5 rounded transition-colors font-medium border border-edge2"
-              >
-                {reindexing || cg.status === "indexing" ? "Indexing..." : "Re-index"}
-              </button>
-            )}
-          </div>
-        </div>
-
-        {cg?.status === "none" ? (
-          <div className="text-[11px] text-muted italic pt-2 px-0.5">No workspace open</div>
-        ) : (
-          <>
-            <div className="grid grid-cols-3 gap-2 pt-2 text-[11px]">
-              <div>
-                <div className="text-faint text-[9px] uppercase tracking-wide">Nodes</div>
-                <div className="font-semibold text-txt text-[11px] mt-0.5">
-                  {cg?.nodes !== null && cg?.nodes !== undefined ? cg.nodes.toLocaleString() : "-"}
+          {cgOpen && cg?.status !== "none" && (
+            <div className="px-2.5 pb-2 pt-1 border-t border-edge/30">
+              <div className="grid grid-cols-3 gap-2 text-[11px]">
+                <div>
+                  <div className="text-faint text-[9px] uppercase tracking-wide">Nodes</div>
+                  <div className="font-semibold text-muted text-[11px] mt-0.5 tabular-nums">
+                    {cg?.nodes != null ? cg.nodes.toLocaleString() : "-"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-faint text-[9px] uppercase tracking-wide">Edges</div>
+                  <div className="font-semibold text-muted text-[11px] mt-0.5 tabular-nums">
+                    {cg?.edges != null ? cg.edges.toLocaleString() : "-"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-faint text-[9px] uppercase tracking-wide">Files</div>
+                  <div className="font-semibold text-muted text-[11px] mt-0.5 tabular-nums">
+                    {cg?.files != null ? cg.files.toLocaleString() : "-"}
+                  </div>
                 </div>
               </div>
-              <div>
-                <div className="text-faint text-[9px] uppercase tracking-wide">Edges</div>
-                <div className="font-semibold text-txt text-[11px] mt-0.5">
-                  {cg?.edges !== null && cg?.edges !== undefined ? cg.edges.toLocaleString() : "-"}
+
+              {cg?.languages && cg.languages.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {cg.languages.map((l) => (
+                    <span key={l} className="bg-panel2 px-1 py-0.2 rounded border border-edge/60 text-[9px] text-faint">
+                      {l}
+                    </span>
+                  ))}
                 </div>
+              )}
+
+              <div className="mt-2 flex items-center justify-between gap-2">
+                {cg?.last_indexed
+                  ? <span className="text-[8px] text-faint truncate">Indexed {new Date(cg.last_indexed).toLocaleString()}</span>
+                  : <span />}
+                <button
+                  onClick={handleReindex}
+                  disabled={reindexing || cgIndexing}
+                  className="text-[9px] bg-edge hover:bg-edge2 disabled:opacity-50 text-muted px-1.5 py-0.5 rounded transition-colors font-medium border border-edge2 shrink-0"
+                >
+                  {reindexing || cgIndexing ? "Indexing..." : "Re-index"}
+                </button>
               </div>
-              <div>
-                <div className="text-faint text-[9px] uppercase tracking-wide">Files</div>
-                <div className="font-semibold text-txt text-[11px] mt-0.5">
-                  {cg?.files !== null && cg?.files !== undefined ? cg.files.toLocaleString() : "-"}
-                </div>
-              </div>
+
+              {cgIndexing && cg?.reason && (
+                <div className="mt-1.5 text-[9px] text-accent/80">{cg.reason}</div>
+              )}
             </div>
-
-            {cg && cg.languages && cg.languages.length > 0 && (
-              <div className="mt-2 text-[10px] text-muted flex flex-wrap gap-1">
-                {cg.languages.map((l) => (
-                  <span key={l} className="bg-panel2 px-1 py-0.2 rounded border border-edge text-[9px] text-muted">
-                    {l}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {cg?.status === "indexing" && cg?.reason && (
-              <div className="mt-2 text-[9px] text-accent/80">
-                {cg.reason}
-              </div>
-            )}
-            {cg?.last_indexed && (
-              <div className="mt-2 text-[8px] text-faint">
-                Last indexed: {new Date(cg.last_indexed).toLocaleString()}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* Wiki Stats Section */}
-      <div className="mx-2 mb-3 bg-panel border border-edge rounded-lg p-2.5 shrink-0">
-        <div className="flex items-center justify-between pb-1.5 border-b border-edge/60">
-          <div className="flex items-center gap-1.5 font-semibold text-txt text-[12px]">
-            <span className="text-txt tracking-wide uppercase text-[10px] font-semibold">Wiki</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            {loadingWiki ? (
-              <Loader2 className="w-2.5 h-2.5 animate-spin text-faint" />
-            ) : wiki?.status === "ok" ? (
-              <span className="text-[9px] text-good font-bold px-1.5 py-0.5 rounded bg-good/10 border border-good/20 uppercase">
-                Connected
-              </span>
-            ) : wiki?.status === "error" ? (
-              <span className="text-[9px] text-accent font-semibold px-1.5 py-0.5 rounded bg-accent2 border border-accent/20 uppercase">
-                Error
-              </span>
-            ) : (
-              <span className="text-[9px] text-faint font-semibold px-1.5 py-0.5 rounded bg-panel2 border border-edge/50 uppercase">
-                Not Connected
-              </span>
-            )}
-            <button
-              onClick={fetchWiki}
-              disabled={loadingWiki}
-              className="text-[9px] bg-edge hover:bg-edge2 disabled:opacity-50 text-txt px-1.5 py-0.5 rounded transition-colors font-medium border border-edge2 flex items-center justify-center"
-              title="Refresh Wiki Stats"
-            >
-              <RefreshCw className={`w-2.5 h-2.5 ${loadingWiki ? 'animate-spin' : ''}`} />
-            </button>
-          </div>
+          )}
         </div>
 
-        {wiki?.status === "error" ? (
-          <div className="text-[11px] text-accent italic pt-2 px-0.5">{wiki.error || "Failed to fetch wiki status"}</div>
-        ) : wiki?.status !== "ok" ? (
-          <div className="text-[11px] text-muted italic pt-2 px-0.5">Wiki not connected (optional)</div>
-        ) : (
-          <div className="pt-2 text-[11px] text-txt">
-            {wiki ? (
-              <div className="flex justify-between items-center">
-                <span>Wiki: <strong className="text-good">{(wiki.nodes || []).length}</strong> pages, <strong className="text-good">{(wiki.edges || []).length}</strong> links</span>
-                {wiki.base_url && (
-                  <span className="text-[9px] text-faint truncate max-w-[150px]">{wiki.base_url}</span>
-                )}
-              </div>
-            ) : (
-              <div className="text-faint text-[10px]">Loading stats...</div>
-            )}
-          </div>
-        )}
+        {/* Wiki pill */}
+        <div className="rounded-md border border-edge/40 bg-panel/40 overflow-hidden">
+          <button
+            onClick={toggleWiki}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[10px] hover:bg-panel2/30 transition-colors"
+            title={wikiOpen ? "Hide Wiki details" : "Show Wiki details"}
+          >
+            {wikiOpen ? <ChevronDown className="w-3 h-3 text-faint shrink-0" /> : <ChevronRight className="w-3 h-3 text-faint shrink-0" />}
+            <span className="uppercase tracking-wider font-semibold text-faint">Wiki</span>
+            {loadingWiki
+              ? <Loader2 className="w-2.5 h-2.5 animate-spin text-faint shrink-0" />
+              : <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${wikiDot}`} aria-hidden />}
+            <span className="text-muted lowercase">{wikiWord}</span>
+            <span className="flex-1" />
+            {wikiMetric && <span className="text-faint tabular-nums truncate">{wikiMetric}</span>}
+          </button>
+
+          {wikiOpen && (
+            <div className="px-2.5 pb-2 pt-1.5 border-t border-edge/30 text-[10px]">
+              {wikiErr ? (
+                <div className="text-risk italic">{wiki?.error || "Failed to fetch wiki status"}</div>
+              ) : !wikiOk ? (
+                <div className="text-faint italic">Wiki not connected (optional)</div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-muted">
+                    <strong className="text-txt tabular-nums">{(wiki?.nodes || []).length}</strong> pages,{" "}
+                    <strong className="text-txt tabular-nums">{(wiki?.edges || []).length}</strong> links
+                    {wiki?.base_url && <span className="text-faint ml-1.5 truncate">{wiki.base_url}</span>}
+                  </span>
+                  <button
+                    onClick={fetchWiki}
+                    disabled={loadingWiki}
+                    className="text-[9px] bg-edge hover:bg-edge2 disabled:opacity-50 text-muted px-1.5 py-0.5 rounded transition-colors font-medium border border-edge2 flex items-center justify-center shrink-0"
+                    title="Refresh Wiki Stats"
+                  >
+                    <RefreshCw className={`w-2.5 h-2.5 ${loadingWiki ? "animate-spin" : ""}`} />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="text-[10px] text-muted px-3 pt-1 pb-1 flex justify-between items-center shrink-0">
-        <span className="font-semibold uppercase tracking-wider text-faint">Artifacts ({artifacts.length})</span>
+      {/* Artifacts: the hero of this tab. Brighter header + the full remaining
+          height, now that telemetry no longer eats the top third. */}
+      <div className="text-[10px] px-3 pt-1.5 pb-1 flex justify-between items-center shrink-0 border-t border-edge/30">
+        <span className="font-semibold uppercase tracking-wider text-muted">
+          Artifacts <span className="text-faint">({artifacts.length})</span>
+        </span>
       </div>
 
       {/* Artifacts Pane */}

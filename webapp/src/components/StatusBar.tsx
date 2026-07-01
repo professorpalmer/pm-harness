@@ -50,7 +50,7 @@ export default function StatusBar({ config, jobCount, leftOpen, rightOpen, onTog
   const runUpdate = () => {
     const ipc = (window as any).harnessIPC;
     if (!ipc || !ipc.updates || apply) return;
-    setApply({ stage: "fetch", message: "Starting update", percent: 0 });
+    setApply({ stage: "prepare", message: "Preparing update", percent: null });
     const off = ipc.updates.onProgress((p: any) => setApply(p));
     ipc.updates.apply()
       .then((res: any) => {
