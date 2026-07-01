@@ -45,6 +45,13 @@ from .wiki import WikiClient, session_digest
 from .text_clean import clean_say
 from .checkpoints import CheckpointStore
 
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI SGR color codes so CLI output reads cleanly as tool results."""
+    return _ANSI_ESCAPE.sub("", text)
+
 
 def is_safe_path(path: str, parent: str) -> bool:
     try:
@@ -999,17 +1006,19 @@ class ConversationalSession:
     def _do_search_codegraph(self, act: Any) -> tuple[bool, str, Any]:
         if not self.config.repo:
             return False, "repo_not_open", "No workspace directory (config.repo) is open."
-        
-        cg_bin = "codegraph"
-        if os.path.exists("/opt/homebrew/bin/codegraph"):
-            cg_bin = "/opt/homebrew/bin/codegraph"
-        
+
+        # Route through the Puppetmaster CLI passthrough (`python -m puppetmaster
+        # codegraph ...`) rather than a bare `codegraph` binary. The bare binary
+        # runs under whatever Node is on PATH, whose ABI usually differs from the
+        # Node that compiled better-sqlite3 -- so it silently drops to the WASM
+        # SQLite fallback (5-10x slower) and prints a fix-it banner that lands in
+        # the model's tool output as noise. The passthrough runs under the
+        # interpreter driving the backend and auto-rebuilds the native binding,
+        # giving clean, fast results.
         kind = act.arguments.get("kind") or "search"
-        if kind == "context":
-            cmd = [cg_bin, "context", act.query]
-        else:
-            cmd = [cg_bin, "query", act.query]
-        
+        subcommand = "context" if kind == "context" else "query"
+        cmd = _puppetmaster_cmd("codegraph", subcommand, act.query)
+
         try:
             p = subprocess.run(
                 cmd,
@@ -1017,20 +1026,20 @@ class ConversationalSession:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                timeout=60
+                timeout=60,
             )
-            output = (p.stdout or "").strip()
+            output = _strip_ansi((p.stdout or "").strip())
             if p.returncode != 0:
-                if "not found" in output.lower() or "no such file" in output.lower() or p.returncode == 127:
-                    output = "CodeGraph CLI is not installed or not available on PATH."
+                if "no module named" in output.lower() or p.returncode == 127:
+                    output = "CodeGraph is unavailable: the Puppetmaster CLI is not importable in this environment."
                 else:
                     output = f"CodeGraph failed with exit code {p.returncode}: {output}"
             else:
                 output = output[:6000]
-            
+
             return True, "success", (kind, output)
         except FileNotFoundError:
-            return False, "filenotfound", "CodeGraph CLI not found. Please install the codegraph binary."
+            return False, "filenotfound", "CodeGraph is unavailable: Python interpreter not found."
         except Exception as e:
             return False, "exception", str(e)
 

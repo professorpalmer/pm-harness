@@ -1,10 +1,43 @@
 from __future__ import annotations
 
 import os
+import re
 import urllib.request
 import urllib.parse
 import html.parser
 from typing import Optional
+
+WEB_FETCH_LIMIT = 16000
+
+
+def github_fetch_candidates(url: str) -> list[str]:
+    """Rewrite a GitHub web-UI URL to raw.githubusercontent.com candidates.
+
+    The github.com HTML pages are almost entirely navigation chrome, so fetching
+    them for their text yields noise and blows the truncation budget. The raw
+    host returns the actual file, which is what a fetch of a repo/file wants.
+    Returns an ordered list to try; the original URL is always the last fallback.
+    """
+    match = re.match(r"https?://github\.com/([^/]+)/([^/]+)(/.*)?$", url)
+    if not match:
+        return [url]
+    owner, repo = match.group(1), match.group(2)
+    if repo.endswith(".git"):
+        repo = repo[: -len(".git")]
+    rest = (match.group(3) or "").rstrip("/")
+
+    file_match = re.match(r"/(?:blob|raw)/([^/]+)/(.+)$", rest)
+    if file_match:
+        ref, path = file_match.group(1), file_match.group(2)
+        return [f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}", url]
+
+    tree_match = re.match(r"/tree/([^/]+)/?$", rest)
+    refs = [tree_match.group(1)] if tree_match else ["main", "master"]
+    candidates = [
+        f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/README.md" for ref in refs
+    ]
+    candidates.append(url)
+    return candidates
 
 
 def is_safe_path(path: str, parent: str) -> bool:
@@ -146,51 +179,64 @@ def web_search(query: str, timeout: int = 10) -> str:
         return f"Error searching the web: {e}"
 
 
-def web_fetch(url: str, timeout: int = 12) -> str:
-    try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-        })
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            content_type = response.headers.get("Content-Type", "").lower()
-            
-            # PDF routing
-            if "application/pdf" in content_type or url.lower().split("?")[0].endswith(".pdf"):
-                pdf_data = response.read()
-                import tempfile
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                    tmp.write(pdf_data)
-                    tmp_path = tmp.name
-                try:
-                    text = read_pdf(tmp_path)
-                finally:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
-                return text
-            
-            raw_bytes = response.read()
-            if "application/json" in content_type:
-                try:
-                    text = raw_bytes.decode("utf-8")
-                except Exception:
-                    text = raw_bytes.decode("utf-8", errors="replace")
-                return text[:8000]
-            
+def _truncate(text: str, source_url: str) -> str:
+    if len(text) <= WEB_FETCH_LIMIT:
+        return text
+    hint = (
+        f"\n\n... (truncated to {WEB_FETCH_LIMIT} chars). To read more, fetch a more "
+        "specific URL -- e.g. a raw file on raw.githubusercontent.com, or a "
+        "documentation subpage -- rather than re-fetching the same page."
+    )
+    return text[:WEB_FETCH_LIMIT] + hint
+
+
+def _fetch_one(url: str, timeout: int) -> str:
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        content_type = response.headers.get("Content-Type", "").lower()
+
+        if "application/pdf" in content_type or url.lower().split("?")[0].endswith(".pdf"):
+            pdf_data = response.read()
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(pdf_data)
+                tmp_path = tmp.name
             try:
-                html_content = raw_bytes.decode("utf-8")
-            except Exception:
-                html_content = raw_bytes.decode("utf-8", errors="replace")
-                
-            parser = HTMLToTextParser()
-            parser.feed(html_content)
-            parser.close()
-            text = parser.get_text()
-            
-            if len(text) > 8000:
-                text = text[:8000] + "\n\n... (content truncated to 8000 characters) ..."
-            return text
-    except Exception as e:
-        return f"Error fetching web page: {e}"
+                return read_pdf(tmp_path)
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+
+        raw_bytes = response.read()
+        if "application/json" in content_type:
+            text = raw_bytes.decode("utf-8", errors="replace")
+            return _truncate(text, url)
+
+        # Raw text/markdown (e.g. raw.githubusercontent.com) needs no HTML parse.
+        is_markup = "text/html" in content_type or "xml" in content_type
+        text_body = raw_bytes.decode("utf-8", errors="replace")
+        if not is_markup:
+            return _truncate(text_body, url)
+
+        parser = HTMLToTextParser()
+        parser.feed(text_body)
+        parser.close()
+        return _truncate(parser.get_text(), url)
+
+
+def web_fetch(url: str, timeout: int = 12) -> str:
+    candidates = github_fetch_candidates(url)
+    last_error = None
+    for candidate in candidates:
+        try:
+            text = _fetch_one(candidate, timeout)
+            if text and text.strip():
+                return text
+        except Exception as e:  # try the next candidate (e.g. 404 on main -> master)
+            last_error = e
+    return f"Error fetching web page: {last_error}" if last_error else "Error fetching web page: empty response"
 
 
 def read_pdf(path_or_url: str, workspace_repo: Optional[str] = None) -> str:
