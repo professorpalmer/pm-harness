@@ -776,7 +776,16 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def _token_ok(self) -> bool:
-        return self.headers.get("X-Harness-Token", "") == _TOKEN
+        if self.headers.get("X-Harness-Token", "") == _TOKEN:
+            return True
+        # Accept the token as a query param too, matching do_GET's checks. The IPC
+        # POST bridge sends the header, so this changes no current behavior -- it
+        # removes an asymmetry where a query-token caller was rejected only on POST.
+        try:
+            qtok = parse_qs(urlparse(self.path).query).get("token", [""])[0]
+        except Exception:
+            qtok = ""
+        return qtok == _TOKEN
 
     def _send(self, code, body, ctype="application/json"):
         data = body.encode() if isinstance(body, str) else body
@@ -2877,9 +2886,7 @@ class Handler(BaseHTTPRequestHandler):
                 gen.close()
             except Exception:
                 pass
-            run_hooks("postRun", ctx)
-            if _sessions.active:
-                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_transcript_data())
+            _finalize_turn(ctx)
 
     def _swap_pilot(self, model: str):
         """Hot-swap the pilot model (the whole point: your key -> your pilot).
@@ -3119,9 +3126,29 @@ class Handler(BaseHTTPRequestHandler):
                 gen.close()
             except Exception:
                 pass
-            run_hooks("postRun", ctx)
-            if _sessions.active:
-                save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_transcript_data())
+            _finalize_turn(ctx)
+
+
+def _finalize_turn(ctx) -> None:
+    """End-of-turn bookkeeping (post-run hooks + transcript persist) with each step
+    isolated so a failure in one cannot break the streaming response or take the
+    request handler thread down. The turn is already over for the client when the
+    stream ends; a serialization error in export_transcript_data() or a misbehaving
+    hook must be logged, never propagated. This is the finish-path hardening for the
+    "backend dies right when the response finishes" class of failure."""
+    try:
+        from .hooks import run_hooks
+        run_hooks("postRun", ctx)
+    except Exception as e:
+        import sys
+        print(f"[postRun hook error] {e!r}", file=sys.stderr)
+    try:
+        if _sessions.active:
+            save_transcript(_cfg.state_dir or _tf.gettempdir(),
+                            _sessions.active, _pilot.export_transcript_data())
+    except Exception as e:
+        import sys
+        print(f"[transcript persist error] {e!r}", file=sys.stderr)
 
 
 def _pilot_preflight():
@@ -3223,6 +3250,17 @@ def serve(host: str = "127.0.0.1", port: int = 8799, force: bool = False) -> Non
     import time
     import atexit
 
+    # Force line-buffered stdout/stderr. The packaged PyInstaller backend does not
+    # honor PYTHONUNBUFFERED, so its output (including crash tracebacks) sat in a
+    # pipe buffer and was LOST when the process exited -- which made backend deaths
+    # invisible in the desktop app's log. Line buffering flushes every line to the
+    # Electron [out]/[err] pipes in real time so failures are actually captured.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+
     marker_dir = os.path.expanduser("~/.pmharness")
     marker_path = os.path.join(marker_dir, "backend.json")
 
@@ -3307,6 +3345,20 @@ def serve(host: str = "127.0.0.1", port: int = 8799, force: bool = False) -> Non
     try:
         _maybe_auto_index_codegraph()
         srv.serve_forever()
+    except SystemExit:
+        raise
+    except BaseException:
+        # Capture the real cause of an unexpected backend exit before it unwinds.
+        # Without this the traceback could be swallowed and the desktop app would
+        # only see the backend vanish. Flush explicitly in case buffering lingers.
+        import traceback
+        print("[backend FATAL] serve_forever exited abnormally:", file=sys.stderr)
+        traceback.print_exc()
+        try:
+            sys.stderr.flush()
+        except Exception:
+            pass
+        raise
     finally:
         _mcp.stop_all()
         _cleanup_marker(marker_path, os.getpid())

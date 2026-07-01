@@ -106,6 +106,9 @@ function loginShellEnv() {
 let backend = null;
 let backendPort = 8799;
 let win = null;
+let quitting = false;
+// Timestamps of recent unexpected respawns -- caps a crash loop (see backend.on exit).
+let respawnTimes = [];
 
 // The source checkout the app runs from. The backend is `harness.cli` under this
 // root, and the self-updater pulls + rebuilds it in place. HARNESS_REPO wins;
@@ -260,12 +263,41 @@ async function startBackend() {
   }
 
   backend.on("error", (e) => _dbg(`spawn error: ${e.message}`));
-  // Log unexpected backend death (code/signal) instead of silently losing it; the
-  // renderer surfaces graph/wiki/terminal failures on its own, but this pins the
-  // cause in the log. cleanupBackend() nulls `backend` on intentional teardown, so
-  // a non-null ref here means the exit was NOT us.
+  // Recover from an unexpected backend death instead of leaving the window
+  // stranded against a dead port (graph/wiki/terminal all fail at once until the
+  // user reopens). cleanupBackend() nulls `backend` on intentional teardown, so a
+  // non-null ref here means the exit was NOT us -> respawn and tell the renderer.
   backend.on("exit", (code, signal) => {
-    if (backend) _dbg(`[backend EXITED unexpectedly] code=${code} signal=${signal}`);
+    const wasOurs = backend;   // non-null => unexpected (not cleanupBackend/quit)
+    backend = null;
+    if (!wasOurs || quitting) return;
+    _dbg(`[backend EXITED unexpectedly] code=${code} signal=${signal} -- respawning`);
+    try { fs.unlinkSync(markerPath()); } catch {}
+    // Crash-loop guard: if it keeps dying, stop auto-respawning and wait for the
+    // next window activate so we don't spin the CPU fighting a hard failure.
+    const now = Date.now();
+    respawnTimes = respawnTimes.filter((t) => now - t < 60000);
+    respawnTimes.push(now);
+    if (respawnTimes.length > 5) {
+      _dbg("[backend] too many respawns in 60s -- pausing auto-respawn until next activate");
+      return;
+    }
+    startBackend()
+      .then(() => {
+        _dbg(`[backend] respawned on ${backendPort}`);
+        try {
+          if (win && win.webContents && !win.webContents.isDestroyed()) {
+            // Re-point the renderer at the new port. The main-process IPC bridge
+            // (backendRequest + harness:stream) already reads the updated
+            // backendPort, but any direct window.__HARNESS_PORT__ consumer would
+            // otherwise stay bound to the dead port -- that is the "UI goes dark at
+            // finish-time" stranding. Re-inject it and signal panels to re-fetch.
+            win.webContents.executeJavaScript(`window.__HARNESS_PORT__=${backendPort};`).catch(() => {});
+            win.webContents.send("backend:respawned", backendPort);
+          }
+        } catch { /* window gone */ }
+      })
+      .catch((e) => _dbg(`[backend] respawn failed: ${e && e.message}`));
   });
   backend.stdout.on("data", (d) => { _dbg(`[out] ${d}`); process.stdout.write(`[backend] ${d}`); });
   backend.stderr.on("data", (d) => { _dbg(`[err] ${d}`); process.stderr.write(`[backend] ${d}`); });
@@ -555,4 +587,4 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
-app.on("before-quit", cleanupBackend);
+app.on("before-quit", () => { quitting = true; cleanupBackend(); });
