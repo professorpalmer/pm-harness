@@ -145,15 +145,26 @@ _WEB = Path(__file__).resolve().parent / "web"
 # One shared session per server process (single-user local app).
 _state_dir = os.environ.get("HARNESS_STATE_DIR", "")
 _cfg = HarnessConfig.from_env()
-_WORKSPACE_JSON = os.path.expanduser("~/.pmharness/workspace.json")
-_WORKSPACE_DRIVERS_JSON = os.path.expanduser("~/.pmharness/workspace_drivers.json")
+def _state_home() -> str:
+    """Base dir for app state files (workspace.json, token, drivers, markers).
+
+    Honors HARNESS_STATE_DIR so the test suite -- which sets it to an isolated
+    temp dir per test (tests/conftest.py::_isolate_provider_state) -- can NEVER
+    read or write the developer's real ~/.pmharness. These paths used to be
+    frozen to real home at import time, so importing harness.server during tests
+    leaked live state: a dead pytest temp repo in workspace.json and, worse, a
+    rewritten auth token. A respawned backend then held a token the renderer no
+    longer knew, every request 403'd, and it read as "the backend died."
+    """
+    return os.environ.get("HARNESS_STATE_DIR") or os.path.expanduser("~/.pmharness")
+
+
+def _workspace_json_path() -> str:
+    return os.path.join(_state_home(), "workspace.json")
 
 
 def _workspace_drivers_path() -> str:
-    state_dir = os.environ.get("HARNESS_STATE_DIR")
-    if state_dir:
-        return os.path.join(state_dir, "workspace_drivers.json")
-    return _WORKSPACE_DRIVERS_JSON
+    return os.path.join(_state_home(), "workspace_drivers.json")
 
 
 def _save_workspace_driver(repo: str, driver: str) -> None:
@@ -203,7 +214,7 @@ def _record_recent_workspace(target_repo: str) -> list:
     import json
     import os
     import tempfile as _tf
-    ws_json_path = _WORKSPACE_JSON
+    ws_json_path = _workspace_json_path()
     try:
         os.makedirs(os.path.dirname(ws_json_path), exist_ok=True)
         recents = []
@@ -262,7 +273,7 @@ def _forget_recent_workspace(forget_path: str) -> list:
     import json
     import os
     import tempfile as _tf
-    ws_json_path = _WORKSPACE_JSON
+    ws_json_path = _workspace_json_path()
     try:
         os.makedirs(os.path.dirname(ws_json_path), exist_ok=True)
         recents = []
@@ -321,10 +332,13 @@ def _forget_recent_workspace(forget_path: str) -> list:
             pass
         return []
 
-if not os.environ.get("HARNESS_REPO") and os.path.exists(_WORKSPACE_JSON):
+_ws_boot_path = _workspace_json_path()
+if not os.environ.get("HARNESS_REPO") and os.path.exists(_ws_boot_path):
     try:
-        with open(_WORKSPACE_JSON, "r") as _ws_f:
+        with open(_ws_boot_path, "r") as _ws_f:
             _ws_data = json.load(_ws_f)
+            # Only adopt a persisted repo that still exists on disk. A stale or
+            # corrupted workspace.json (e.g. a vanished dir) must not wedge boot.
             if _ws_data.get("repo") and os.path.isdir(_ws_data["repo"]):
                 _cfg.repo = _ws_data["repo"]
                 os.environ["HARNESS_REPO"] = _ws_data["repo"]
@@ -457,7 +471,7 @@ os.makedirs(_UPLOAD_DIR, exist_ok=True)
 # client (Electron main / served page) can read it; required on mutating
 # endpoints. Origin/Host validation below is the primary anti-RCE guard.
 _TOKEN = os.environ.get("HARNESS_TOKEN") or _secrets.token_hex(16)
-_TOKEN_FILE = os.path.join(os.path.expanduser("~/.pmharness"), "token")
+_TOKEN_FILE = os.path.join(_state_home(), "token")
 try:
     os.makedirs(os.path.dirname(_TOKEN_FILE), exist_ok=True)
     with open(_TOKEN_FILE, "w") as _tf2:
@@ -2073,8 +2087,9 @@ class Handler(BaseHTTPRequestHandler):
             cg_status = _get_codegraph_status(repo) if repo else "unsupported"
             recents = []
             try:
-                if os.path.exists(_WORKSPACE_JSON):
-                    with open(_WORKSPACE_JSON) as f:
+                _ws_path = _workspace_json_path()
+                if os.path.exists(_ws_path):
+                    with open(_ws_path) as f:
                         recents = json.load(f).get("recents", []) or []
             except Exception:
                 recents = []
@@ -3292,7 +3307,7 @@ def serve(host: str = "127.0.0.1", port: int = 8799, force: bool = False) -> Non
         except Exception:
             pass
 
-    marker_dir = os.path.expanduser("~/.pmharness")
+    marker_dir = _state_home()
     marker_path = os.path.join(marker_dir, "backend.json")
 
     if not force:

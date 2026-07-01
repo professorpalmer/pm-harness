@@ -96,10 +96,11 @@ def test_forget_recent_workspace(monkeypatch, tmp_path):
     import os
     import tempfile
     import harness.server as srv
-    
-    # Create a dummy workspace.json path
+
+    # workspace.json now resolves under HARNESS_STATE_DIR (state-home isolation),
+    # so point that at tmp_path instead of patching a module constant.
+    monkeypatch.setenv("HARNESS_STATE_DIR", str(tmp_path))
     ws_file = tmp_path / "workspace.json"
-    monkeypatch.setattr(srv, "_WORKSPACE_JSON", str(ws_file))
     
     # Create some dummy directory paths (must be real directories to be persistable)
     dir1 = tmp_path / "dir1"

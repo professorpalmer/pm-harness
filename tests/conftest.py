@@ -6,9 +6,22 @@ back in with @pytest.mark.network, and are deselected by default in CI runs.
 """
 import socket
 import os
+import tempfile
 import pytest
 
 os.environ["PMHARNESS_MCP_ALLOW_PRIVATE"] = "1"
+
+# Seal off the developer's real ~/.pmharness BEFORE pytest collects (imports)
+# any test module. Several test modules import harness.server at top level, and
+# that import writes a fresh auth token + touches workspace/marker files. Frozen
+# to real home, those writes clobbered the running app's live token (renderer
+# and backend then disagreed -> every request 403'd -> "the backend died") and
+# corrupted workspace.json with a vanished temp repo. Setting the state dir here
+# -- before collection -- guarantees every such write lands in a throwaway dir.
+# The per-test fixture below layers a fresh subdir on top for finer isolation.
+os.environ.setdefault(
+    "HARNESS_STATE_DIR", tempfile.mkdtemp(prefix="pmharness-test-state-")
+)
 
 _real_socket = socket.socket
 
@@ -90,10 +103,10 @@ def _clear_wiki_env(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolate_provider_state(monkeypatch, tmp_path_factory):
-    """Isolate provider keys + disconnect state from the developer's real
-    ~/.pmharness so tests never inherit a live disconnected.json / keys.json
-    (which would make a keyed provider read as unavailable). Tests that set their
-    own HARNESS_STATE_DIR override this; otherwise every test gets a clean dir."""
-    if not os.environ.get("HARNESS_STATE_DIR"):
-        d = tmp_path_factory.mktemp("pmstate")
-        monkeypatch.setenv("HARNESS_STATE_DIR", str(d))
+    """Give every test its own clean state dir, isolated from the developer's
+    real ~/.pmharness (keys.json / disconnected.json / workspace.json / token).
+    A collection-safe default is already set at module import; this layers a
+    fresh per-test subdir on top so state never bleeds between tests. Tests that
+    set their own HARNESS_STATE_DIR in the test body still override it there."""
+    d = tmp_path_factory.mktemp("pmstate")
+    monkeypatch.setenv("HARNESS_STATE_DIR", str(d))

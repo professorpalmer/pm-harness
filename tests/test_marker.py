@@ -7,15 +7,16 @@ from harness.server import serve
 
 
 def test_marker_and_reuse_logic(tmp_path, monkeypatch, capsys):
-    # Isolated marker directory using temp path
-    monkeypatch.setattr("os.path.expanduser", lambda path: path.replace("~", str(tmp_path)) if path.startswith("~") else path)
+    # Isolate all app state (marker/token/workspace) under tmp_path via the
+    # state-home env the server now honors -- backend.json lives directly in it.
+    monkeypatch.setenv("HARNESS_STATE_DIR", str(tmp_path))
 
     # 1. Start a background server on an ephemeral port (0)
     t1 = threading.Thread(target=serve, kwargs={"host": "127.0.0.1", "port": 0}, daemon=True)
     t1.start()
 
     # Wait for the marker to be created and populated
-    marker_path = os.path.join(str(tmp_path), ".pmharness", "backend.json")
+    marker_path = os.path.join(str(tmp_path), "backend.json")
     for _ in range(50):
         if os.path.exists(marker_path):
             try:
