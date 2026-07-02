@@ -30,6 +30,10 @@ def test_run_parallel_provider_default(monkeypatch):
         cfg.repo = repo_dir
         session = ConversationalSession(cfg)
 
+        # Pin the native engine so the parallel apply pipeline is deterministic
+        # regardless of provider keys on the test host.
+        monkeypatch.setattr("harness.edit_engines.agentic_available", lambda: False)
+
         goals_seen = []
         def mock_worker_run(self):
             goals_seen.append(self.goal)
@@ -83,12 +87,12 @@ def test_run_parallel_provider_default(monkeypatch):
         # Send a message to start the action
         events = list(session.send("start parallel"))
 
-        # Assert correct action_start is emitted with mode="provider"
+        # Assert correct action_start is emitted with the engine label
         action_starts = [e for e in events if e.kind == "action_start"]
         assert len(action_starts) >= 1
         specific_start = action_starts[-1]
         assert specific_start.data["kind"] == "run_parallel"
-        assert specific_start.data["mode"] == "provider"
+        assert specific_start.data["mode"] == "native"
         assert specific_start.data["goals"] == ["Goal A", "Goal B"]
 
         # Assert a single swarm_pending with 2 job_ids is emitted

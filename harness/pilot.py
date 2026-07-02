@@ -445,7 +445,7 @@ def build_tools_schema(mcp_tools: Optional[list] = None, no_delegation: bool = F
                     "type": "object",
                     "properties": {
                         "goal": {"type": "string", "description": "The coding objective / task description to implement"},
-                        "adapter": {"type": "string", "description": "Optional Puppetmaster adapter to run (e.g., hermes, cursor, codex, claude-code)"}
+                        "adapter": {"type": "string", "description": "Optional edit engine. Default is 'agentic' -- Puppetmaster's standalone keys-only worker (routes directly through your provider API, no external CLI). 'native' forces Marionette's own richer pilot loop. 'cursor'/'codex'/'claude-code' use those external agent CLIs when installed."}
                     },
                     "required": ["goal"]
                 }
@@ -467,7 +467,7 @@ def build_tools_schema(mcp_tools: Optional[list] = None, no_delegation: bool = F
                             "items": {"type": "string"},
                             "description": "Array of goals/objectives to run in parallel"
                         },
-                        "adapter": {"type": "string", "description": "Optional Puppetmaster adapter to run (e.g., hermes, cursor, codex, claude-code)"},
+                        "adapter": {"type": "string", "description": "Optional edit engine (default 'agentic' -- standalone keys-only; 'native' for the richer pilot; 'cursor'/'codex'/'claude-code' for external CLIs when installed)"},
                         "mode": {"type": "string", "enum": ["implement", "analysis", "review"], "description": "Worker execution mode: 'implement' (can edit) or 'analysis'/'review' (read-only)"}
                     },
                     "required": ["goals"]
@@ -987,7 +987,7 @@ You have direct access to a local CodeGraph-indexed workspace and can explore/ed
 - `run_command`: run a terminal shell command. Requires `command`.
 - `list_dir`: list the files and folders inside a directory. `path` is optional.
 - `run_swarm`: dispatch a parallel agent swarm for complex/broad investigations. Requires `goal`. One worker runs per role -- for a broad ask (audit, "review the platform", "find ways to improve quality/robustness/scale") pass SEVERAL `roles` (explore, pipeline-mapper, decision-explainer, conflict-auditor, test-coverage-reviewer) so it fans out into real parallel coverage; pass all five for a full audit. Omit roles only for a single narrow question.
-- `run_implement`: dispatch an edit-capable Puppetmaster worker that edits the repo in an isolated worktree and produces a patch. Requires `goal`.
+- `run_implement`: dispatch an edit-capable worker that edits the repo in an isolated worktree and produces a reviewable patch. Requires `goal`. Default engine is standalone `agentic` (routes directly through your provider keys, no external CLI); pass `adapter` only to force a specific engine.
 - `run_parallel`: dispatch multiple Puppetmaster workers concurrently. Requires `goals` array, optional `adapter`, optional `mode`.
 - `route_task`: preview which model the router would pick + estimated cost for a given instruction without executing it. Requires `instruction`.
 - `web_search`: search the internet and return top results. Requires `query`.

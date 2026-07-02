@@ -5,6 +5,9 @@ export type Config = {
   driver: string; reach: string; budget: number;
   models?: string[]; preflight?: string | null;
   repo?: string;
+  swarm_adapter?: string;
+  edit_engine?: "agentic" | "native";
+  agentic_ready?: boolean;
 };
 export type Settings = {
   driver: string;

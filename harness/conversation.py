@@ -2421,13 +2421,17 @@ class ConversationalSession:
                             self._append_action_result(act, aid, f"(run_implement {aid} failed: {e})", is_native)
                         continue
                     else:
-                        # NEW provider-native path
+                        # Standalone in-process path: the agentic engine (keys-only,
+                        # router-picked, no external CLI) by default, or Marionette's
+                        # native pilot when no provider key is present / native is asked.
+                        from harness.edit_engines import select_edit_engine
+                        engine = select_edit_engine(self.config, act.adapter or "")
                         yield ConvEvent("action_start", {
                             "id": aid,
                             "kind": "run_implement",
                             "goal": act.goal,
                             "cwd": self.config.repo,
-                            "mode": "provider"
+                            "mode": engine,
                         })
                         
                         try:
@@ -2437,8 +2441,8 @@ class ConversationalSession:
                             self._session_job_ids.append(job_id)
                             self._register_local_job(job_id, act.goal, role="implement")
                             
-                            # Submit the provider worker task to the thread pool
-                            future = self._swarm_pool.submit(self._run_provider_worker_background, job_id, act.goal)
+                            # Submit the selected edit engine to the thread pool
+                            future = self._swarm_pool.submit(self._run_provider_worker_background, job_id, act.goal, act.adapter or "")
                             with self._swarm_futures_lock:
                                 self._swarm_futures.add(future)
                             
@@ -2684,13 +2688,16 @@ class ConversationalSession:
                             self._append_action_result(act, aid, f"(run_parallel failed to dispatch any jobs)", is_native)
                         continue
                     else:
-                        # NEW provider-native parallel path
+                        # Standalone in-process parallel path: the agentic engine per
+                        # goal (keys-only, router-picked) or the native pilot fallback.
+                        from harness.edit_engines import select_edit_engine
+                        engine = select_edit_engine(self.config, act.adapter or "")
                         yield ConvEvent("action_start", {
                             "id": aid,
                             "kind": "run_parallel",
                             "goals": goals,
                             "cwd": self.config.repo,
-                            "mode": "provider"
+                            "mode": engine,
                         })
                         
                         try:
@@ -2703,8 +2710,8 @@ class ConversationalSession:
                                 self._session_job_ids.append(job_id)
                                 self._register_local_job(job_id, sub_goal, role="implement")
                                 
-                                # Submit the provider worker task to the thread pool
-                                future = self._swarm_pool.submit(self._run_provider_worker_background, job_id, sub_goal)
+                                # Submit the selected edit engine to the thread pool
+                                future = self._swarm_pool.submit(self._run_provider_worker_background, job_id, sub_goal, act.adapter or "")
                                 with self._swarm_futures_lock:
                                     self._swarm_futures.add(future)
                                 
@@ -3328,20 +3335,11 @@ class ConversationalSession:
         with self._local_jobs_lock:
             return [dict(job) for job in self._local_jobs.values()]
 
-    def _run_provider_worker_background(self, job_id: str, objective: str) -> None:
+    def _run_provider_worker_background(self, job_id: str, objective: str, requested_adapter: str = "") -> None:
         try:
-            from harness.worker import ProviderWorker
-            from harness.autobudget import AutoBudget
-            
-            w = ProviderWorker(
-                self.config.repo,
-                objective,
-                driver=self.config.driver,
-                reach=self.config.reach,
-                budget=AutoBudget.from_env(),
-                require_codegraph=False
-            )
-            res = w.run()
+            from harness.edit_engines import run_edit_worker
+
+            res = run_edit_worker(self.config, objective, requested_adapter=requested_adapter)
             
             if not res.ok:
                 res_dict = {
@@ -3370,7 +3368,7 @@ class ConversationalSession:
                 })
                 
                 tokens_in = 0
-                tokens_out = w.budget.tokens_used
+                tokens_out = res.tokens_out
                 with self._apply_lock:
                     self._tokens_used += tokens_out
                 

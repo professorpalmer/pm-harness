@@ -31,6 +31,7 @@ class WorkerResult:
     error: str = ""
     events: list[ConvEvent] = field(default_factory=list)
     test_passed: bool = True
+    tokens_out: int = 0  # normalized token count so every edit engine reports spend
 
 
 def is_obviously_destructive(cmd: str) -> bool:
@@ -194,59 +195,21 @@ class ProviderWorker:
                 ):
                     events.append(ev)
                     
-            # 4. Finalize -> PATCH
-            # Run git add -A, then unstage common build/agent artifacts so they
-            # never leak into the patch (git add -A otherwise sweeps untracked
-            # __pycache__/*.pyc, .pytest_cache, etc. that the worker created when
-            # it ran tests). Pathspec excludes keep the captured diff to real edits.
-            rc_add, out_add, err_add = _git(wt_path, "add", "-A")
-            if rc_add != 0:
+            # 4. Finalize -> PATCH. Stage everything, drop build/agent artifacts
+            # the worker may have created (git add -A otherwise sweeps untracked
+            # __pycache__/*.pyc, .pytest_cache, etc.), and capture the diff. Shared
+            # with the agentic engine so both capture edits identically.
+            try:
+                from harness.edit_engines import finalize_worktree_patch
+                patch, files_changed = finalize_worktree_patch(wt_path)
+            except RuntimeError as e:
                 return WorkerResult(
                     ok=False,
-                    error=f"git add failed: {err_add or out_add}",
+                    error=str(e),
                     events=events,
                     worktree=wt_path
                 )
-            # Unstage artifact paths (best-effort; ignore failures when none match).
-            _ARTIFACT_PATHSPECS = [
-                "*.pyc", "*.pyo", "__pycache__", ".pytest_cache",
-                ".mypy_cache", ".ruff_cache", "*.egg-info", ".coverage",
-                "node_modules", ".DS_Store",
-            ]
-            # One git reset over ALL pathspecs instead of 2 spawns per spec
-            # (git reset accepts multiple pathspecs; 20 spawns -> 1).
-            _reset_specs = []
-            for _spec in _ARTIFACT_PATHSPECS:
-                _reset_specs.append(f":(glob){_spec}")
-                _reset_specs.append(f":(glob)**/{_spec}")
-            _git(wt_path, "reset", "-q", "--", *_reset_specs)
-                
-            # Run git diff --cached --no-color using subprocess.run directly to preserve formatting/newlines
-            p_diff = subprocess.run(
-                ["git", "-C", wt_path, "diff", "--cached", "--no-color"],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            if p_diff.returncode != 0:
-                return WorkerResult(
-                    ok=False,
-                    error=f"git diff failed: {p_diff.stderr or p_diff.stdout}",
-                    events=events,
-                    worktree=wt_path
-                )
-                
-            patch = p_diff.stdout
-            
-            # Parse files changed from git diff --cached --name-only
-            p_files = subprocess.run(
-                ["git", "-C", wt_path, "diff", "--cached", "--name-only"],
-                capture_output=True,
-                text=True,
-                timeout=15
-            )
-            files_changed = [line.strip() for line in p_files.stdout.splitlines() if line.strip()]
-            
+
             if not patch.strip():
                 success = True
                 return WorkerResult(

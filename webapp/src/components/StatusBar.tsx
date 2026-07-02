@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Circle, GitBranch, Boxes, Cpu, PanelLeft, PanelRight, Coins, ArrowUpCircle, RefreshCw } from "lucide-react";
+import { Circle, GitBranch, Boxes, Cpu, PanelLeft, PanelRight, Coins, ArrowUpCircle, RefreshCw, Zap } from "lucide-react";
 import { api, type Config } from "../lib/api";
 import { isDesktop } from "../lib/transport";
 
@@ -151,6 +151,14 @@ export default function StatusBar({ config, jobCount, leftOpen, rightOpen, onTog
           only a bare, unprefixed model actually falls back to reach. Showing
           reach unconditionally made e.g. anthropic:claude-opus read "openrouter". */}
       <span>{(config?.driver?.includes(":") ? config.driver.split(":")[0] : config?.reach) || ""}</span>
+      {config?.edit_engine === "agentic" && (
+        <span
+          className="flex items-center gap-1 text-good/80"
+          title="Standalone: edits and swarms route directly through your provider keys -- no external agent CLI"
+        >
+          <Zap size={10} className="text-good/70" />standalone
+        </span>
+      )}
       {apply ? (
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded text-accent"

@@ -69,21 +69,39 @@ def run_doctor(argv) -> int:
         _line("fail", f"driver {cfg.driver}", f"build failed: {e}")
         hard_fail = True
 
-    # 3b. Swarm adapter -- demo (substrate) vs openai (real read-only analysis)
+    # 3b. Swarm adapter -- demo (substrate), agentic (standalone keys-only), or
+    # openai (OpenRouter-routed) real read-only analysis.
     sa = os.environ.get("HARNESS_SWARM_ADAPTER", "demo").lower()
     repo = os.environ.get("HARNESS_REPO", "").strip()
-    if sa == "openai" and repo:
-        import os.path as _op
-        if _op.isdir(_op.join(repo, ".codegraph")):
-            _line("ok", "swarm adapter", f"openai (REAL analysis of {repo}, CodeGraph indexed)")
+    import os.path as _op
+    _indexed = bool(repo) and _op.isdir(_op.join(repo, ".codegraph"))
+    if sa in ("agentic", "openai") and repo:
+        label = "agentic (standalone, your provider keys)" if sa == "agentic" else "openai (OpenRouter-routed)"
+        if _indexed:
+            _line("ok", "swarm adapter", f"{label} -- REAL analysis of {repo}, CodeGraph indexed")
         else:
             _line("warn", "swarm adapter",
-                  f"openai analysis of {repo} but NO .codegraph index -- analysis runs "
+                  f"{label} analysis of {repo} but NO .codegraph index -- analysis runs "
                   f"BLIND (~30% vs ~81% accuracy). Run: python -m puppetmaster codegraph init --index")
-    elif sa == "openai" and not repo:
-        _line("warn", "swarm adapter", "openai set but HARNESS_REPO empty -> falls back to demo substrate")
+    elif sa in ("agentic", "openai") and not repo:
+        _line("warn", "swarm adapter", f"{sa} set but HARNESS_REPO empty -> falls back to demo substrate")
     else:
-        _line("ok", "swarm adapter", "demo (deterministic substrate -- set HARNESS_SWARM_ADAPTER=openai + HARNESS_REPO for real analysis)")
+        _line("ok", "swarm adapter", "demo (deterministic substrate -- set HARNESS_SWARM_ADAPTER=agentic + HARNESS_REPO for real standalone analysis)")
+
+    # 3b-2. Edit engine -- which in-process worker run_implement will use, and
+    # whether the standalone (keys-only) path is actually available.
+    try:
+        from .edit_engines import agentic_available, select_edit_engine
+        engine = select_edit_engine(cfg)
+        if engine == "agentic":
+            _line("ok", "edit engine", "agentic (standalone, keys-only -- no external CLI needed)")
+        elif agentic_available():
+            _line("ok", "edit engine", "native pilot (agentic available; HARNESS_EDIT_ENGINE=agentic to prefer keys-only)")
+        else:
+            _line("warn", "edit engine",
+                  "native pilot (no provider key visible -- set a provider key to unlock the standalone agentic engine)")
+    except Exception as e:
+        _line("warn", "edit engine", f"could not resolve: {e}")
 
     # 3c. Wiki integration (optional durable-knowledge capture)
     from .wiki import WikiClient

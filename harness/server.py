@@ -2388,10 +2388,18 @@ class Handler(BaseHTTPRequestHandler):
                     "repo": repo
                 }))
         if u.path == "/api/config":
+            try:
+                from .edit_engines import agentic_available, select_edit_engine
+                _edit_engine = select_edit_engine(_cfg)
+                _agentic_ready = agentic_available()
+            except Exception:
+                _edit_engine, _agentic_ready = "native", False
             return self._send(200, json.dumps({
                 "driver": _cfg.driver, "reach": _cfg.reach,
                 "budget": _cfg.budget, "state_dir": _session.state_dir,
                 "models": _available_pilots(), "repo": _cfg.repo,
+                "swarm_adapter": _cfg.swarm_adapter,
+                "edit_engine": _edit_engine, "agentic_ready": _agentic_ready,
                 "preflight": _session.preflight()}))
         if u.path == "/api/wiki/config":
             if self._guard():

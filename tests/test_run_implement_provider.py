@@ -30,6 +30,11 @@ def test_run_implement_provider_default(monkeypatch):
         cfg.repo = repo_dir
         session = ConversationalSession(cfg)
 
+        # Pin the native engine so this exercises Marionette's own pilot + the
+        # apply pipeline deterministically regardless of which provider keys the
+        # test host happens to have (agentic is the default only when a key exists).
+        monkeypatch.setattr("harness.edit_engines.agentic_available", lambda: False)
+
         # Mock ProviderWorker.run to return a canned patch
         canned_patch = (
             "diff --git a/test.txt b/test.txt\n"
@@ -77,7 +82,7 @@ def test_run_implement_provider_default(monkeypatch):
         # The specific action_start should be the last one
         specific_start = action_starts[-1]
         assert specific_start.data["kind"] == "run_implement"
-        assert specific_start.data["mode"] == "provider"
+        assert specific_start.data["mode"] == "native"
 
         swarm_pendings = [e for e in events if e.kind == "swarm_pending"]
         assert len(swarm_pendings) == 1
@@ -182,6 +187,8 @@ def test_run_implement_falls_back_to_provider_when_cli_absent(monkeypatch):
         monkeypatch.setattr("harness.conversation._puppetmaster_available", lambda: True)
         # The external adapter CLI is NOT available.
         monkeypatch.setattr(ConversationalSession, "_external_adapter_available", lambda self, adapter: False)
+        # Pin the native engine so the in-process fallback is deterministic here.
+        monkeypatch.setattr("harness.edit_engines.agentic_available", lambda: False)
 
         # If the external path were taken it would call the pm CLI; assert it does NOT.
         pm_cmd_called = []
@@ -203,16 +210,87 @@ def test_run_implement_falls_back_to_provider_when_cli_absent(monkeypatch):
 
         events = list(session.send("start implement"))
 
-        # The provider-native path emits action_start with mode="provider".
+        # The in-process fallback path emits action_start with the engine label.
         action_starts = [e for e in events if e.kind == "action_start" and e.data.get("kind") == "run_implement"]
         assert len(action_starts) >= 1
-        assert action_starts[-1].data.get("mode") == "provider"
+        assert action_starts[-1].data.get("mode") == "native"
 
         # The external CLI must NOT have been invoked for the implement dispatch.
         assert not any("cursor" in c for c in pm_cmd_called)
 
-        # A swarm_pending should still be emitted (the provider worker is dispatched).
+        # A swarm_pending should still be emitted (the in-process worker is dispatched).
         swarm_pendings = [e for e in events if e.kind == "swarm_pending"]
         assert len(swarm_pendings) == 1
+    finally:
+        shutil.rmtree(repo_dir)
+
+
+def test_run_implement_agentic_engine_default(monkeypatch):
+    """With a provider key present, run_implement routes through the first-class
+    agentic engine (keys-only) and the returned patch flows through the same
+    apply pipeline as the native engine."""
+    repo_dir = create_temp_git_repo()
+    try:
+        cfg = HarnessConfig()
+        cfg.repo = repo_dir
+        session = ConversationalSession(cfg)
+
+        canned_patch = (
+            "diff --git a/test.txt b/test.txt\n"
+            "--- a/test.txt\n"
+            "+++ b/test.txt\n"
+            "@@ -1,1 +1,2 @@\n"
+            " hello\n"
+            "+world\n"
+        )
+        # Agentic is available; stub the actual engine so the test stays hermetic
+        # (no provider network / worktree), exercising dispatch + apply.
+        monkeypatch.setattr("harness.edit_engines.agentic_available", lambda: True)
+
+        def fake_agentic(config, goal):
+            assert goal == "Add world to test.txt"
+            return WorkerResult(ok=True, patch=canned_patch,
+                                files_changed=["test.txt"], summary="agentic patch",
+                                tokens_out=1234)
+        monkeypatch.setattr("harness.edit_engines.run_agentic_edit", fake_agentic)
+
+        mock_pilot = MagicMock()
+        first_resp = MagicMock()
+        first_resp.text = json.dumps({
+            "say": "Running agentic worker",
+            "actions": [{"kind": "run_implement", "goal": "Add world to test.txt"}]
+        })
+        first_resp.meta = {}
+        first_resp.error = None
+        mock_pilot.chat.return_value = first_resp
+        session.pilot = mock_pilot
+
+        events = list(session.send("start implement"))
+
+        action_starts = [e for e in events if e.kind == "action_start" and e.data.get("kind") == "run_implement"]
+        assert len(action_starts) >= 1
+        assert action_starts[-1].data["mode"] == "agentic"
+
+        swarm_pendings = [e for e in events if e.kind == "swarm_pending"]
+        assert len(swarm_pendings) == 1
+        job_id = swarm_pendings[0].data["job_ids"][0]
+
+        import time
+        start_time = time.time()
+        while time.time() - start_time < 5:
+            with session._swarm_futures_lock:
+                if not session._swarm_futures:
+                    break
+            time.sleep(0.1)
+
+        drain_events = list(session.drain_swarm_results())
+        swarm_results = [e for e in drain_events if e.kind == "swarm_result"]
+        assert len(swarm_results) == 1
+        assert swarm_results[0].data["job_id"] == job_id
+        assert swarm_results[0].data["result"]["applied"] is True
+        assert swarm_results[0].data["result"]["files"] == ["test.txt"]
+
+        with open(os.path.join(repo_dir, "test.txt"), "r") as f:
+            assert f.read() == "hello\nworld\n"
     finally:
         shutil.rmtree(repo_dir)
