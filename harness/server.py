@@ -73,10 +73,22 @@ def _init_platform_lock() -> None:
         pdata = {}
     
     if not os.path.exists(path) or "harness_initialized" not in pdata:
+        # Key-first default: out of the box only the hermes adapter (OpenRouter,
+        # bring-your-own-key) is enabled. The cursor adapter is left OFF so a fresh
+        # install never silently routes workers through the Cursor CLI/subscription
+        # and its toolset -- Marionette is vendor-neutral and runs on the user's own
+        # provider keys, which keeps worker behavior deterministic and reproducible
+        # for contributors who may not even have Cursor. Any adapter can be
+        # re-enabled in Settings > Platform.
+        default_disabled = ["cursor", "claude-code", "codex", "openai"]
         if "disabled" not in pdata or not isinstance(pdata["disabled"], list):
-            pdata["disabled"] = ["claude-code", "codex", "openai"]
+            pdata["disabled"] = default_disabled
         else:
-            pdata["disabled"] = [x for x in pdata["disabled"] if x not in ("cursor", "hermes")]
+            # Legacy platform.json missing the init marker: fold in the key-first
+            # defaults (so cursor lands off) while guaranteeing hermes stays on.
+            merged = set(pdata["disabled"]) | set(default_disabled)
+            merged.discard("hermes")
+            pdata["disabled"] = sorted(merged)
         pdata["harness_initialized"] = True
         try:
             _write_platform_json_atomic(path, pdata)

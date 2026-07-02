@@ -56,9 +56,11 @@ def test_first_run_sensible_default(temp_platform_json):
         data = json.load(f)
 
     assert data.get("harness_initialized") is True
-    # Default disabled list should be ["claude-code", "codex", "openai"], meaning cursor and hermes are enabled.
-    assert "cursor" not in data["disabled"]
+    # Key-first default: only hermes (bring-your-own-key OpenRouter) is enabled
+    # out of the box; cursor and every other external adapter are disabled so a
+    # fresh install never routes workers through the Cursor CLI/subscription.
     assert "hermes" not in data["disabled"]
+    assert "cursor" in data["disabled"]
     assert "claude-code" in data["disabled"]
     assert "codex" in data["disabled"]
     assert "openai" in data["disabled"]
