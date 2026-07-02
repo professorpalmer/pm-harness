@@ -417,6 +417,11 @@ def _driver_provider_available(spec: str) -> bool:
     from . import providers as _prov
     if not spec:
         return False
+    # Stub/offline drivers (stub-oracle-v2, etc.) run deterministically with no
+    # provider key, so they are always usable and must never be swapped out by
+    # startup driver resolution. Mirrors doctor.py's spec.startswith("stub").
+    if spec.startswith("stub"):
+        return True
     if ":" in spec:
         prov_name = spec.split(":", 1)[0]
         p = _prov.get_provider(prov_name)
@@ -1896,9 +1901,23 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, json.dumps({"error": "not found"}))
 
     def _handle_upload(self):
+        import shutil
         ctype = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in ctype:
             return self._send(400, json.dumps({"error": "expected multipart/form-data"}))
+        # Reject oversized bodies BEFORE parsing. Without a ceiling, a large
+        # multipart POST is read straight off the socket into memory on a
+        # thread-per-request server -- a cheap memory-exhaustion DoS. Cap by the
+        # declared Content-Length (default 10MB, env-tunable).
+        max_bytes = int(os.environ.get("HARNESS_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024)))
+        try:
+            content_length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            content_length = 0
+        if content_length > max_bytes:
+            return self._send(413, json.dumps({
+                "error": f"upload too large: {content_length} bytes exceeds cap of {max_bytes}"
+            }))
         fs = cgi.FieldStorage(fp=self.rfile, headers=self.headers,
                               environ={"REQUEST_METHOD": "POST",
                                        "CONTENT_TYPE": ctype})
@@ -1910,8 +1929,10 @@ class Handler(BaseHTTPRequestHandler):
                 if ext not in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
                     continue
                 path = os.path.join(_UPLOAD_DIR, f"{uuid.uuid4().hex}{ext}")
+                # Stream in chunks rather than item.file.read() so a big file
+                # isn't pulled fully into memory just to be written back out.
                 with open(path, "wb") as out:
-                    out.write(item.file.read())
+                    shutil.copyfileobj(item.file, out, 64 * 1024)
                 saved.append({"path": path, "name": item.filename})
         return self._send(200, json.dumps({"saved": saved}))
 
@@ -3438,8 +3459,28 @@ def serve(host: str = "127.0.0.1", port: int = 8799, force: bool = False) -> Non
     # allow quick restarts without TIME_WAIT blocking the bind
     ThreadingHTTPServer.allow_reuse_address = True
 
+    # Cap concurrent request threads. ThreadingHTTPServer is thread-per-request
+    # with NO ceiling, so a burst of slow requests (e.g. many hung provider
+    # calls) could fan out into unbounded threads and exhaust the process. A
+    # bounded semaphore acquired before each handler thread turns that into
+    # backpressure: excess connections wait in the accept queue instead.
+    _max_workers = int(os.environ.get("HARNESS_MAX_WORKERS", "64"))
+
     class _HarnessServer(ThreadingHTTPServer):
         daemon_threads = True  # handler threads never block process shutdown
+        _worker_slots = threading.BoundedSemaphore(_max_workers)
+
+        def process_request(self, request, client_address):
+            # Acquire in the accept loop so we block accepting new work when at
+            # capacity; the slot is released when the handler thread finishes.
+            self._worker_slots.acquire()
+            super().process_request(request, client_address)
+
+        def process_request_thread(self, request, client_address):
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                self._worker_slots.release()
 
         def handle_error(self, request, client_address):
             # The renderer closing a socket mid-request (navigating away, stopping

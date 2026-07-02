@@ -18,6 +18,27 @@ def test_fetch_models_disabled_via_env(monkeypatch):
     assert mf.fetch_models(p, "fake-key") == []
 
 
+def test_fetch_failure_records_reason_instead_of_swallowing(monkeypatch):
+    # A failing fetch must still return [] (graceful fallback) BUT surface WHY,
+    # so an empty picker can explain bad-key vs network vs schema change.
+    p = prov.get_provider("anthropic")
+
+    def _boom(url, headers):
+        raise RuntimeError("simulated 401 unauthorized")
+
+    monkeypatch.setattr(mf, "_get", _boom)
+    assert mf._fetch_provider_models(p, "bad-key") == []
+    reason = mf.last_fetch_error("anthropic")
+    assert reason is not None and "simulated 401" in reason
+
+
+def test_fetch_success_clears_prior_error(monkeypatch):
+    monkeypatch.setattr(mf, "_get", lambda url, headers: {"data": [{"id": "claude-opus-4-8"}]})
+    out = mf._fetch_provider_models(prov.get_provider("anthropic"), "good-key")
+    assert out == ["claude-opus-4-8"]
+    assert mf.last_fetch_error("anthropic") is None
+
+
 def test_provider_models_merges_live_with_curated(monkeypatch):
     # Curated list for anthropic is 3; simulate a live fetch returning more.
     p = prov.get_provider("anthropic")

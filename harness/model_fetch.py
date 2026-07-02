@@ -17,10 +17,22 @@ import time
 import urllib.request
 from typing import Optional
 
+from .diag import note as _diag
+
 _CACHE_TTL = int(os.environ.get("PMHARNESS_MODELS_CACHE_TTL", "86400"))  # 24h
 _FETCH_TIMEOUT = 6
 _MEM: dict[str, list[str]] = {}
 _MEM_AT: dict[str, float] = {}
+# Last failure reason per provider, so an empty picker can explain WHY (bad key
+# vs network vs schema change) instead of looking like the account has no models.
+_LAST_ERROR: dict[str, str] = {}
+
+
+def last_fetch_error(provider_name: str) -> Optional[str]:
+    """The most recent live-fetch failure reason for a provider, or None if the
+    last fetch succeeded. Lets the UI say 'couldn't reach provider / bad key'
+    rather than silently showing an empty list."""
+    return _LAST_ERROR.get(provider_name)
 
 
 def _cache_path() -> str:
@@ -47,8 +59,8 @@ def _write_cache(data: dict) -> None:
         with open(tmp, "w") as f:
             json.dump(data, f)
         os.replace(tmp, path)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag("model_fetch.cache_write", e)
 
 
 def _get(url: str, headers: dict) -> dict:
@@ -59,8 +71,10 @@ def _get(url: str, headers: dict) -> dict:
 
 def _fetch_provider_models(provider, key: str) -> list[str]:
     """Hit the provider's native model-listing endpoint. Returns bare model ids
-    (no provider prefix). Empty list on any failure."""
+    (no provider prefix). Empty list on any failure, with the failure REASON
+    recorded (diagnostics log + _LAST_ERROR) so the empty list is explainable."""
     name = provider.name
+    _LAST_ERROR.pop(name, None)
     try:
         if name == "anthropic":
             data = _get(
@@ -91,7 +105,12 @@ def _fetch_provider_models(provider, key: str) -> list[str]:
                 if mid:
                     out.append(mid)
             return out
-    except Exception:
+    except Exception as e:
+        # Preserve the cause: bad key, network down, and a changed provider
+        # schema are very different problems and must not collapse to a silent
+        # empty list. Callers still get [] and fall back to cache/curated.
+        _LAST_ERROR[name] = repr(e)
+        _diag("model_fetch.fetch", e, msg=f"provider={name}")
         return []
     return []
 

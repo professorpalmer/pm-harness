@@ -102,7 +102,7 @@ def test_search_files_ripgrep(monkeypatch):
         assert ok
         assert status == "success"
         lines = val.splitlines()
-        assert any("a.txt:1:hello world" in l.replace(" ", "") for l in lines)
+        assert any("a.txt:1:helloworld" in l.replace(" ", "") for l in lines)
         assert any("subdir/b.py:2:print('hellopython')" in l.replace(" ", "") for l in lines)
 
         # 2. Respect max_results

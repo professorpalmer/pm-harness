@@ -7,6 +7,7 @@ import os
 import threading
 import time
 import urllib.request
+import urllib.error
 import tempfile
 from http.server import ThreadingHTTPServer
 
@@ -55,4 +56,33 @@ def test_upload_then_config_roundtrip():
         assert res["saved"] and res["saved"][0]["path"].endswith(".png")
         assert os.path.exists(res["saved"][0]["path"])
     finally:
+        httpd.shutdown()
+
+
+def test_upload_rejects_oversized_body():
+    """A body whose Content-Length exceeds the cap is refused with 413 BEFORE
+    it is parsed into memory -- the memory-exhaustion guard."""
+    httpd, port = _start_server(None)
+    old_cap = os.environ.get("HARNESS_UPLOAD_MAX_BYTES")
+    os.environ["HARNESS_UPLOAD_MAX_BYTES"] = "16"  # tiny cap for the test
+    try:
+        base = f"http://127.0.0.1:{port}"
+        png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+                            "890000000a49444154789c6360000002000154a24f3f0000000049454e44ae426082")
+        body, ctype = _multipart("file", "x.png", png)  # well over 16 bytes
+        import harness.server as _srv
+        req = urllib.request.Request(base + "/api/upload", data=body,
+                                     headers={"Content-Type": ctype,
+                                              "X-Harness-Token": _srv._TOKEN},
+                                     method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            assert False, "expected HTTP 413 for oversized upload"
+        except urllib.error.HTTPError as e:
+            assert e.code == 413
+    finally:
+        if old_cap is None:
+            os.environ.pop("HARNESS_UPLOAD_MAX_BYTES", None)
+        else:
+            os.environ["HARNESS_UPLOAD_MAX_BYTES"] = old_cap
         httpd.shutdown()

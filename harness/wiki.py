@@ -31,6 +31,8 @@ import urllib.error
 from dataclasses import dataclass
 from typing import Optional
 
+from .diag import note as _diag
+
 
 @dataclass
 class WikiResult:
@@ -207,36 +209,59 @@ class WikiClient:
         # (nodes are populated), so edges are BEST-EFFORT: we use a short per-call
         # timeout and a hard time budget so a large wiki can't make Refresh hang
         # or time out and look "disconnected". Partial edges are fine.
+        # Fetch the per-slug neighborhoods CONCURRENTLY within the same time
+        # budget. Serial fetching meant a large wiki spent the whole budget on the
+        # first few slugs and returned mostly-empty edges (looked "disconnected").
+        # A small pool collects real edges from many slugs inside the 6s window;
+        # the per-request timeout still keeps one slow page from stalling refresh.
         import time as _t
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import TimeoutError as _FutureTimeout
+
         edges = []
         seen = set()
         node_ids = set(slugs)
         _edge_deadline = _t.monotonic() + min(float(self.timeout), 6.0)
         _edge_timeout = 2.5  # per-request; keep one slow page from stalling refresh
-        for slug in slugs:
-            if _t.monotonic() > _edge_deadline:
-                break  # time budget spent -> return what we have (still "ok")
+
+        def _fetch_neighborhood(slug):
+            url = f"{self.base_url}/wiki/graph/{urllib.parse.quote(slug)}?hops=1"
+            headers = {"Accept": "application/json"}
+            if self.token:
+                headers["Authorization"] = f"Bearer {self.token}"
+            req = urllib.request.Request(url, method="GET", headers=headers)
+            with urllib.request.urlopen(req, timeout=_edge_timeout) as r:
+                if r.status != 200:
+                    return {}
+                return json.loads(r.read().decode("utf-8", "replace"))
+
+        executor = ThreadPoolExecutor(max_workers=min(8, max(1, len(slugs))))
+        try:
+            futures = {executor.submit(_fetch_neighborhood, s): s for s in slugs}
             try:
-                url = f"{self.base_url}/wiki/graph/{urllib.parse.quote(slug)}?hops=1"
-                headers = {"Accept": "application/json"}
-                if self.token:
-                    headers["Authorization"] = f"Bearer {self.token}"
-                req = urllib.request.Request(url, method="GET", headers=headers)
-                with urllib.request.urlopen(req, timeout=_edge_timeout) as r:
-                    g = json.loads(r.read().decode("utf-8", "replace")) if r.status == 200 else {}
-            except Exception:
-                continue
-            for e in (g.get("edges", []) if isinstance(g, dict) else []):
-                if not isinstance(e, dict):
-                    continue
-                src = e.get("source"); tgt = e.get("target")
-                if not src or not tgt or src not in node_ids or tgt not in node_ids:
-                    continue
-                key = tuple(sorted((src, tgt)))
-                if key in seen:
-                    continue
-                seen.add(key)
-                edges.append({"source": src, "target": tgt})
+                for fut in as_completed(futures, timeout=max(0.0, _edge_deadline - _t.monotonic())):
+                    try:
+                        g = fut.result()
+                    except Exception as e:
+                        _diag("wiki.edge_fetch", e, msg=f"slug={futures.get(fut)}")
+                        continue
+                    for e in (g.get("edges", []) if isinstance(g, dict) else []):
+                        if not isinstance(e, dict):
+                            continue
+                        src = e.get("source"); tgt = e.get("target")
+                        if not src or not tgt or src not in node_ids or tgt not in node_ids:
+                            continue
+                        key = tuple(sorted((src, tgt)))
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        edges.append({"source": src, "target": tgt})
+            except _FutureTimeout:
+                pass  # time budget spent -> return the edges gathered so far (still "ok")
+        finally:
+            # Don't block the response waiting on stragglers; their 2.5s socket
+            # timeout bounds them and the pool threads exit on their own.
+            executor.shutdown(wait=False, cancel_futures=True)
 
         return {"nodes": nodes, "edges": edges, "error": None}
 
