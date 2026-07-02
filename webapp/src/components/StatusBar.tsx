@@ -146,7 +146,11 @@ export default function StatusBar({ config, jobCount, leftOpen, rightOpen, onTog
         </span>
       )}
       <span className="flex items-center gap-1"><Cpu size={10} />{config?.driver?.split(":").pop() || "pilot"}</span>
-      <span>{config?.reach || ""}</span>
+      {/* Show the ACTIVE model's provider (the driver spec's prefix), not the
+          fallback reach. A "provider:model" driver routes through that provider;
+          only a bare, unprefixed model actually falls back to reach. Showing
+          reach unconditionally made e.g. anthropic:claude-opus read "openrouter". */}
+      <span>{(config?.driver?.includes(":") ? config.driver.split(":")[0] : config?.reach) || ""}</span>
       {apply ? (
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded text-accent"

@@ -106,11 +106,12 @@ export default function UpdateBanner() {
   return (
     // pl-24 clears the macOS traffic-light window controls with a comfortable
     // margin (this banner is the topmost strip, so nothing else reserves that
-    // corner). The whole bar is a drag region so the window can still be moved
-    // from the top; interactive controls opt back out with no-drag.
+    // corner). Deliberately NOT a drag region: Electron intermittently swallows
+    // clicks on no-drag children inside a drag parent, which made "Restart now"
+    // flash its active state without ever firing. A working button beats a
+    // draggable transient strip.
     <div
       className="flex items-center gap-3 pl-24 pr-4 py-2 bg-accent/10 border-b border-accent/30 text-[12px] text-txt select-none shrink-0"
-      style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
     >
       <ArrowUpCircle size={15} className="text-accent shrink-0" />
       {applying ? (
@@ -127,7 +128,6 @@ export default function UpdateBanner() {
           <div className="flex-1" />
           <button
             onClick={restart}
-            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
             className="px-2.5 py-1 rounded-md bg-accent text-panel font-semibold hover:brightness-110 transition text-[11px]"
           >
             Restart now
@@ -135,7 +135,6 @@ export default function UpdateBanner() {
           <button
             onClick={() => setDismissed(true)}
             title="Dismiss (updates on next relaunch)"
-            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
             className="p-1 rounded text-muted hover:text-txt hover:bg-edge/40 transition"
           >
             <X size={13} />
