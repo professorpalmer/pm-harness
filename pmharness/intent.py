@@ -31,6 +31,75 @@ KNOWN_ROLES = (
     "test-coverage-reviewer",
 )
 
+# Each role investigates a distinct facet, so a multi-role swarm fans out into
+# genuinely different work instead of N identical passes. The lens is appended
+# to the shared goal to point the worker at its angle. Kept as plain data here
+# (PM-free, pure) so both the harness and its tests can reason about roles
+# without importing the executor.
+ROLE_LENSES: dict[str, str] = {
+    "explore": (
+        "Lens: STRUCTURAL TOUR. Map the packages/modules, entry points, and how "
+        "the pieces fit together. Surface the high-level architecture and the "
+        "load-bearing components."
+    ),
+    "pipeline-mapper": (
+        "Lens: DATA/CONTROL FLOW. Trace how a request or task moves through the "
+        "system end to end, stage by stage. Identify the seams, hand-offs, and "
+        "bottlenecks between components."
+    ),
+    "decision-explainer": (
+        "Lens: DESIGN DECISIONS. Explain the key architectural choices and their "
+        "trade-offs -- why the code is shaped this way, which abstractions are "
+        "load-bearing, and the constraints behind them."
+    ),
+    "conflict-auditor": (
+        "Lens: CONFLICTS & INCONSISTENCIES. Hunt for contradictory assumptions, "
+        "duplicated or dead code, inconsistent patterns, and correctness/robustness "
+        "risks across modules. Flag each with evidence."
+    ),
+    "test-coverage-reviewer": (
+        "Lens: TEST COVERAGE & QUALITY. Assess what is tested vs dangerously "
+        "untested, brittle or low-value tests, and the highest-leverage tests to "
+        "add for confidence at scale."
+    ),
+}
+
+# Signals in a goal that mean the user wants a broad, multi-angle investigation
+# (an audit) rather than one narrow question. Deterministic substring match --
+# no model, no PM -- so role inference is a pure function of the goal text.
+_BROAD_AUDIT_SIGNALS = (
+    "audit", "review", "assess", "evaluat", "quality", "robust", "scale",
+    "scalab", "improve", "better", "health", "tech debt", "weakness",
+    "vulnerab", "overall", "comprehensive", "entire", "whole", "deep dive",
+    "harden", "best practice",
+)
+_FLOW_SIGNALS = ("pipeline", "data flow", "control flow", "end to end", "end-to-end", "trace")
+
+# The full audit fan-out, ordered by descending payoff for a broad platform pass.
+_FULL_AUDIT_ROLES = [
+    "explore",
+    "conflict-auditor",
+    "test-coverage-reviewer",
+    "pipeline-mapper",
+    "decision-explainer",
+]
+
+
+def infer_roles(goal: str) -> list:
+    """Pick a role set from the goal when the driver supplied none.
+
+    Broad/audit-flavored goals fan out across every analysis lens so the swarm
+    hits the platform from multiple angles at once; a flow-shaped goal adds the
+    pipeline lens; anything else stays a single general explorer. Pure and
+    deterministic -- a function of the goal text only.
+    """
+    text = (goal or "").lower()
+    if any(signal in text for signal in _BROAD_AUDIT_SIGNALS):
+        return list(_FULL_AUDIT_ROLES)
+    if any(signal in text for signal in _FLOW_SIGNALS):
+        return ["explore", "pipeline-mapper"]
+    return ["explore"]
+
 
 class IntentError(ValueError):
     """Raised when a payload cannot be coerced into a valid DriverIntent."""

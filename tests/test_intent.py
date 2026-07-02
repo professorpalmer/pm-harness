@@ -2,7 +2,36 @@
 import pytest
 from pmharness.intent import (
     validate_intent, parse_intent_text, IntentError, DriverIntent, KNOWN_ROLES,
+    infer_roles, ROLE_LENSES,
 )
+
+
+def test_infer_roles_broad_audit_fans_out():
+    # A broad/audit goal should fan out across every analysis lens, not run solo.
+    for goal in (
+        "Audit the platform for quality, robustness, and scale",
+        "Review the codebase and find ways to make it better",
+        "Do a comprehensive assessment of the whole system",
+    ):
+        roles = infer_roles(goal)
+        assert len(roles) == 5
+        assert set(roles) == set(KNOWN_ROLES)
+
+
+def test_infer_roles_flow_goal_adds_pipeline():
+    roles = infer_roles("Trace the end-to-end request flow")
+    assert roles == ["explore", "pipeline-mapper"]
+
+
+def test_infer_roles_narrow_goal_is_single_explorer():
+    assert infer_roles("Where is the login handler defined?") == ["explore"]
+    assert infer_roles("") == ["explore"]
+
+
+def test_role_lenses_cover_every_known_role():
+    # Every role must carry a distinct lens so multi-role swarms don't duplicate.
+    assert set(ROLE_LENSES) == set(KNOWN_ROLES)
+    assert len(set(ROLE_LENSES.values())) == len(KNOWN_ROLES)
 
 
 def test_valid_run_swarm():

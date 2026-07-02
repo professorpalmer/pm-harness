@@ -344,15 +344,30 @@ def build_tools_schema(mcp_tools: Optional[list] = None, no_delegation: bool = F
             "type": "function",
             "function": {
                 "name": "run_swarm",
-                "description": "dispatch a parallel agent swarm for complex/broad investigations. Requires `goal`.",
+                "description": (
+                    "Dispatch a PARALLEL agent swarm for complex/broad investigations. Requires `goal`. "
+                    "One worker runs PER role, each with its own lens and its own right-sized model -- so "
+                    "for a broad ask (audit, 'review the platform', 'find ways to improve quality/robustness/scale', "
+                    "'how does the whole system work') pass SEVERAL roles to fan out. Passing no roles runs a single "
+                    "general explorer, which is only right for a narrow, single-facet question."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "goal": {"type": "string", "description": "The specific objective or question for the swarm workers"},
                         "roles": {
                             "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Optional worker roles list"
+                            "items": {
+                                "type": "string",
+                                "enum": ["explore", "pipeline-mapper", "decision-explainer", "conflict-auditor", "test-coverage-reviewer"],
+                            },
+                            "description": (
+                                "Worker roles to fan out across (one worker each). Choose several for broad work: "
+                                "explore = structural/architecture tour; pipeline-mapper = end-to-end data/control flow; "
+                                "decision-explainer = design decisions & trade-offs; conflict-auditor = conflicts, dead code, "
+                                "correctness/robustness risks; test-coverage-reviewer = test coverage gaps & quality. "
+                                "For a full audit, pass all five. Omit only for a single narrow question."
+                            ),
                         },
                         "worker_mode": {
                             "type": "string",
@@ -971,7 +986,7 @@ You have direct access to a local CodeGraph-indexed workspace and can explore/ed
 - `write_file`: write/create a file atomically. Requires `path` and `content`. Use ONLY to create brand-new files.
 - `run_command`: run a terminal shell command. Requires `command`.
 - `list_dir`: list the files and folders inside a directory. `path` is optional.
-- `run_swarm`: dispatch a parallel agent swarm for complex/broad investigations. Requires `goal`.
+- `run_swarm`: dispatch a parallel agent swarm for complex/broad investigations. Requires `goal`. One worker runs per role -- for a broad ask (audit, "review the platform", "find ways to improve quality/robustness/scale") pass SEVERAL `roles` (explore, pipeline-mapper, decision-explainer, conflict-auditor, test-coverage-reviewer) so it fans out into real parallel coverage; pass all five for a full audit. Omit roles only for a single narrow question.
 - `run_implement`: dispatch an edit-capable Puppetmaster worker that edits the repo in an isolated worktree and produces a patch. Requires `goal`.
 - `run_parallel`: dispatch multiple Puppetmaster workers concurrently. Requires `goals` array, optional `adapter`, optional `mode`.
 - `route_task`: preview which model the router would pick + estimated cost for a given instruction without executing it. Requires `instruction`.
@@ -1035,7 +1050,7 @@ Rules:
 - Keep your prose explanation (message content or "say") extremely tight and concise (under 2 sentences). Let the tool chips show the work. Do NOT paste file contents, command output, tracebacks, or large code blocks back into prose -- reference them briefly instead. Never echo or quote tool-result messages.
 - Prefer search_codegraph and query_wiki for code exploration and architectural knowledge.
 - Prefer your direct tools (read_file, write_file, run_command, list_dir) for precise actions and testing.
-- Use `run_swarm` when you need a team of workers to analyze a broad issue or scan the codebase.
+- Use `run_swarm` when you need a team of workers to analyze a broad issue or scan the codebase -- and give it a TEAM: pass multiple `roles` (up to all five) so workers fan out across architecture, flow, design decisions, conflicts, and test coverage in parallel. A single-worker swarm is only for a narrow, single-facet question.
 - Always verify your work by running tests via `run_command` after editing.
 - Be concise and concrete. Never invent file contents; read the files first.
 """

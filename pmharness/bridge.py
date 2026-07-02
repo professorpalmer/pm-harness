@@ -18,7 +18,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from .intent import DriverIntent
+from .intent import DriverIntent, ROLE_LENSES, infer_roles
+
+
+def _analysis_instruction(goal: str, repo_cwd: str, role: str) -> str:
+    """Build a read-only analysis worker's instruction from the shared goal plus
+    the role's lens, so a multi-role swarm fans out into distinct investigations
+    rather than N identical passes over the same goal."""
+    lens = ROLE_LENSES.get(role, "")
+    lens_line = f"\n\n{lens}" if lens else ""
+    return (
+        f"{goal}{lens_line}\n\nAnalyze the REAL codebase at {repo_cwd}. "
+        f"Emit evidenced findings/risks/decisions as artifacts. This is "
+        f"a READ-ONLY analysis: do not edit, create, or delete any files."
+    )
 
 
 def _analysis_provider_payload() -> dict:
@@ -158,16 +171,12 @@ def execute_intent(
         # repos even before the triple read-only guard below.
         _warn_if_unindexed(repo_cwd)
         from puppetmaster.workers import WorkerSpec
-        roles = intent.roles or ["explore"]
+        roles = intent.roles or infer_roles(intent.goal)
         specs = []
         for r in roles:
             specs.append(WorkerSpec(
                 role=r,
-                instruction=(
-                    f"{intent.goal}\n\nAnalyze the REAL codebase at {repo_cwd}. "
-                    f"Emit evidenced findings/risks/decisions as artifacts. This is "
-                    f"a READ-ONLY analysis: do not edit, create, or delete any files."
-                ),
+                instruction=_analysis_instruction(intent.goal, repo_cwd, r),
                 adapter="agentic",
                 payload={
                     "read_only": True, "no_edit": True, "dry_run": True,
@@ -183,16 +192,12 @@ def execute_intent(
         _prepare_analysis_env()
         _warn_if_unindexed(repo_cwd)
         from puppetmaster.workers import WorkerSpec
-        roles = intent.roles or ["explore"]
+        roles = intent.roles or infer_roles(intent.goal)
         specs = []
         for r in roles:
             specs.append(WorkerSpec(
                 role=r,
-                instruction=(
-                    f"{intent.goal}\n\nAnalyze the REAL codebase at {repo_cwd}. "
-                    f"Emit evidenced findings/risks/decisions as artifacts. This is "
-                    f"a READ-ONLY analysis: do not edit, create, or delete any files."
-                ),
+                instruction=_analysis_instruction(intent.goal, repo_cwd, r),
                 adapter="openai",
                 payload={
                     "read_only": True, "no_edit": True, "dry_run": True,
