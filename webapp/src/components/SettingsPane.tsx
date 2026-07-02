@@ -491,11 +491,20 @@ export default function SettingsPane({ onOpenWizard, section = "general" }: { on
             Connect or disconnect each provider independently. Disconnecting removes its key and pulls its models from the picker.
           </div>
           <div className="space-y-1.5">
-            {providers.map((p) => (
+            {providers.map((p) => {
+              // A provider can be usable via an environment key (e.g.
+              // OPENROUTER_API_KEY exported in the shell) without a key stored
+              // in the app. In that case has_key is false, yet the active
+              // provider's preflight passes -- which used to render as both
+              // "ACTIVE - READY" and "not connected" at once. Treat that as
+              // connected-via-environment so the row is internally consistent.
+              const envReady = p.name === settings.reach && settings.preflight_ok && !p.has_key;
+              const connected = p.has_key || envReady;
+              return (
               <div key={p.name} className="bg-panel2 border border-edge/50 rounded p-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${p.has_key ? "bg-good" : "bg-faint"}`} />
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected ? "bg-good" : "bg-faint"}`} />
                     <span className="text-txt font-medium text-[11px]">{p.display_name || p.name}</span>
                     {p.name === settings.reach && (
                       <span
@@ -510,7 +519,11 @@ export default function SettingsPane({ onOpenWizard, section = "general" }: { on
                       </span>
                     )}
                     <span className="text-faint text-[10px] font-mono truncate">
-                      {p.has_key ? (p.masked ? `key ${p.masked}` : "connected") : "not connected"}
+                      {p.has_key
+                        ? (p.masked ? `key ${p.masked}` : "connected")
+                        : envReady
+                          ? `via ${p.env_var || "environment"}`
+                          : "not connected"}
                     </span>
                   </div>
                   {p.has_key && (
@@ -523,7 +536,7 @@ export default function SettingsPane({ onOpenWizard, section = "general" }: { on
                     </button>
                   )}
                 </div>
-                {!p.has_key && (
+                {!connected && (
                   <div className="flex gap-2 mt-1.5">
                     <input
                       type="password"
@@ -543,7 +556,8 @@ export default function SettingsPane({ onOpenWizard, section = "general" }: { on
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
