@@ -164,6 +164,8 @@ export type ProviderInfo = {
   has_key: boolean;
   masked?: string;
   api_mode: string;
+  has_env?: boolean;
+  disconnected?: boolean;
 };
 
 export type ProviderKeyResult = {
@@ -303,6 +305,8 @@ export const api = {
   probeProvider: (provider: string) => postJSON<ProbeResult>("/api/providers/probe", { provider }),
   setProviderKey: (provider: string, api_key: string) => postJSON<ProviderKeyResult>("/api/providers/key", { provider, api_key }),
   clearProviderKey: (provider: string) => postJSON<ProviderKeyResult>("/api/providers/key", { provider, action: "clear" }),
+  setProviderEnabled: (provider: string, enabled: boolean) =>
+    postJSON<ProviderKeyResult>("/api/providers/key", { provider, action: enabled ? "enable" : "disable" }),
   getRegistry: () => getJSON<{ models: RegistryModel[] }>("/api/registry"),
   saveRegistry: (models: RegistryModel[]) => postJSON<{ ok: boolean; models: RegistryModel[] }>("/api/registry", { models }),
   getRoles: () => getJSON<RolesConfig>("/api/roles"),

@@ -91,6 +91,70 @@ def _write_disconnected(names: set) -> None:
                 pass
 
 
+# Snapshot of provider keys seen in the environment (shell-exported and
+# login-shell-captured) BEFORE any disconnect scrub. Lets a provider that is
+# "imported via env" be toggled off (scrubbed from os.environ so workers and
+# the router stop using it) and back on WITHOUT losing the value mid-session --
+# the point being painless swapping between, say, a work key and a personal one.
+_ENV_KEY_CACHE: dict[str, dict[str, str]] = {}
+
+
+def snapshot_env_keys() -> None:
+    """Record each provider's currently-present env-var values into the cache.
+
+    Idempotent and additive: only non-empty values are captured, and a later
+    scrub never erases the cache, so a re-enable can restore the original value.
+    """
+    try:
+        from .providers import PROVIDERS
+    except Exception:
+        return
+    for p in PROVIDERS:
+        for ev in (p.env_vars or []):
+            val = os.environ.get(ev)
+            if val:
+                _ENV_KEY_CACHE.setdefault(p.name, {})[ev] = val
+
+
+def provider_has_env(reach: str) -> bool:
+    """True when this provider has a key sourced from the environment.
+
+    Checks both the live environment and the pre-scrub cache, so a provider
+    that was toggled off (its env var scrubbed) still reports as env-backed --
+    that is exactly the state where the on/off toggle must remain available.
+    """
+    if _ENV_KEY_CACHE.get(reach):
+        return True
+    from .providers import get_provider
+    p = get_provider(reach)
+    for ev in ((p.env_vars if p else None) or []):
+        if os.environ.get(ev):
+            return True
+    return False
+
+
+def set_provider_enabled(reach: str, enabled: bool) -> None:
+    """Enable/disable a provider without destroying its key.
+
+    Disable: mark disconnected + scrub its env vars (cached first) so no worker
+    or router call can use it. Enable: clear the disconnect flag and restore the
+    key into the environment -- from the stored keyfile if present, else from the
+    pre-scrub env cache. Persistent across restarts via disconnected.json.
+    """
+    if enabled:
+        unmark_disconnected(reach)
+        stored = _read_keys().get(reach, "")
+        if stored:
+            os.environ[get_env_var_for_reach(reach)] = stored
+        else:
+            for ev, val in _ENV_KEY_CACHE.get(reach, {}).items():
+                os.environ[ev] = val
+    else:
+        snapshot_env_keys()
+        mark_disconnected(reach)
+        _scrub_provider_env(reach)
+
+
 def mark_disconnected(reach: str) -> None:
     names = get_disconnected()
     names.add(reach)
@@ -180,5 +244,8 @@ def load_api_keys_on_startup(reach: str):
     if key:
         env_var = get_env_var_for_reach(reach)
         os.environ[env_var] = key
+    # Capture env-provided keys before scrubbing so a toggled-off provider can be
+    # re-enabled later in the same session without re-pasting the key.
+    snapshot_env_keys()
     # Honor explicit disconnects over any shell-exported keys.
     scrub_disconnected_env()

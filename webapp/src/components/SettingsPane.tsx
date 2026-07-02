@@ -223,6 +223,19 @@ export default function SettingsPane({ onOpenWizard, section = "general" }: { on
     }
   };
 
+  const handleToggleProvider = async (name: string, enabled: boolean) => {
+    setProvBusy(name);
+    try {
+      await api.setProviderEnabled(name, enabled);
+      await refreshProviders();
+      window.dispatchEvent(new Event("harness-config-changed"));
+    } catch (e) {
+      console.error("Failed to toggle provider", e);
+    } finally {
+      setProvBusy("");
+    }
+  };
+
   const handleClearProviderKey = async (name: string) => {
     setProvBusy(name);
     try {
@@ -488,21 +501,24 @@ export default function SettingsPane({ onOpenWizard, section = "general" }: { on
             Providers
           </label>
           <div className="text-[10px] text-muted mb-1">
-            Connect or disconnect each provider independently. Disconnecting removes its key and pulls its models from the picker.
+            Connect or disconnect each provider independently. Keys imported from your environment get an on/off toggle -- flip one off to stop using it without losing the key, for easy swapping (e.g. work vs. personal).
           </div>
           <div className="space-y-1.5">
             {providers.map((p) => {
-              // A provider can be usable via an environment key (e.g.
-              // OPENROUTER_API_KEY exported in the shell) without a key stored
-              // in the app. In that case has_key is false, yet the active
-              // provider's preflight passes -- which used to render as both
-              // "ACTIVE - READY" and "not connected" at once. Treat that as
-              // connected-via-environment so the row is internally consistent.
-              const envReady = p.name === settings.reach && settings.preflight_ok && !p.has_key;
-              const connected = p.has_key || envReady;
+              // A provider can carry a key from the environment (e.g. a
+              // shell-exported OPENROUTER_API_KEY) rather than one stored in the
+              // app. Env-backed providers get an on/off toggle instead of a
+              // destructive Disconnect: flipping it off scrubs the key from the
+              // running process (so no worker/router uses it) but preserves it
+              // for a one-click re-enable -- painless swapping between, say, a
+              // work key and a personal one.
+              const envBacked = !!p.has_env;
+              const enabled = !p.disconnected;
+              const connected = p.has_key;
+              const busy = provBusy === p.name;
               return (
               <div key={p.name} className="bg-panel2 border border-edge/50 rounded p-2">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected ? "bg-good" : "bg-faint"}`} />
                     <span className="text-txt font-medium text-[11px]">{p.display_name || p.name}</span>
@@ -519,36 +535,53 @@ export default function SettingsPane({ onOpenWizard, section = "general" }: { on
                       </span>
                     )}
                     <span className="text-faint text-[10px] font-mono truncate">
-                      {p.has_key
-                        ? (p.masked ? `key ${p.masked}` : "connected")
-                        : envReady
-                          ? `via ${p.env_var || "environment"}`
+                      {envBacked
+                        ? `${enabled ? "on" : "off"} - via ${p.env_var || "environment"}`
+                        : p.has_key
+                          ? (p.masked ? `key ${p.masked}` : "connected")
                           : "not connected"}
                     </span>
                   </div>
-                  {p.has_key && (
+                  {envBacked ? (
+                    <button
+                      role="switch"
+                      aria-checked={enabled}
+                      title={enabled ? "Enabled -- click to turn off (key is kept for easy re-enable)" : "Disabled -- click to turn on"}
+                      onClick={() => handleToggleProvider(p.name, !enabled)}
+                      disabled={busy}
+                      className={`relative shrink-0 w-9 h-5 rounded-full border transition-colors disabled:opacity-40 ${
+                        enabled ? "bg-good/30 border-good/50" : "bg-panel border-edge"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-[1px] w-[15px] h-[15px] rounded-full transition-all ${
+                          enabled ? "left-[18px] bg-good" : "left-[2px] bg-faint"
+                        }`}
+                      />
+                    </button>
+                  ) : p.has_key ? (
                     <button
                       onClick={() => handleClearProviderKey(p.name)}
-                      disabled={provBusy === p.name}
+                      disabled={busy}
                       className="bg-risk/10 hover:bg-risk/20 text-risk border border-risk/30 hover:border-risk/50 rounded px-2 py-0.5 font-medium text-[10px] disabled:opacity-30 transition-colors shrink-0"
                     >
                       Disconnect
                     </button>
-                  )}
+                  ) : null}
                 </div>
-                {!connected && (
+                {!connected && !envBacked && (
                   <div className="flex gap-2 mt-1.5">
                     <input
                       type="password"
                       placeholder={`${p.env_var || "API key"}...`}
                       value={provKeyInput[p.name] || ""}
                       onChange={(e) => setProvKeyInput((prev) => ({ ...prev, [p.name]: e.target.value }))}
-                      disabled={provBusy === p.name}
+                      disabled={busy}
                       className="flex-1 bg-panel border border-edge rounded px-2 py-0.5 text-txt text-[11px] focus:outline-none focus:border-accent disabled:opacity-50 font-mono"
                     />
                     <button
                       onClick={() => handleSetProviderKey(p.name)}
-                      disabled={provBusy === p.name || !(provKeyInput[p.name] || "").trim()}
+                      disabled={busy || !(provKeyInput[p.name] || "").trim()}
                       className="bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30 hover:border-accent/50 rounded px-2.5 py-0.5 font-medium text-[10px] disabled:opacity-30 transition-colors shrink-0"
                     >
                       Connect

@@ -1644,6 +1644,32 @@ class Handler(BaseHTTPRequestHandler):
             if not p:
                 return self._send(400, json.dumps({"error": f"Unknown provider: {pname}"}))
             action = str(body.get("action", "")).strip().lower()
+            if action in ("enable", "disable", "toggle"):
+                # Non-destructive on/off for env-imported (or stored) keys. Unlike
+                # 'clear', this preserves the key so the user can flip a provider
+                # off and back on -- e.g. swapping a work key for a personal one.
+                from .keys import set_provider_enabled, get_disconnected
+                if action == "toggle":
+                    enabled = p.name in get_disconnected()
+                else:
+                    enabled = action == "enable"
+                set_provider_enabled(p.name, enabled)
+                # Keep the active driver honest: enabling may make a better model
+                # reachable; disabling may kill the current one.
+                try:
+                    if not _driver_provider_available(_cfg.driver):
+                        _resolve_available_driver()
+                        _rebuild_pilot_and_session()
+                except Exception:
+                    pass
+                status = get_api_key_status(p.name)
+                return self._send(200, json.dumps({
+                    "ok": True,
+                    "provider": p.name,
+                    "enabled": enabled,
+                    "has_key": status["has_key"],
+                    "masked": status["masked"],
+                }))
             if action == "clear" or body.get("clear") is True:
                 clear_api_key(p.name)
                 # If the active driver's provider is no longer available (we just
@@ -2681,6 +2707,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/providers":
             from .registry_wizard import PROVIDERS, get_provider_key
+            from .keys import provider_has_env, get_disconnected
+            disconnected = get_disconnected()
             res = []
             for p in PROVIDERS:
                 status = get_api_key_status(p.name)
@@ -2692,6 +2720,8 @@ class Handler(BaseHTTPRequestHandler):
                     "has_key": (get_provider_key(p) is not None) or status["has_key"],
                     "masked": status["masked"],
                     "api_mode": p.api_mode,
+                    "has_env": provider_has_env(p.name),
+                    "disconnected": p.name in disconnected,
                 })
             return self._send(200, json.dumps(res))
 
