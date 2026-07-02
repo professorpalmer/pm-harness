@@ -20,9 +20,13 @@ type Card = {
   id: string; goal: string; cwd?: string | null;
   running: boolean; open: boolean;
   kind?: string;
-  result?: { job_id?: string; num: number; types: string[]; adapter: string;
-             artifacts: { type: string; headline: string }[]; error?: string;
-             duration_ms?: number };
+  // Fields are optional because a card's result can be a full tool outcome
+  // (num/types/artifacts) OR a lightweight dispatch ack (status/message) for a
+  // backgrounded run_implement/run_parallel job. Rendering must not assume the
+  // rich shape -- expanding a dispatch-only card used to crash on types.join.
+  result?: { job_id?: string; num?: number; types?: string[]; adapter?: string;
+             artifacts?: { type: string; headline: string }[]; error?: string;
+             status?: string; message?: string; duration_ms?: number };
 };
 type Item =
   | { kind: "msg"; msg: Msg }
@@ -1614,8 +1618,9 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
                   />
                 );
               } else if (it.kind === "swarm_pending") {
-                const truncatedObj = it.objective.length > 60 ? it.objective.slice(0, 60) + "..." : it.objective;
-                const jobIdsStr = it.job_ids.join(", ");
+                const objText = it.objective || "";
+                const truncatedObj = objText.length > 60 ? objText.slice(0, 60) + "..." : objText;
+                const jobIdsStr = (it.job_ids || []).join(", ");
                 if (it.resolved) {
                   return (
                     <div key={i} className="flex items-center gap-1.5 py-1 px-3 rounded-full bg-panel2/20 border border-edge/30 text-[11px] text-faint w-fit my-1 select-none">
@@ -2771,9 +2776,15 @@ function ActionCard({ card, onToggle }: { card: Card; onToggle: () => void }) {
           {card.result && !card.result.error && (
             <>
               {card.result.job_id && <KV k="job" v={card.result.job_id || ""} />}
-              <KV k="found" v={`${card.result.num} artifacts · ${card.result.types.join(", ")}`} />
+              {/* Dispatch-only ack (backgrounded run_implement/run_parallel): show
+                  its status/message; the rich artifact fields aren't present yet. */}
+              {Array.isArray(card.result.types) ? (
+                <KV k="found" v={`${card.result.num ?? 0} artifacts · ${card.result.types.join(", ")}`} />
+              ) : (card.result.message || card.result.status) ? (
+                <KV k="status" v={card.result.message || card.result.status || ""} />
+              ) : null}
               {card.result.adapter === "demo" && <div className="text-warn text-[10px] mt-1 font-sans">demo substrate -- not real codebase analysis</div>}
-              {card.result.artifacts.map((a, i) => (
+              {(card.result.artifacts || []).map((a, i) => (
                 <div key={i} className="flex gap-2 py-0.5 border-t border-edge/30 mt-1 items-center font-sans">
                   <span className="text-[9px] uppercase px-1.5 rounded bg-panel2 text-faint h-fit leading-none py-0.5 border border-edge/50">{a.type}</span>
                   <span className="text-txt/80 truncate">{a.headline}</span>

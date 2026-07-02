@@ -44,13 +44,26 @@ export default function UpdateBanner() {
       // committed and we show inline progress.
       if (p.stage === "available" || p.stage === "downloaded") {
         setReady(true);
+        // Download finished (or an update is simply available): leave the
+        // "applying" progress state so the banner flips to the actionable
+        // "ready -- Restart now" view. Without this it stuck at "Downloading
+        // update 100%" (the applying branch has no button) until the user found
+        // the StatusBar pill.
+        setApplying(false);
         // Refresh the version label cleanly rather than parsing the message.
         ipc.updates.check().then((res: any) => {
           if (!cancelled && res) setLatest(res.latest || res.branch || "");
         }).catch(() => {});
       } else {
         setApplying(true);
-        setProgress((p.message || "Updating") + (p.percent != null ? ` ${p.percent}%` : ""));
+        // Append the percent only when the message doesn't already carry one.
+        // The installed-app updater bakes it into the text ("Downloading update
+        // 72%"), so blindly appending produced "... 72% 72%". The git
+        // self-updater's messages ("Fetching latest changes") have no percent
+        // and still rely on this append for progress.
+        const base = p.message || "Updating";
+        const hasPct = /\d%\s*$/.test(base);
+        setProgress(base + (p.percent != null && !hasPct ? ` ${p.percent}%` : ""));
       }
     });
 
