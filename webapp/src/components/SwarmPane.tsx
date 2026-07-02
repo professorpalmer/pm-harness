@@ -267,7 +267,13 @@ export default function SwarmPane() {
             return (
               <div
                 key={j.id}
-                className={`rounded-md border bg-panel2/30 flex flex-col overflow-hidden transition-colors ${
+                // shrink-0 is load-bearing: as a flex child of the flex-col
+                // scroll list, an overflow-hidden card is allowed to shrink
+                // BELOW its content, so it collapsed and clipped its own
+                // findings instead of pushing the list into overflow. Pinning
+                // shrink-0 keeps the card at full content height so the list
+                // actually scrolls.
+                className={`shrink-0 rounded-md border bg-panel2/30 flex flex-col overflow-hidden transition-colors ${
                   st === "in_progress" ? "border-accent/30" : st === "completed" ? "border-good/25" : st === "cancelled" ? "border-risk/25" : "border-edge"
                 }`}
               >

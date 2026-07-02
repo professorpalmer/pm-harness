@@ -185,7 +185,10 @@ export default function StatusBar({ config, jobCount, leftOpen, rightOpen, onTog
           title={apply.message}
         >
           <RefreshCw size={11} className="animate-spin" />
-          <span>{apply.message}{apply.percent != null ? ` ${apply.percent}%` : ""}</span>
+          {/* The installed-app updater bakes the percent into the message
+              ("Downloading update 87%"), so only append apply.percent when the
+              message doesn't already carry one -- otherwise "... 87% 87%". */}
+          <span>{apply.message}{apply.percent != null && !/\d%\s*$/.test(apply.message) ? ` ${apply.percent}%` : ""}</span>
         </span>
       ) : update ? (
         <button
