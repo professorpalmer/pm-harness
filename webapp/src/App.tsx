@@ -136,15 +136,18 @@ export default function App() {
             <Resizer side="left" onResize={(dx) => setLeftW((w) => clamp(w + dx, 180, 420))} />
           </>
         )}
-        <div className="flex-1 min-w-0 h-full">
-          <ErrorBoundary label="Chat">
-            <Conversation
-              config={config}
-              activeSessionId={activeSessionId}
-              onArtifacts={(a) => setArtifacts((prev) => [...a, ...prev])}
-              onJobChange={() => setJobsRefresh((n) => n + 1)}
-            />
-          </ErrorBoundary>
+        <div className="flex-1 min-w-0 h-full flex flex-col">
+          <TaskStack refresh={jobsRefresh} />
+          <div className="flex-1 min-h-0">
+            <ErrorBoundary label="Chat">
+              <Conversation
+                config={config}
+                activeSessionId={activeSessionId}
+                onArtifacts={(a) => setArtifacts((prev) => [...a, ...prev])}
+                onJobChange={() => setJobsRefresh((n) => n + 1)}
+              />
+            </ErrorBoundary>
+          </div>
         </div>
         {rightOpen && (
           <>
@@ -157,7 +160,6 @@ export default function App() {
           </>
         )}
       </div>
-      <TaskStack refresh={jobsRefresh} />
       <StatusBar config={config} jobCount={jobCount}
         leftOpen={leftOpen} rightOpen={rightOpen}
         onToggleLeft={() => setLeftOpen((v) => !v)} onToggleRight={() => setRightOpen((v) => !v)} />

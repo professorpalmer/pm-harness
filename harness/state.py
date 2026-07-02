@@ -10,6 +10,24 @@ from typing import Any, Optional
 from puppetmaster.store_factory import create_store
 
 
+def _normalize_rejected(rejected: Any) -> Optional[list]:
+    """Router rejected-alternatives entries are {"id", "reason"}; the GUI renders
+    {"model", "reason"}. Map "id" -> "model" so the model name shows. Tolerant of
+    already-normalized entries and non-list inputs."""
+    if not isinstance(rejected, list):
+        return rejected
+    out = []
+    for r in rejected:
+        if isinstance(r, dict):
+            out.append({
+                "model": r.get("model") or r.get("id") or "",
+                "reason": r.get("reason") or "",
+            })
+        else:
+            out.append({"model": str(r), "reason": ""})
+    return out
+
+
 class DurableState:
     def __init__(self, state_dir: str, backend: str = "sqlite") -> None:
         self.state_dir = state_dir
@@ -98,10 +116,17 @@ class DurableState:
                 "headline": str(headline)[:300],
                 "confidence": getattr(a, "confidence", None),
                 "created_by": getattr(a, "created_by", ""),
-                "model": payload.get("model") or payload.get("model_chosen") or payload.get("driver"),
+                # Puppetmaster's router stamps the chosen model under "model_id"
+                # (to_artifact_payload); the older keys are kept as fallbacks so
+                # non-router artifacts still resolve a model when they carry one.
+                "model": (payload.get("model_id") or payload.get("model")
+                          or payload.get("model_chosen") or payload.get("driver")),
                 "est_cost_usd": payload.get("estimated_cost_usd") or payload.get("nominal_cost_usd"),
                 "role": payload.get("role") or payload.get("worker_role"),
-                "rejected": payload.get("rejected"),
+                # Rejected alternatives arrive as {"id", "reason"}; normalize to the
+                # {"model", "reason"} shape the GUI renders so the model name shows
+                # instead of "undefined".
+                "rejected": _normalize_rejected(payload.get("rejected")),
                 "detail": payload.get("reason") or payload.get("detail"),
             })
         return out

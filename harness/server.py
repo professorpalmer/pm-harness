@@ -402,6 +402,13 @@ def _resolve_available_driver():
 _resolve_available_driver()
 _session = Session(_cfg)
 _pilot = ConversationalSession(_cfg)
+# Session and pilot each fall back to their OWN mkdtemp() when config.state_dir
+# is blank (the default), landing run_swarm's job store (pilot's state_dir) and
+# the tracker's read store (session's state_dir) in two DIFFERENT temp dirs. The
+# Swarm Tracker (/api/swarm/live) and Session Jobs (/api/jobs) read the session
+# store, so they stayed empty even after a real swarm ran in the pilot store.
+# Pin the session to the pilot's store so both read exactly where jobs are written.
+_session.state_dir = _pilot.state_dir
 import tempfile as _tf
 _sessions = SessionStore(os.path.join(_cfg.state_dir or _tf.gettempdir(), "harness_sessions.json"))
 _mcp = McpManager()
@@ -446,6 +453,9 @@ def _rebuild_pilot_and_session():
             f"could not load model {prev_driver!r}: {e}. Reverted to the "
             f"previous pilot."
         ) from e
+    # Keep the tracker/jobs reads pointed at the store the pilot writes to (see
+    # the pin at initial construction) across workspace/driver switches too.
+    new_session.state_dir = new_pilot.state_dir
     old_history = _pilot._history
     old_auto_distill = getattr(_pilot, "_auto_distill", False)
     _session = new_session
