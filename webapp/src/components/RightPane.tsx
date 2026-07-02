@@ -264,7 +264,13 @@ export default function RightPane({ artifacts, onOpenWizard }: {
             onOpenWizard={onOpenWizard}
             onClose={() =>
               setSplitState((prev) => {
-                const next = { ...prev, primaryTab: "state" as Tab };
+                // SettingsShell is a full-window (fixed inset-0) overlay, so it
+                // renders whenever EITHER pane's tab is "settings". Resetting only
+                // primaryTab left it stuck open when Settings was opened in the
+                // secondary pane -- close whichever pane(s) show it.
+                const next = { ...prev };
+                if (next.primaryTab === "settings") next.primaryTab = "state" as Tab;
+                if (next.secondaryTab === "settings") next.secondaryTab = "state" as Tab;
                 localStorage.setItem("pmharness.splitState", JSON.stringify(next));
                 return next;
               })

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { X, Cpu, SlidersHorizontal, ShieldCheck, Zap, Bell, Wrench, Info } from "lucide-react";
 import ModelsSettingsPage from "./ModelsSettingsPage";
 import SettingsPane, { type SettingsSection } from "./SettingsPane";
@@ -26,6 +26,17 @@ export default function SettingsShell({
   onOpenWizard: () => void;
 }) {
   const [page, setPage] = useState<PageId>("models");
+
+  // Escape always closes settings -- a keyboard escape hatch so a missed click
+  // on the X (e.g. a busy main thread during a swarm) can never trap the user
+  // behind this full-window overlay. Capture phase so it wins over inner inputs.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
 
   return (
     <div className="fixed inset-0 z-50 bg-bg flex flex-col">
