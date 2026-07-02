@@ -9,7 +9,7 @@ html, body, #root { height: 100%; margin: 0; }
    separation ratio intact while making the app denser as the window narrows.
    Full-size (16px) on a normal/large window, shrinking toward 12px on a small
    one -- fixes the "huge, no visual separation" look in a compact window. */
-html { font-size: clamp(12px, 0.53vw + 8.5px, 16px); }
+html { font-size: clamp(11.5px, 0.62vw + 7.1px, 16px); }
 
 body {
   background: #0f1113; color: #ececef;

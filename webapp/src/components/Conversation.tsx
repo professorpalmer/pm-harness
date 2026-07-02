@@ -2142,7 +2142,7 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               rows={1} placeholder={auto ? "Give the pilot an objective..." : "Message the pilot..."}
-              className="w-full bg-transparent px-3 pt-2.5 pb-1 text-[13px] resize-none focus:outline-none overflow-y-auto placeholder:text-faint" />
+              className="w-full bg-transparent px-3 pt-2.5 pb-1 text-[0.8125rem] resize-none focus:outline-none overflow-y-auto placeholder:text-faint" />
             <div className="flex items-center gap-1.5 px-3 pb-2">
               <button onClick={() => {
                 setAuto((a) => {
@@ -2493,7 +2493,7 @@ function ThinkingBlock({ text }: { text: string }) {
         <span>reasoning</span>
       </button>
       {!collapsed && (
-        <div className="mt-0.5 pl-2.5 ml-1 border-l-2 border-edge/40 text-muted text-[13px] whitespace-pre-wrap leading-relaxed max-w-[92%]">
+        <div className="mt-0.5 pl-2.5 ml-1 border-l-2 border-edge/40 text-muted text-[0.8125rem] whitespace-pre-wrap leading-relaxed max-w-[92%]">
           {text}
         </div>
       )}
@@ -2513,7 +2513,7 @@ function FencedCodeBlock({ className, children, ...props }: any) {
   
   return (
     <div className="relative group/code my-2">
-      <code className={`${className || ""} block bg-panel/80 border border-edge/30 rounded-md p-3 pr-10 overflow-x-auto font-mono text-[11.5px] leading-[1.55] text-txt/90`} {...props}>
+      <code className={`${className || ""} block bg-panel/80 border border-accent/20 rounded-md p-3 pr-10 overflow-x-auto font-mono text-[0.719rem] leading-[1.55] text-txt/90`} {...props}>
         {children}
       </code>
       <button
@@ -2568,14 +2568,14 @@ function Markdown({ text }: { text: string }) {
       rehypePlugins={[rehypeHighlight]}
       components={{
         h1: ({ children }: any) => <h1 className="text-sm font-semibold text-txt mt-3 mb-1.5 border-b border-edge pb-0.5">{children}</h1>,
-        h2: ({ children }: any) => <h2 className="text-[13px] font-semibold text-txt mt-3 mb-1.5">{children}</h2>,
-        h3: ({ children }: any) => <h3 className="text-[12px] font-semibold text-muted mt-2 mb-1">{children}</h3>,
-        p: ({ children }: any) => <p className="text-[13px] leading-[1.7] my-2 first:mt-0 last:mb-0">{children}</p>,
+        h2: ({ children }: any) => <h2 className="text-[0.8125rem] font-semibold text-txt mt-3 mb-1.5">{children}</h2>,
+        h3: ({ children }: any) => <h3 className="text-[0.75rem] font-semibold text-muted mt-2 mb-1">{children}</h3>,
+        p: ({ children }: any) => <p className="text-[0.8125rem] leading-[1.7] my-2 first:mt-0 last:mb-0">{children}</p>,
         strong: ({ children }: any) => <strong className="font-semibold text-txt">{children}</strong>,
         em: ({ children }: any) => <em className="italic text-txt/90">{children}</em>,
         ul: ({ children }: any) => <ul className="list-disc pl-4 my-2 space-y-1 text-txt/90">{children}</ul>,
         ol: ({ children }: any) => <ol className="list-decimal pl-4 my-2 space-y-1 text-txt/90">{children}</ol>,
-        li: ({ children }: any) => <li className="text-[13px] leading-[1.65]">{children}</li>,
+        li: ({ children }: any) => <li className="text-[0.8125rem] leading-[1.65]">{children}</li>,
         blockquote: ({ children }: any) => (
           <blockquote className="border-l-2 border-edge pl-2.5 my-2 text-muted italic bg-panel2/30 rounded-r-sm py-1">
             {children}
@@ -2601,7 +2601,7 @@ function Markdown({ text }: { text: string }) {
         ),
         table: ({ children }: any) => (
           <div className="overflow-x-auto my-1.5 border border-edge rounded bg-panel/40">
-            <table className="min-w-full text-left text-[11.5px] border-collapse">{children}</table>
+            <table className="min-w-full text-left text-[0.719rem] border-collapse">{children}</table>
           </div>
         ),
         thead: ({ children }: any) => (
@@ -2624,7 +2624,7 @@ function Markdown({ text }: { text: string }) {
           const isInline = !className;
           if (isInline) {
             return (
-              <code className="bg-panel2/70 px-1 py-[1px] rounded text-[0.9em] font-mono text-txt/85" {...props}>
+              <code className="bg-accent/[0.08] px-1 py-[1px] rounded text-[0.9em] font-mono text-accent/90" {...props}>
                 {children}
               </code>
             );
@@ -2727,7 +2727,7 @@ function Bubble({
       {showLabel && (
         <span className="text-[10px] uppercase tracking-wider text-faint px-0.5 select-none font-semibold mt-1">pilot</span>
       )}
-      <div className={`text-[13px] leading-[1.7] break-words max-w-[95%] py-0.5 w-full relative pr-14 ${isIntermediate ? "text-txt/75" : "text-txt/95"}`}>
+      <div className={`text-[0.8125rem] leading-[1.7] break-words max-w-[95%] py-0.5 w-full relative pr-14 ${isIntermediate ? "text-txt/75" : "text-txt/95"}`}>
         <Markdown text={displayedText} />
         
         {/* Assistant copy & regenerate buttons */}
