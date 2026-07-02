@@ -58,6 +58,30 @@ function swarmSignature(res: SwarmLive | null): string {
   return parts.join("|");
 }
 
+// Findings arrive one-per-worker and repeat heavily: every agentic worker emits
+// a VERIFICATION artifact echoing the same task instruction, so a 5-worker swarm
+// shows the identical line 5x. Collapse exact (type + headline) duplicates into a
+// single row with an xN badge, and sort real signal (RISK/BUG/DECISION) above
+// process noise (VERIFICATION) so substance reads first.
+type FindingRow = { art: Artifact; count: number };
+function dedupeFindings(arts: Artifact[]): FindingRow[] {
+  const rows = new Map<string, FindingRow>();
+  for (const art of arts) {
+    const key = `${(art.type || "").toUpperCase()}::${(art.headline || "").trim().toLowerCase()}`;
+    const hit = rows.get(key);
+    if (hit) hit.count += 1;
+    else rows.set(key, { art, count: 1 });
+  }
+  const rank = (t?: string) => {
+    const u = (t || "").toUpperCase();
+    if (u === "RISK" || u === "BUG") return 0;
+    if (u === "DECISION" || u === "FINDING") return 1;
+    if (u === "VERIFICATION") return 3;
+    return 2;
+  };
+  return [...rows.values()].sort((a, b) => rank(a.art.type) - rank(b.art.type));
+}
+
 // The four visible phases of a swarm's life. A job advances left-to-right; the
 // strip fills behind the active phase so a running swarm reads as *moving*
 // instead of a static spinner. "failed" paints the reached phase red.
@@ -420,28 +444,34 @@ export default function SwarmPane() {
 
                     {/* Findings / artifacts stream -- the substance of an audit,
                         made first-class: type badge, confidence, headline. */}
-                    {streamArts.length > 0 && (
+                    {streamArts.length > 0 && (() => {
+                      const findingRows = dedupeFindings(streamArts);
+                      return (
                       <div className="border-t border-edge/20 pt-1.5 flex flex-col">
                         <div className="text-[9px] uppercase tracking-wider text-faint font-medium mb-1">
-                          Findings ({streamArts.length})
+                          Findings ({findingRows.length}{findingRows.length !== streamArts.length ? ` of ${streamArts.length}` : ""})
                         </div>
                         <div className="pr-1 flex flex-col gap-1 border border-edge/20 rounded p-1.5 bg-panel/30">
-                          {streamArts.map((art: Artifact, idx: number) => (
+                          {findingRows.map(({ art, count }, idx: number) => (
                             <div key={art.id || idx} className="text-[9.5px] border-b border-edge/10 pb-1 last:border-0 last:pb-0 flex flex-col gap-0.5">
-                              <div className="flex items-center justify-between">
-                                <span className="font-bold text-accent uppercase tracking-wider text-[8px]">{art.type}</span>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-bold text-accent uppercase tracking-wider text-[8px] flex items-center gap-1">
+                                  {art.type}
+                                  {count > 1 && <span className="text-faint bg-edge/20 px-1 rounded normal-case tracking-normal">x{count}</span>}
+                                </span>
                                 {art.confidence !== undefined && art.confidence !== null && (
-                                  <span className="text-[8px] text-faint bg-edge/20 px-1 rounded">
+                                  <span className="text-[8px] text-faint bg-edge/20 px-1 rounded shrink-0">
                                     {Math.round(art.confidence * 100)}%
                                   </span>
                                 )}
                               </div>
-                              <div className="text-txt break-words leading-relaxed">{art.headline}</div>
+                              <div className="text-txt break-words leading-relaxed line-clamp-2" title={art.headline}>{art.headline}</div>
                             </div>
                           ))}
                         </div>
                       </div>
-                    )}
+                      );
+                    })()}
 
                     {tasks.length === 0 && streamArts.length === 0 && routingArts.length === 0 && (
                       <div className="text-[9.5px] text-faint italic px-1 py-0.5">
