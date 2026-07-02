@@ -50,6 +50,17 @@ function registerAutoUpdater(ipcMain, app, shell, opts = {}) {
   autoUpdater.autoInstallOnAppQuit = true; // apply on the next quit with no prompt
   autoUpdater.allowPrerelease = false;
   autoUpdater.logger = null;
+  // Force a full-zip download instead of a blockmap delta. This bundle is large
+  // and packed with frameworks + symlinks (Electron, Squirrel, bundled Python,
+  // node, codegraph wasm); electron-updater's macOS differential downloader
+  // reconstructs the new .app by ditto-cloning the installed one and patching
+  // changed blocks, and it chokes on that framework/symlink layout -- ditto fails
+  // with "No such file or directory" and it retries relentlessly (observed 100+
+  // update.XXXX staging dirs and 170+ unhandledRejections in a single update
+  // window) before finally falling back to a full download. The install itself
+  // always succeeded (ShipIt status 0), so the delta path was pure thrash + log
+  // spam. A full download is slightly larger but reliable and quiet.
+  autoUpdater.disableDifferentialDownload = true;
 
   const state = { available: false, downloaded: false, latest: app.getVersion(), error: "" };
   let installWhenReady = false;
