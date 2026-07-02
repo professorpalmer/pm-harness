@@ -148,6 +148,9 @@ def main(argv=None) -> int:
         return run_doctor(raw[1:])
     if raw and raw[0] == "auto":
         return _run_auto(raw[1:])
+    if raw and raw[0] == "schedule":
+        from .schedule_cli import _run_schedule
+        return _run_schedule(raw[1:])
 
     ap = argparse.ArgumentParser(prog="harness",
         description="PM-native harness. Run a task, or `harness gui` for the UI.")
