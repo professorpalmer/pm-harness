@@ -35,9 +35,9 @@ const TAB_CONFIG: Record<Tab, { label: string; icon: React.ReactNode }> = {
 // A thin divider is rendered between groups so 10 icons read as 3 organized clusters
 // instead of one crowded row. Group membership also drives the canonical default order.
 const TAB_GROUPS: { group: string; tabs: Tab[] }[] = [
-  { group: "workspace", tabs: ["state", "files", "git", "worktrees", "terminal"] },
+  { group: "workspace", tabs: ["state", "swarm", "files", "git", "worktrees", "terminal"] },
   { group: "changes", tabs: ["review", "checkpoints"] },
-  { group: "tools", tabs: ["browser", "mcp", "swarm"] },
+  { group: "tools", tabs: ["browser", "mcp"] },
 ];
 // Settings is intentionally separated and rendered last (after a flex spacer).
 const PINNED_LAST: Tab = "settings";
@@ -68,6 +68,7 @@ export default function RightPane({ artifacts, onOpenWizard }: {
 
   // Tab order state (drag to reorder, persisted in localStorage)
   const [tabOrder, setTabOrder] = useState<Tab[]>(() => {
+    let order: Tab[] = CANONICAL_ORDER.slice();
     const saved = localStorage.getItem("pmharness.tabOrder");
     if (saved) {
       try {
@@ -77,12 +78,20 @@ export default function RightPane({ artifacts, onOpenWizard }: {
         const missing = validTabs.filter(t => !filtered.includes(t));
         // Always keep Settings pinned last regardless of saved order.
         const merged = [...filtered, ...missing].filter(t => t !== PINNED_LAST);
-        return [...merged, PINNED_LAST];
+        order = [...merged, PINNED_LAST];
       } catch (e) {
-        // fallback
+        // fallback to canonical
       }
     }
-    return CANONICAL_ORDER.slice();
+    // One-time migration: promote Swarm to the 2nd tab so the tracker is a
+    // first-class default, without discarding a user's other tab reordering.
+    if (!localStorage.getItem("pmharness.tabOrder.swarm2nd")) {
+      order = order.filter(t => t !== "swarm");
+      order.splice(1, 0, "swarm");
+      localStorage.setItem("pmharness.tabOrder.swarm2nd", "1");
+      localStorage.setItem("pmharness.tabOrder", JSON.stringify(order));
+    }
+    return order;
   });
 
   const saveTabOrder = (newOrder: Tab[]) => {

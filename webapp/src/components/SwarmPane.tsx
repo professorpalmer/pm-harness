@@ -1,6 +1,40 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Loader2, CheckCircle2, XCircle, Circle, ChevronDown, ChevronRight, Cpu, Activity, Network, X } from "lucide-react";
 import { api, type SwarmLive, type Job, type Artifact, type Task } from "../lib/api";
+
+// A clean, self-contained hover tooltip. The native `title=` tooltip renders as a
+// large unstyled OS box that covers the tracker and never wraps sensibly; this
+// draws a width-capped, styled bubble through a portal so it escapes the pane's
+// overflow clip and clamps to the viewport instead of running off the right edge.
+function Tooltip({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const TIP_WIDTH = 340;
+  const show = () => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const x = Math.max(8, Math.min(r.left, window.innerWidth - TIP_WIDTH - 8));
+    setPos({ x, y: r.bottom + 6 });
+  };
+  const hide = () => setPos(null);
+  return (
+    <span ref={ref} className={className} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
+      {children}
+      {pos && label &&
+        createPortal(
+          <div
+            style={{ position: "fixed", left: pos.x, top: pos.y, maxWidth: TIP_WIDTH, zIndex: 200 }}
+            className="pointer-events-none rounded-md border border-edge bg-panel2 px-2.5 py-1.5 text-[10.5px] leading-relaxed text-txt shadow-2xl whitespace-pre-wrap break-words"
+          >
+            {label}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
 
 type Status = "pending" | "in_progress" | "completed" | "cancelled";
 
@@ -181,8 +215,13 @@ export default function SwarmPane() {
   const [data, setData] = useState<SwarmLive | null>(null);
   const [expandedJobs, setExpandedJobs] = useState<Record<string, boolean>>({});
   const [expandedAlts, setExpandedAlts] = useState<Record<string, boolean>>({});
+  const [expandedTasks, setExpandedTasks] = useState<Record<string, boolean>>({});
+  const [expandedFindings, setExpandedFindings] = useState<Record<string, boolean>>({});
   const [dismissed, setDismissed] = useState<Set<string>>(loadDismissed);
   const [finishedOpen, setFinishedOpen] = useState(false);
+
+  const toggleTask = (id: string) => setExpandedTasks((p) => ({ ...p, [id]: !p[id] }));
+  const toggleFinding = (id: string) => setExpandedFindings((p) => ({ ...p, [id]: !p[id] }));
 
   useEffect(() => { saveDismissed(dismissed); }, [dismissed]);
 
@@ -314,9 +353,9 @@ export default function SwarmPane() {
                   <Circle size={12} className="text-muted" />
                 )}
               </span>
-              <span className="font-semibold text-[11px] text-txt truncate" title={j.goal}>
+              <Tooltip label={j.goal} className="font-semibold text-[11px] text-txt truncate">
                 {j.goal}
-              </span>
+              </Tooltip>
             </div>
             <div className="flex items-center gap-3 shrink-0 text-[10px] pl-2">
               {j.est_cost_usd !== undefined && j.est_cost_usd > 0 && (
@@ -414,13 +453,13 @@ export default function SwarmPane() {
                           {altsExpanded && (
                             <div className="mt-1.5 flex flex-wrap gap-1">
                               {art.rejected?.map((rej: { model: string; reason: string }, ridx: number) => (
-                                <span
+                                <Tooltip
                                   key={ridx}
-                                  title={rej.reason}
+                                  label={rej.reason}
                                   className="font-mono text-[8.5px] text-faint bg-panel2/50 border border-edge/30 px-1.5 py-0.5 rounded cursor-default"
                                 >
                                   {rej.model}
-                                </span>
+                                </Tooltip>
                               ))}
                             </div>
                           )}
@@ -443,8 +482,17 @@ export default function SwarmPane() {
                 <div className="flex flex-col gap-1 mt-0.5">
                   {tasks.map((task) => {
                     const ts = taskState(task);
+                    const tExpanded = !!expandedTasks[task.id];
+                    const hasInstruction = !!task.instruction;
                     return (
-                      <div key={task.id} className="p-1.5 rounded bg-panel/25 border border-edge/20 flex items-start gap-2 text-[10px]">
+                      <div
+                        key={task.id}
+                        role={hasInstruction ? "button" : undefined}
+                        tabIndex={hasInstruction ? 0 : undefined}
+                        onClick={hasInstruction ? () => toggleTask(task.id) : undefined}
+                        onKeyDown={hasInstruction ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleTask(task.id); } } : undefined}
+                        className={`p-1.5 rounded bg-panel/25 border border-edge/20 flex items-start gap-2 text-[10px] ${hasInstruction ? "cursor-pointer hover:bg-panel/45 focus:outline-none" : ""}`}
+                      >
                         <span className="mt-0.5 shrink-0">
                           {ts === "running" ? <Loader2 size={10} className="animate-spin text-accent" />
                             : ts === "done" ? <CheckCircle2 size={10} className="text-good" />
@@ -452,21 +500,28 @@ export default function SwarmPane() {
                             : <Circle size={10} className="text-muted" />}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <span className="font-semibold text-txt truncate">
-                              {task.role || "Worker"}{" "}
-                              <span className="text-faint font-normal">({task.adapter || "no-adapter"})</span>
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="font-semibold text-txt truncate flex items-center gap-1 min-w-0">
+                              {hasInstruction && (tExpanded
+                                ? <ChevronDown size={9} className="text-faint shrink-0" />
+                                : <ChevronRight size={9} className="text-faint shrink-0" />)}
+                              <span className="truncate">
+                                {task.role || "Worker"}{" "}
+                                <span className="text-faint font-normal">({task.adapter || "no-adapter"})</span>
+                              </span>
                             </span>
-                            <span className={`text-[8px] uppercase font-bold px-1 rounded ${
+                            <span className={`text-[8px] uppercase font-bold px-1 rounded shrink-0 ${
                               ts === "running" ? "text-accent bg-accent/10"
                                 : ts === "done" ? "text-good bg-good/10"
                                 : ts === "fail" ? "text-risk bg-risk/10"
                                 : "text-muted bg-panel"
                             }`}>{task.status}</span>
                           </div>
-                          {task.instruction && (
-                            <div className="text-muted text-[9.5px] mt-0.5 truncate" title={task.instruction}>{task.instruction}</div>
-                          )}
+                          {hasInstruction && (tExpanded ? (
+                            <div className="text-muted text-[9.5px] mt-1 whitespace-pre-wrap break-words leading-relaxed">{task.instruction}</div>
+                          ) : (
+                            <Tooltip label={task.instruction} className="block text-muted text-[9.5px] mt-0.5 truncate">{task.instruction}</Tooltip>
+                          ))}
                         </div>
                       </div>
                     );
@@ -485,8 +540,16 @@ export default function SwarmPane() {
                   Findings ({findingRows.length}{findingRows.length !== streamArts.length ? ` of ${streamArts.length}` : ""})
                 </div>
                 <div className="pr-1 flex flex-col gap-1 border border-edge/20 rounded p-1.5 bg-panel/30">
-                  {findingRows.map(({ art, count }, idx: number) => (
-                    <div key={art.id || idx} className="text-[9.5px] border-b border-edge/10 pb-1 last:border-0 last:pb-0 flex flex-col gap-0.5">
+                  {findingRows.map(({ art, count }, idx: number) => {
+                    const fid = art.id || `f${idx}`;
+                    const fExpanded = !!expandedFindings[fid];
+                    const detailStr = art.detail == null
+                      ? ""
+                      : (typeof art.detail === "string"
+                          ? art.detail
+                          : (() => { try { return JSON.stringify(art.detail, null, 2); } catch { return String(art.detail); } })());
+                    return (
+                    <div key={fid} className="text-[9.5px] border-b border-edge/10 pb-1 last:border-0 last:pb-0 flex flex-col gap-0.5">
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-bold text-accent uppercase tracking-wider text-[8px] flex items-center gap-1">
                           {art.type}
@@ -498,9 +561,30 @@ export default function SwarmPane() {
                           </span>
                         )}
                       </div>
-                      <div className="text-txt break-words leading-relaxed line-clamp-2" title={art.headline}>{art.headline}</div>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => toggleFinding(fid)}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleFinding(fid); } }}
+                        className="flex items-start gap-1 text-txt break-words leading-relaxed cursor-pointer hover:text-white focus:outline-none"
+                      >
+                        <span className="mt-0.5 shrink-0 text-faint">
+                          {fExpanded ? <ChevronDown size={9} /> : <ChevronRight size={9} />}
+                        </span>
+                        {fExpanded ? (
+                          <span className="flex-1 min-w-0 whitespace-pre-wrap">{art.headline}</span>
+                        ) : (
+                          <Tooltip label={art.headline} className="flex-1 min-w-0 line-clamp-2">{art.headline}</Tooltip>
+                        )}
+                      </div>
+                      {fExpanded && detailStr && (
+                        <div className="mt-1 ml-4 text-[9px] text-muted whitespace-pre-wrap break-words bg-panel/40 border border-edge/20 rounded p-1.5 font-mono max-h-72 overflow-auto">
+                          {detailStr}
+                        </div>
+                      )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
               );
