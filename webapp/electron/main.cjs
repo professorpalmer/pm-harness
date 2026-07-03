@@ -15,6 +15,7 @@ const path = require("node:path");
 const net = require("node:net");
 const fs = require("node:fs");
 const os = require("node:os");
+const crypto = require("node:crypto");
 const { readLiveUpdateMarker } = require("./update-marker.cjs");
 
 const isDev = !!process.env.PMHARNESS_DEV_SERVER;
@@ -107,6 +108,16 @@ let backend = null;
 let backendPort = 8799;
 let win = null;
 let quitting = false;
+// Instance-local auth token, minted by main and handed to BOTH the backend (via
+// HARNESS_TOKEN env) and the renderer. Previously each backend generated its own
+// token and wrote it to a SHARED ~/.pmharness/token file (last-writer-wins). When
+// an update relaunch (or a crash) left a stale backend alive on the old port, the
+// shared file no longer matched the backend the renderer was actually talking to,
+// so every request 403'd and the whole UI read as "disconnected". Owning the
+// token here makes renderer<->backend agree by construction, independent of the
+// shared file and any stale second instance. The reuse path (below) adopts the
+// running backend's token instead of this freshly-minted one.
+let harnessToken = crypto.randomBytes(16).toString("hex");
 // Timestamps of recent unexpected respawns -- caps a crash loop (see backend.on exit).
 let respawnTimes = [];
 // Coalesces concurrent startBackend() calls. Two overlapping starts (app 'ready'
@@ -181,6 +192,13 @@ async function _startBackendOnce() {
       await waitForBackend(m.port, 2000);
       backendPort = m.port;
       backend = null; // not ours to kill
+      // Adopt the running backend's token (minted by whichever main spawned it)
+      // so our renderer/IPC authenticate against IT rather than our own unused
+      // freshly-minted token.
+      try {
+        const t = fs.readFileSync(path.join(os.homedir(), ".pmharness", "token"), "utf8").trim();
+        if (t) harnessToken = t;
+      } catch {}
       console.log(`[backend] reusing existing backend on ${backendPort}`);
       return;
     }
@@ -194,6 +212,20 @@ async function _startBackendOnce() {
     if (!live) break;
     console.log(`[backend] update in progress (pid ${live.pid}); parking...`);
     await new Promise((r) => setTimeout(r, 500));
+  }
+
+  // 1c. Fresh spawn implies NO backend should legitimately be running (the
+  // single-instance lock guarantees we are the only Marionette main, and reuse
+  // above already returned if a healthy one existed). Sweep any orphaned
+  // pmharness-backend a crash or update-relaunch left behind on the old port so
+  // we never end up with two backends racing the same SQLite state and clobbering
+  // each other's token file -- the root cause of the "completely disconnected"
+  // regression. Packaged-only: the bundled binary is named `pmharness-backend`; a
+  // dev backend runs as `python -m harness.cli` and is deliberately not matched.
+  if (app.isPackaged) {
+    try {
+      require("node:child_process").execFileSync("/usr/bin/pkill", ["-f", "pmharness-backend"], { stdio: "ignore" });
+    } catch { /* nothing to sweep */ }
   }
 
   // 2. Spawn a fresh backend on a free port and record the marker.
@@ -222,7 +254,19 @@ async function _startBackendOnce() {
   // PYTHONUNBUFFERED: stream backend stdout/stderr to the log immediately instead
   // of sitting in a pipe buffer (that buffering hid the real startup/crash lines
   // and left a ~20-min gap between "spawning" and "GUI on" in the log).
-  const customEnv = { ..._shellEnv, ...process.env, PYTHONUNBUFFERED: "1", HARNESS_REPO: process.env.HARNESS_REPO || repoRoot };
+  const customEnv = { ..._shellEnv, ...process.env, PYTHONUNBUFFERED: "1", HARNESS_REPO: process.env.HARNESS_REPO || repoRoot, HARNESS_TOKEN: harnessToken };
+
+  // Hand the (frozen) backend a REAL interpreter for dispatching Puppetmaster /
+  // implement workers. Without this, a packaged app re-enters its own PyInstaller
+  // snapshot via `pm-exec` to run workers, which fails worktree packaging (zlib
+  // "incorrect header check") and imports a stale harness.worker (missing
+  // WorkerResult). The checkout's venv has editable harness + puppetmaster (the
+  // live source), so point PMHARNESS_PYTHON at it when present; the backend's
+  // resolver validates puppetmaster-importability before trusting it.
+  if (!customEnv.PMHARNESS_PYTHON) {
+    const venvPy = path.join(repoRoot, ".venv", "bin", "python");
+    if (fs.existsSync(venvPy)) customEnv.PMHARNESS_PYTHON = venvPy;
+  }
 
   // codegraph self-containment: only safe with a REAL bundled `node` binary.
   // The electron-as-node trick (ELECTRON_RUN_AS_NODE) does NOT work for codegraph because
@@ -306,7 +350,7 @@ async function _startBackendOnce() {
             // backendPort, but any direct window.__HARNESS_PORT__ consumer would
             // otherwise stay bound to the dead port -- that is the "UI goes dark at
             // finish-time" stranding. Re-inject it and signal panels to re-fetch.
-            win.webContents.executeJavaScript(`window.__HARNESS_PORT__=${backendPort};`).catch(() => {});
+            win.webContents.executeJavaScript(`window.__HARNESS_PORT__=${backendPort};window.__HARNESS_TOKEN__=${JSON.stringify(harnessToken)};`).catch(() => {});
             win.webContents.send("backend:respawned", backendPort);
           }
         } catch { /* window gone */ }
@@ -321,8 +365,10 @@ async function _startBackendOnce() {
 
 // ---- transport seam over IPC: proxy to the local backend ----
 function authToken() {
-  try { return fs.readFileSync(path.join(os.homedir(), ".pmharness", "token"), "utf8").trim(); }
-  catch { return ""; }
+  // Main owns the token (handed to the backend via HARNESS_TOKEN and to the
+  // renderer at injection time). Return it directly rather than reading the
+  // shared file, which a stale second backend could have overwritten.
+  return harnessToken || "";
 }
 
 function backendRequest(method, apiPath, body) {
@@ -500,10 +546,8 @@ function createWindow() {
   });
   // expose the backend port to the renderer for any direct needs
   win.webContents.on("did-finish-load", () => {
-    let tok = "";
-    try { tok = fs.readFileSync(path.join(os.homedir(), ".pmharness", "token"), "utf8").trim(); } catch {}
     win.webContents.executeJavaScript(
-      `window.__HARNESS_PORT__=${backendPort};window.__HARNESS_TOKEN__=${JSON.stringify(tok)};`
+      `window.__HARNESS_PORT__=${backendPort};window.__HARNESS_TOKEN__=${JSON.stringify(harnessToken)};`
     ).catch(() => {});
   });
   if (isDev) win.loadURL(process.env.PMHARNESS_DEV_SERVER);

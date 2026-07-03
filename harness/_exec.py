@@ -5,11 +5,59 @@ import subprocess
 
 _PM_PYTHON_CACHE = None
 _PM_AVAILABLE_CACHE = None
+# Sentinel: None = not yet probed, "" = probed, none found, str = resolved path.
+_PM_EXT_PYTHON_CACHE = None
 
 def _clear_puppetmaster_cache():
-    global _PM_PYTHON_CACHE, _PM_AVAILABLE_CACHE
+    global _PM_PYTHON_CACHE, _PM_AVAILABLE_CACHE, _PM_EXT_PYTHON_CACHE
     _PM_PYTHON_CACHE = None
     _PM_AVAILABLE_CACHE = None
+    _PM_EXT_PYTHON_CACHE = None
+
+
+def _external_puppetmaster_python() -> str:
+    """A real (non-frozen) Python that can import puppetmaster, or "" if none.
+
+    Used only when the app is FROZEN, to decide how to run Puppetmaster/harness
+    workers. Re-entering the frozen binary via `pm-exec` runs those workers from
+    the PyInstaller PYZ snapshot, which has been observed in the field to
+    (a) fail an implement worker's worktree packaging with "zlib incorrect
+    header check" and (b) import a STALE harness.worker (missing WorkerResult) --
+    both because the snapshot's stdlib/module graph is not the live installed
+    source. Running through a real external interpreter instead executes the live
+    installed puppetmaster + harness (editable venv / pyenv / system) with a
+    working stdlib. Candidates, in priority order: the PMHARNESS_PYTHON override
+    (the target repo's venv, set by the Electron host), then python3/python on
+    PATH. Each candidate must actually import puppetmaster to be accepted."""
+    global _PM_EXT_PYTHON_CACHE
+    if _PM_EXT_PYTHON_CACHE is not None:
+        return _PM_EXT_PYTHON_CACHE
+
+    candidates = []
+    env_py = os.environ.get("PMHARNESS_PYTHON")
+    if env_py:
+        candidates.append(env_py)
+    for name in ("python3", "python"):
+        resolved = shutil.which(name)
+        if resolved:
+            candidates.append(resolved)
+
+    for py in candidates:
+        # An absolute path must exist; a PATH-resolved name already does.
+        if os.path.isabs(py) and not os.path.exists(py):
+            continue
+        try:
+            res = subprocess.run(
+                [py, "-c", "import puppetmaster"], capture_output=True, timeout=5
+            )
+            if res.returncode == 0:
+                _PM_EXT_PYTHON_CACHE = py
+                return py
+        except Exception:
+            pass
+
+    _PM_EXT_PYTHON_CACHE = ""
+    return ""
 
 def _puppetmaster_python() -> str:
     global _PM_PYTHON_CACHE
@@ -117,6 +165,15 @@ def _puppetmaster_available() -> bool:
 def _puppetmaster_cmd(*args) -> list[str]:
     is_frozen = getattr(sys, "frozen", False)
     if is_frozen:
+        # Prefer a real external interpreter running the LIVE installed source
+        # over re-entering the frozen PYZ snapshot (see
+        # _external_puppetmaster_python for why the snapshot breaks worktree
+        # packaging + imports a stale harness.worker). Fall back to the
+        # self-contained `pm-exec` re-entry only for a pure-DMG install with no
+        # external Python that can import puppetmaster.
+        ext = _external_puppetmaster_python()
+        if ext:
+            return [ext, "-m", "puppetmaster", *args]
         return [sys.executable, "pm-exec", *args]
 
     pm_script = shutil.which("puppetmaster")

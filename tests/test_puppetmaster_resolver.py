@@ -157,12 +157,53 @@ def test_startup_auto_index_fires_when_not_exists(monkeypatch):
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def test_puppetmaster_cmd_frozen(monkeypatch):
+def test_puppetmaster_cmd_frozen_no_external_python(monkeypatch):
+    # Pure-DMG install: no external Python can import puppetmaster, so the frozen
+    # binary re-enters itself via `pm-exec` (self-contained fallback).
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     fake_exe = "/mocked/frozen/pmharness"
     monkeypatch.setattr(sys, "executable", fake_exe)
-    cmd = _puppetmaster_cmd("codegraph", "init", "--index")
+    with patch("harness._exec._external_puppetmaster_python", return_value=""):
+        cmd = _puppetmaster_cmd("codegraph", "init", "--index")
     assert cmd == [fake_exe, "pm-exec", "codegraph", "init", "--index"]
+
+
+def test_puppetmaster_cmd_frozen_prefers_external_python(monkeypatch):
+    # When a real external Python with puppetmaster exists (dev / editable venv),
+    # a frozen app runs workers through it against the LIVE source instead of the
+    # stale PYZ snapshot -- the fix for the "zlib incorrect header check" +
+    # "cannot import name 'WorkerResult'" implement-worker failures.
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/mocked/frozen/pmharness")
+    with patch("harness._exec._external_puppetmaster_python", return_value="/real/venv/bin/python"):
+        cmd = _puppetmaster_cmd("codegraph", "init", "--index")
+    assert cmd == ["/real/venv/bin/python", "-m", "puppetmaster", "codegraph", "init", "--index"]
+
+
+def test_external_puppetmaster_python_prefers_env_override(monkeypatch):
+    monkeypatch.setenv("PMHARNESS_PYTHON", "/target/repo/.venv/bin/python")
+    _clear_puppetmaster_cache()
+
+    def fake_run(cmd, **kwargs):
+        # Accept the env-override interpreter as puppetmaster-capable.
+        return MagicMock(returncode=0 if cmd[0] == "/target/repo/.venv/bin/python" else 1)
+
+    with patch("os.path.isabs", return_value=True), \
+         patch("os.path.exists", return_value=True), \
+         patch("subprocess.run", side_effect=fake_run):
+        from harness._exec import _external_puppetmaster_python
+        assert _external_puppetmaster_python() == "/target/repo/.venv/bin/python"
+
+
+def test_external_puppetmaster_python_none_when_no_puppetmaster(monkeypatch):
+    monkeypatch.delenv("PMHARNESS_PYTHON", raising=False)
+    _clear_puppetmaster_cache()
+
+    with patch("shutil.which", return_value="/usr/bin/python3"), \
+         patch("os.path.exists", return_value=True), \
+         patch("subprocess.run", return_value=MagicMock(returncode=1)):
+        from harness._exec import _external_puppetmaster_python
+        assert _external_puppetmaster_python() == ""
 
 
 def test_puppetmaster_available_frozen_success(monkeypatch):
