@@ -159,8 +159,8 @@ def get_max_worktrees() -> int:
             with open(_WORKTREES_JSON, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return int(data.get("max_worktrees", 25))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("failed to read max_worktrees from %s: %s", _WORKTREES_JSON, exc)
     return 25
 
 def set_max_worktrees(max_count: int) -> None:

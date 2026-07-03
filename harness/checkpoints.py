@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import subprocess
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger("pmharness.checkpoints")
+
+_GIT_TIMEOUT_SECONDS = 30
 
 
 class CheckpointStore:
@@ -24,6 +29,7 @@ class CheckpointStore:
                     cwd=self.repo,
                     capture_output=True,
                     text=True,
+                    timeout=_GIT_TIMEOUT_SECONDS,
                 )
                 if res.returncode == 0 and res.stdout.strip() == "true":
                     self._enabled = True
@@ -55,6 +61,7 @@ class CheckpointStore:
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
             git_dir = os.path.abspath(os.path.join(self.repo, git_dir_res.stdout.strip()))
 
@@ -64,6 +71,7 @@ class CheckpointStore:
                 cwd=self.repo,
                 capture_output=True,
                 text=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
             head_sha = head_res.stdout.strip() if head_res.returncode == 0 else None
 
@@ -81,6 +89,7 @@ class CheckpointStore:
                 capture_output=True,
                 env=env,
                 check=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
 
             # git write-tree: write the staged state into a new tree object
@@ -91,6 +100,7 @@ class CheckpointStore:
                 text=True,
                 env=env,
                 check=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
             tree_sha = write_tree_res.stdout.strip()
 
@@ -111,6 +121,7 @@ class CheckpointStore:
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
             commit_sha = commit_res.stdout.strip()
 
@@ -152,6 +163,7 @@ class CheckpointStore:
                 ["git", "cat-file", "-e", f"{checkpoint_id}^" + "{commit}"],
                 cwd=self.repo,
                 capture_output=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
             if chk_res.returncode != 0:
                 return {"ok": False, "error": f"Checkpoint {checkpoint_id} not found in Git"}
@@ -189,6 +201,7 @@ class CheckpointStore:
                 cwd=self.repo,
                 capture_output=True,
                 text=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
             if checkout_res.returncode != 0:
                 return {
@@ -197,7 +210,12 @@ class CheckpointStore:
                 }
 
             # 5. Reset the index so that restored modifications are unstaged relative to HEAD
-            subprocess.run(["git", "reset"], cwd=self.repo, capture_output=True)
+            subprocess.run(
+                ["git", "reset"],
+                cwd=self.repo,
+                capture_output=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
+            )
 
             return {
                 "ok": True,
@@ -224,6 +242,7 @@ class CheckpointStore:
                 ["git", "cat-file", "-e", f"{checkpoint_id}^" + "{commit}"],
                 cwd=self.repo,
                 capture_output=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
             if chk_res.returncode != 0:
                 return {"ok": False, "error": f"Checkpoint {checkpoint_id} not found in Git"}
@@ -249,6 +268,7 @@ class CheckpointStore:
                 cwd=self.repo,
                 capture_output=True,
                 text=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
             modified_candidates = set()
             if diff_names_res.returncode == 0:
@@ -275,6 +295,7 @@ class CheckpointStore:
                 cwd=self.repo,
                 capture_output=True,
                 text=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
             
             diff_text = diff_res.stdout or ""
@@ -306,8 +327,8 @@ class CheckpointStore:
             valid = valid[-50:]
             with open(self._meta_file, "w") as f:
                 json.dump(valid, f, indent=2)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("failed to prune checkpoint metadata in %s: %s", self._meta_file, exc)
 
     def _filter_existing_commits(self, raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Return only checkpoints whose commit still exists, using a SINGLE
@@ -324,6 +345,7 @@ class CheckpointStore:
                 input="\n".join(f"{i}^{{commit}}" for i in ids),
                 capture_output=True,
                 text=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
         except Exception:
             return []
@@ -383,6 +405,7 @@ class CheckpointStore:
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
             return [line.strip() for line in res.stdout.splitlines() if line.strip()]
         except Exception:
@@ -396,6 +419,7 @@ class CheckpointStore:
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
             return [line.strip() for line in res.stdout.splitlines() if line.strip()]
         except Exception:

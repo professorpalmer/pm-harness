@@ -209,6 +209,43 @@ def test_checkpoint_diff(temp_git_repo):
     res_bad = store.diff("invalidid1234567890")
     assert res_bad["ok"] is False
 
+def test_checkpoint_git_timeout_handled_gracefully(temp_git_repo, monkeypatch):
+    repo = temp_git_repo
+    store = CheckpointStore(repo)
+    assert store._enabled is True
+
+    def run_raises_timeout(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args", [])
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=30)
+
+    monkeypatch.setattr(subprocess, "run", run_raises_timeout)
+
+    assert store.snapshot("label", "trigger") is None
+    assert store.list() == []
+
+    restore_res = store.restore("abc123")
+    assert restore_res["ok"] is False
+    assert "Failed to verify checkpoint" in restore_res["error"]
+
+    diff_res = store.diff("abc123")
+    assert diff_res["ok"] is False
+    assert "Failed to verify checkpoint" in diff_res["error"]
+
+    store.prune()
+
+
+def test_checkpoint_init_git_timeout_disables_store(temp_git_repo, monkeypatch):
+    def run_raises_timeout(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args", [])
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=30)
+
+    monkeypatch.setattr(subprocess, "run", run_raises_timeout)
+    store = CheckpointStore(temp_git_repo)
+    assert store._enabled is False
+    assert store.snapshot("label", "trigger") is None
+    assert store.list() == []
+
+
 def test_api_checkpoints_diff_protection(temp_git_repo):
     repo = temp_git_repo
     httpd, port, srv = _server()
