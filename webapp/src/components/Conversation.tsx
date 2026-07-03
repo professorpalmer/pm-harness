@@ -1461,7 +1461,11 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
     >
       <header className="flex items-center justify-between px-6 border-b border-edge"
          style={{ paddingTop: 12, paddingBottom: 10, WebkitAppRegion: "drag" } as React.CSSProperties}>
-        <span className="font-medium text-[13px] text-txt/90" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>Marionette</span>
+        <span className="flex items-baseline gap-1.5 select-none" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+          <span className="font-semibold text-[13px] text-txt/90 tracking-tight">Marionette</span>
+          <span className="text-faint/70 text-[10px] font-normal">—</span>
+          <span className="text-muted/80 text-[10px] font-medium tracking-wide uppercase">The Puppetmaster Harness</span>
+        </span>
         <div style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}><StatusPill status={status} /></div>
       </header>
 
