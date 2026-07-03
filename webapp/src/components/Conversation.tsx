@@ -2911,6 +2911,19 @@ function Bubble({
   const isUser = msg.role === "user";
   const displayedText = isUser ? msg.text : cleanAssistantText(msg.text);
 
+  // Cursor-style clamp: long SENT user messages collapse to a few lines with a
+  // fade + "Show more", so a pasted wall of text doesn't dominate the transcript.
+  const USER_CLAMP_PX = 160;
+  const [userExpanded, setUserExpanded] = useState(false);
+  const [userOverflowing, setUserOverflowing] = useState(false);
+  const userClampRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!isUser) return;
+    const el = userClampRef.current;
+    if (el) setUserOverflowing(el.scrollHeight > USER_CLAMP_PX + 4);
+  }, [displayedText, isUser]);
+  const userCollapsed = isUser && userOverflowing && !userExpanded;
+
   const handleCopy = () => {
     navigator.clipboard.writeText(displayedText);
     setCopied(true);
@@ -2938,7 +2951,29 @@ function Bubble({
               ? "bg-accent/10 text-txt border-accent"
               : "bg-accent2 text-txt border-edge/30"
           }`}>
-            <div>{displayedText}</div>
+            <div className="relative">
+              <div
+                ref={userClampRef}
+                className="overflow-hidden"
+                style={userCollapsed ? { maxHeight: USER_CLAMP_PX } : undefined}
+              >
+                {displayedText}
+              </div>
+              {userCollapsed && (
+                <div className={`pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t to-transparent ${isEditing ? "from-accent/10" : "from-accent2"}`} />
+              )}
+            </div>
+            {isUser && userOverflowing && (
+              <button
+                type="button"
+                onClick={() => setUserExpanded((v) => !v)}
+                className="mt-1 flex items-center gap-0.5 text-[11px] text-muted/90 hover:text-txt transition-colors select-none"
+              >
+                {userExpanded
+                  ? (<><ChevronUp size={12} /> Show less</>)
+                  : (<><ChevronDown size={12} /> Show more</>)}
+              </button>
+            )}
             {msg.images && msg.images.length > 0 && (
               <div className="flex flex-wrap gap-2 mt-2">
                 {msg.images.map((img, idx) => (

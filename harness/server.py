@@ -472,6 +472,9 @@ _session.state_dir = _pilot.state_dir
 import tempfile as _tf
 _sessions = SessionStore(os.path.join(_cfg.state_dir or _tf.gettempdir(), "harness_sessions.json"))
 _mcp = McpManager()
+# Serialize pilot rebinds so a /api/pilot swap and a workspace-switch rebuild
+# cannot interleave their history-copy/rebind steps and leave a torn _pilot.
+_pilot_swap_lock = threading.Lock()
 from .pty_manager import PtyManager
 _pty = PtyManager()
 _pilot._mcp = _mcp
@@ -517,13 +520,14 @@ def _rebuild_pilot_and_session():
     # Keep the tracker/jobs reads pointed at the store the pilot writes to (see
     # the pin at initial construction) across workspace/driver switches too.
     new_session.state_dir = new_pilot.state_dir
-    old_history = _pilot._history
-    old_auto_distill = getattr(_pilot, "_auto_distill", False)
-    _session = new_session
-    _pilot = new_pilot
-    _pilot._history = old_history
-    _pilot._auto_distill = old_auto_distill
-    _pilot._mcp = _mcp
+    with _pilot_swap_lock:
+        old_history = _pilot._history
+        old_auto_distill = getattr(_pilot, "_auto_distill", False)
+        _session = new_session
+        _pilot = new_pilot
+        _pilot._history = old_history
+        _pilot._auto_distill = old_auto_distill
+        _pilot._mcp = _mcp
 
 # Startup: Restore the active/most-recent session's transcript into _pilot
 if _sessions.active:
@@ -3057,15 +3061,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(409, json.dumps({
                 "error": "a turn is in progress; stop it before switching models"}))
         try:
-            old_history = getattr(_pilot, "_history", None)
-            old_auto_distill = getattr(_pilot, "_auto_distill", False)
-            _cfg.driver = model
-            _apply_model_context_window()
-            _pilot = ConversationalSession(_cfg)
-            if old_history is not None:
-                _pilot._history = old_history
-            _pilot._auto_distill = old_auto_distill
-            _pilot._mcp = _mcp
+            with _pilot_swap_lock:
+                old_history = getattr(_pilot, "_history", None)
+                old_auto_distill = getattr(_pilot, "_auto_distill", False)
+                _cfg.driver = model
+                _apply_model_context_window()
+                _pilot = ConversationalSession(_cfg)
+                if old_history is not None:
+                    _pilot._history = old_history
+                _pilot._auto_distill = old_auto_distill
+                _pilot._mcp = _mcp
             # Remember this model for the current workspace so switching dirs and
             # coming back restores it.
             _save_workspace_driver(_cfg.repo, model)

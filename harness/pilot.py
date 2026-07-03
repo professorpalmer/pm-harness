@@ -1021,6 +1021,8 @@ NO DUPLICATE IMPLEMENT SWARMS (mandatory): One objective gets ONE in-flight impl
 
 WHEN A PATCH DID NOT APPLY: If a result says "PATCH DID NOT APPLY", the stale diff is dead -- never re-apply or re-dispatch the identical change. The files moved (an overlapping edit landed, or the base shifted). Re-derive the change against the CURRENT file contents: read the target file(s) as they are now, confirm whether the intended change is already present (if so, report it as done), and only if it is genuinely missing dispatch a fresh run_implement scoped to the current state.
 
+TWO FRONTENDS -- PICK THE RIGHT ONE (mandatory): This repo ships a desktop app whose UI is the React/TypeScript app under `webapp/src/` (entry `webapp/src/components/Conversation.tsx`). There is ALSO a legacy, browser-served stdlib GUI under `harness/web/` (`app.js`, `app.css`, `index.html`) that the desktop app does NOT use. For ANY UI, chat, streaming, or composer change to the shipping app, target `webapp/src/` -- NOT `harness/web/app.js`. Only touch `harness/web/` when the task explicitly names the legacy browser GUI. Verify which file actually implements a feature with CodeGraph before scoping an implement worker, so a UI task never lands on the dead-end frontend.
+
 EXECUTE, DON'T DICTATE (mandatory):
 You have a REAL terminal via `run_command` that runs in the user's workspace
 with their full login-shell environment -- their PATH, ssh-agent, and SSH config
