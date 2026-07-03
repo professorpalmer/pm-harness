@@ -2493,9 +2493,22 @@ function ThinkingBlock({ text }: { text: string }) {
   );
 }
 
+// Recursively pull the raw text out of a React node tree. react-markdown hands
+// a fenced block's `children` as an ARRAY of nodes (one per line/segment) once
+// it spans multiple lines, so String(children) stringifies the array and emits
+// ",[object Object]," garbage. Walk the tree and concatenate real text instead
+// so multi-line copies (e.g. shell command blocks) come out verbatim.
+function nodeToText(node: any): string {
+  if (node == null || node === false) return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(nodeToText).join("");
+  if (typeof node === "object" && node.props) return nodeToText(node.props.children);
+  return "";
+}
+
 function FencedCodeBlock({ className, children, ...props }: any) {
   const [copied, setCopied] = useState(false);
-  const codeText = String(children).replace(/\n$/, "");
+  const codeText = nodeToText(children).replace(/\n$/, "");
   
   const handleCopy = () => {
     navigator.clipboard.writeText(codeText);
