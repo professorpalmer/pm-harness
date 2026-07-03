@@ -94,6 +94,9 @@ export type Session = { id: string; title: string; created: number; active?: boo
 export type SessionState = {
   state: "idle" | "thinking" | "awaiting_swarm";
   pending_swarms: boolean;
+  // Set when the transcript ends on an unanswered user turn while idle -- the
+  // signal to auto-continue after a backend restart (self-edit apply).
+  resume_pending?: boolean;
 };
 
 export type SwarmResultData = {

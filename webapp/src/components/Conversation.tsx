@@ -915,6 +915,12 @@ export default function Conversation({ config, activeSessionId, onArtifacts, onJ
         .then((res) => {
           if (res) {
             setBackendPendingSwarms(res.pending_swarms);
+            // After a backend restart (self-edit apply), the transcript reloads
+            // with an unanswered user turn. Auto-continue it so the conversation
+            // survives the swap -- the Hermes-style seamless self-edit loop.
+            if (res.resume_pending) {
+              setTimeout(() => resumeTriggerRef.current(), 300);
+            }
           }
         })
         .catch(() => {});

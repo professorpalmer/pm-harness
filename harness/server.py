@@ -901,6 +901,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/api/sessions/create", "/api/sessions/switch",
                       "/api/sessions/delete", "/api/sessions/archive", "/api/sessions/rename",
                       "/api/session/interrupt", "/api/session/compact", "/api/session/steer",
+                      "/api/session/persist", "/api/restart",
                       "/api/mcp/add", "/api/mcp/remove", "/api/mcp/start",
                       "/api/mcp/stop", "/api/mcp/call",
                       "/api/skills/distill", "/api/skills/approve",
@@ -972,6 +973,40 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps({"error": "Missing review id"}))
             success = _pilot.dismiss_review(review_id)
             return self._send(200, json.dumps({"ok": success}))
+        if path == "/api/session/persist":
+            # Flush the live transcript to disk on demand. Called right before a
+            # backend restart (self-edit apply) so the fresh process restores the
+            # exact conversation state, including any unanswered user turn.
+            try:
+                if _sessions.active:
+                    save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_transcript_data())
+                return self._send(200, json.dumps({"ok": True}))
+            except Exception as e:
+                return self._send(500, json.dumps({"ok": False, "error": str(e)}))
+        if path == "/api/restart":
+            # Graceful self-restart for non-Electron callers (served browser) and
+            # as a fallback path. Persist, ACK, then SIGTERM self so a supervisor
+            # (Electron) respawns on the freshly-edited source. In the desktop app
+            # the Electron IPC path (harness:restart) is preferred -- it also
+            # reloads the renderer -- but this keeps the capability reachable over
+            # HTTP for the pilot or a browser session.
+            try:
+                if _sessions.active:
+                    save_transcript(_cfg.state_dir or _tf.gettempdir(), _sessions.active, _pilot.export_transcript_data())
+            except Exception:
+                pass
+            self._send(200, json.dumps({"ok": True, "restarting": True}))
+
+            def _delayed_self_terminate():
+                import time as _t
+                import signal as _signal
+                _t.sleep(0.4)  # let the 200 flush before we exit
+                try:
+                    os.kill(os.getpid(), _signal.SIGTERM)
+                except Exception:
+                    os._exit(0)
+            threading.Thread(target=_delayed_self_terminate, daemon=True).start()
+            return
         if path == "/api/session/compact":
             before = _pilot._estimate_context_tokens()
             orig_tokens = getattr(_cfg, "max_context_tokens", 96000)
@@ -1969,9 +2004,15 @@ class Handler(BaseHTTPRequestHandler):
             qtok = parse_qs(u.query).get("token", [""])[0]
             if qtok != _TOKEN and self.headers.get("X-Harness-Token", "") != _TOKEN:
                 return self._send(403, json.dumps({"error": "missing or bad token"}))
+            # resume_pending: the transcript ends on an unanswered user turn while
+            # the pilot is idle -- i.e. a reply is owed but no turn is running. This
+            # is the signal a client uses to auto-continue after a backend restart
+            # (self-edit apply) so an in-flight turn is never silently dropped.
+            _state = _pilot.state()
             return self._send(200, json.dumps({
-                "state": _pilot.state(),
-                "pending_swarms": _pilot.has_pending_swarms()
+                "state": _state,
+                "pending_swarms": _pilot.has_pending_swarms(),
+                "resume_pending": bool(_state == "idle" and _pilot.has_pending_user_turn()),
             }))
         if u.path == "/api/session/swarm-results":
             if self._guard():

@@ -96,6 +96,44 @@ export default function SettingsPane({ onOpenWizard, section = "general" }: { on
     localStorage.setItem("pmharness.queueMessages", String(newVal));
   };
 
+  // Self-development (Hermes-style live self-editing): run the backend from the
+  // editable source checkout so edits to ~/pm-harness go live on restart. Only
+  // available in the desktop app (needs Electron to swap the backend process).
+  const _selfDevIpc = (typeof window !== "undefined" && (window as any).harnessIPC?.selfDev) || null;
+  const _restartIpc = (typeof window !== "undefined" && (window as any).harnessIPC?.restart) || null;
+  const [selfDev, setSelfDev] = useState<{ enabled: boolean; viable: boolean; packaged: boolean } | null>(null);
+  const [selfDevBusy, setSelfDevBusy] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+
+  useEffect(() => {
+    if (!_selfDevIpc) return;
+    _selfDevIpc.get().then((s: any) => setSelfDev(s)).catch(() => {});
+  }, []);
+
+  const toggleSelfDev = async () => {
+    if (!_selfDevIpc || !selfDev) return;
+    setSelfDevBusy(true);
+    try {
+      const res = await _selfDevIpc.set(!selfDev.enabled);
+      const next = await _selfDevIpc.get();
+      setSelfDev(next);
+      // A runtime change only takes effect on the next backend start, so offer
+      // an immediate restart to apply it now.
+      if (res && _restartIpc) {
+        setRestarting(true);
+        try { await _restartIpc(); } finally { setRestarting(false); }
+      }
+    } finally {
+      setSelfDevBusy(false);
+    }
+  };
+
+  const restartBackend = async () => {
+    if (!_restartIpc) return;
+    setRestarting(true);
+    try { await _restartIpc(); } finally { setRestarting(false); }
+  };
+
   useEffect(() => {
     api.settings()
       .then(setSettings)
@@ -709,6 +747,46 @@ export default function SettingsPane({ onOpenWizard, section = "general" }: { on
           </div>
         </div>
 
+        </>)}
+        {show("advanced") && _selfDevIpc && (<>
+        {/* Self-Development Section (live self-editing, Hermes-style) */}
+        <div className="border-t border-edge pt-3 space-y-2">
+          <span className="uppercase tracking-wider text-[10px] text-faint font-semibold flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-accent inline-block"></span> Live Self-Editing
+          </span>
+          <p className="text-[10px] text-muted">
+            Run the backend from the editable source checkout so edits to the repo go
+            live on restart -- Marionette can rewrite its own code and apply it without
+            a full app reinstall. The conversation resumes across the restart.
+          </p>
+          <button
+            onClick={toggleSelfDev}
+            disabled={selfDevBusy || restarting || !(selfDev && selfDev.viable)}
+            className={`w-full flex items-center justify-between px-3 py-2 rounded border transition text-left ${
+              selfDev && selfDev.enabled
+                ? "bg-accent/10 border-accent/30 text-accent"
+                : "bg-panel2 border-edge text-muted"
+            } disabled:opacity-50`}
+          >
+            <span className="font-medium text-[11px]">Run backend from editable source</span>
+            <span className="text-[10px] uppercase font-bold tracking-wider">
+              {selfDev && selfDev.enabled ? "on" : "off"}
+            </span>
+          </button>
+          {selfDev && !selfDev.viable && (
+            <p className="text-[10px] text-warn">
+              Editable checkout not found at ~/pm-harness (needs .venv + harness/). Self-editing
+              runs the frozen bundled backend until the source checkout is present.
+            </p>
+          )}
+          <button
+            onClick={restartBackend}
+            disabled={restarting || selfDevBusy}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded border border-edge bg-panel2 text-[11px] text-muted hover:text-txt hover:border-accent/30 transition disabled:opacity-50"
+          >
+            {restarting ? "Restarting backend..." : "Restart backend (apply self-edits)"}
+          </button>
+        </div>
         </>)}
         {show("advanced") && (<>
         {/* Lifecycle Hooks Section */}

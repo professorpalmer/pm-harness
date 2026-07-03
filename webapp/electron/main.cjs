@@ -138,6 +138,39 @@ function resolveRepoRoot() {
   );
 }
 
+// Self-dev mode: run the backend from the editable source checkout (python -m
+// harness.cli) instead of the frozen bundled binary, so editing ~/pm-harness/**
+// changes the LIVE code after a restart -- the Hermes-style "edit myself" loop.
+// Sourced from MARIONETTE_SELF_DEV env or ~/.pmharness/self-dev.json so the UI
+// can toggle it durably. Persisted in userData-adjacent state, not the repo.
+function selfDevConfigPath() {
+  return path.join(os.homedir(), ".pmharness", "self-dev.json");
+}
+function selfDevEnabled() {
+  const env = String(process.env.MARIONETTE_SELF_DEV || "").toLowerCase();
+  if (env === "1" || env === "true" || env === "yes") return true;
+  if (env === "0" || env === "false" || env === "no") return false;
+  try {
+    const j = JSON.parse(fs.readFileSync(selfDevConfigPath(), "utf8"));
+    return !!(j && j.enabled);
+  } catch { return false; }
+}
+function setSelfDevEnabled(enabled) {
+  try {
+    fs.mkdirSync(path.dirname(selfDevConfigPath()), { recursive: true });
+    fs.writeFileSync(selfDevConfigPath(), JSON.stringify({ enabled: !!enabled }, null, 2));
+    return true;
+  } catch { return false; }
+}
+// A self-dev backend is only viable when the editable checkout + its venv exist;
+// otherwise we must fall back to the frozen binary rather than brick the app.
+function selfDevRuntimeViable(repoRoot) {
+  try {
+    return fs.existsSync(path.join(repoRoot, ".venv", "bin", "python")) &&
+           fs.existsSync(path.join(repoRoot, "harness", "cli.py"));
+  } catch { return false; }
+}
+
 function freePort() {
   return new Promise((resolve) => {
     const srv = net.createServer();
@@ -235,8 +268,12 @@ async function _startBackendOnce() {
   // distribution path; for a source/checkout run we use the repo's venv.
   const repoRoot = resolveRepoRoot();
 
+  // Self-dev: prefer the editable checkout so self-edits go live on restart.
+  // Falls back to the frozen binary if the checkout/venv is missing.
+  const selfDev = selfDevEnabled() && selfDevRuntimeViable(repoRoot);
+
   let binaryPath = null;
-  if (app.isPackaged && process.resourcesPath) {
+  if (!selfDev && app.isPackaged && process.resourcesPath) {
     const p = path.join(process.resourcesPath, "pmharness-backend");
     if (fs.existsSync(p)) {
       binaryPath = p;
@@ -312,7 +349,7 @@ async function _startBackendOnce() {
     });
   } else {
     const py = process.env.PMHARNESS_PYTHON || path.join(repoRoot, ".venv", "bin", "python");
-    _dbg(`spawning python backend: ${py} cwd=${repoRoot} port=${backendPort} packaged=${app.isPackaged}`);
+    _dbg(`spawning python backend: ${py} cwd=${repoRoot} port=${backendPort} packaged=${app.isPackaged} selfDev=${selfDev}`);
     backend = spawn(py, ["-m", "harness.cli", "gui", "--port", String(backendPort)], {
       cwd: repoRoot,
       env: customEnv,
@@ -394,6 +431,43 @@ ipcMain.on("harness:rendererError", (_e, payload) => {
 });
 ipcMain.handle("harness:getJSON", (_e, p) => backendRequest("GET", p));
 ipcMain.handle("harness:postJSON", (_e, p, body) => backendRequest("POST", p, body));
+
+// Guards against overlapping restarts (double-click / rapid toggle).
+let restarting = false;
+
+// Graceful backend restart: the Hermes-style "apply self-edits" action. Persist
+// the live transcript, tear down the current backend (intentional -> the exit
+// handler sees `backend === null` and does NOT auto-respawn), spawn a fresh one
+// (which, in self-dev mode, imports the just-edited source), then reload the
+// renderer so it re-fetches the persisted transcript. The backend flags an
+// unanswered user turn via /api/session/state.resume_pending so the UI auto-
+// continues -- the conversation survives the swap instead of being dropped.
+async function restartBackend() {
+  if (restarting) return { ok: false, error: "restart already in progress" };
+  restarting = true;
+  try {
+    // Best-effort: flush the current transcript before we kill the backend, so
+    // the fresh process restores exactly where we left off.
+    try { await backendRequest("POST", "/api/session/persist", {}); } catch { /* older backend: relies on per-turn saves */ }
+    try { cleanupBackend(); } catch { /* already gone */ }
+    // Give the OS a beat to release the port/SQLite locks before respawning.
+    await new Promise((r) => setTimeout(r, 300));
+    await startBackend();
+    try {
+      if (win && win.webContents && !win.webContents.isDestroyed()) {
+        win.webContents.reload();  // did-finish-load re-injects the new port/token
+      }
+    } catch { /* window gone */ }
+    return { ok: true, port: backendPort };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || String(e) };
+  } finally {
+    restarting = false;
+  }
+}
+ipcMain.handle("harness:restart", () => restartBackend());
+ipcMain.handle("harness:selfDev:get", () => ({ enabled: selfDevEnabled(), viable: selfDevRuntimeViable(resolveRepoRoot()), packaged: app.isPackaged }));
+ipcMain.handle("harness:selfDev:set", (_e, enabled) => ({ ok: setSelfDevEnabled(!!enabled), enabled: selfDevEnabled() }));
 
 // Image upload bridge: the renderer hands us raw bytes (File over IPC can't carry
 // a browser File object), we POST a multipart body to the backend's /api/upload on

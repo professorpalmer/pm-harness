@@ -527,6 +527,12 @@ class ConversationalSession:
     def export_display_transcript(self) -> list:
         return list(self._display_transcript)
 
+    def has_pending_user_turn(self) -> bool:
+        """True when the transcript ends on a user turn with no assistant reply
+        after it -- i.e. a reply is owed. Used to auto-resume across a backend
+        restart (self-edit apply) so an in-flight turn is not silently dropped."""
+        return bool(len(self._history) > 1 and self._history[-1].get("role") == "user")
+
     def export_transcript_data(self) -> dict:
         return {
             "history": self.export_history(),
