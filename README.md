@@ -1,3 +1,18 @@
+> # This repository has moved
+>
+> **Marionette now lives at [github.com/professorpalmer/marionette](https://github.com/professorpalmer/marionette).**
+>
+> `pm-harness` was the earlier home of this project and is **no longer maintained**.
+> All development, releases, downloads, and issues have moved to the new repo:
+>
+> - Repo: https://github.com/professorpalmer/marionette
+> - Latest release: https://github.com/professorpalmer/marionette/releases/latest
+> - Landing page + installers: https://professorpalmer.github.io/marionette/
+>
+> Please update your remotes and bookmarks. This repository is archived (read-only).
+
+---
+
 # Marionette
 
 A desktop AI coding harness where the LLM is a **component inside** the kernel,
